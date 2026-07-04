@@ -83,7 +83,7 @@ Write 3-4 sentences in a positive, founder-friendly tone. Highlight what's worki
     },
     body: JSON.stringify({
       from: "StyleSense <reports@stylesense.app>",
-      to: [Deno.env.get("REPORT_EMAIL") ?? "joshiaayu06@gmail.com"],
+      to: [Deno.env.get("REPORT_EMAIL") ?? "t4ssirtabhinav@gmail.com"],
       subject: `StyleSense Weekly Report — ${dateStr}`,
       html: `
         <h2>StyleSense Weekly Health Report</h2>

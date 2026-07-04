@@ -37,25 +37,17 @@ Deno.serve(async (_req: Request) => {
     year: "numeric",
   });
 
-  const lines = [
-    `*StyleSense Cost Monitor — ${dateStr}*`,
-    `${overLimit ? "🔴" : "✅"} AI sessions today: ${count}`,
-  ];
-  if (overLimit) {
-    lines.push(
-      `\n⚠️ Above threshold (${SESSION_ALERT_THRESHOLD}). Review API spend.`,
-    );
-  }
-  const text = lines.join("\n");
+  const statusEmoji = overLimit ? "🔴" : "✅";
+  const slackText = overLimit
+    ? `${statusEmoji} *StyleSense Cost Monitor — ${dateStr}*\nAI sessions today: *${count}* (threshold: ${SESSION_ALERT_THRESHOLD})\n⚠️ Above threshold — review API spend.`
+    : `${statusEmoji} *StyleSense Cost Monitor — ${dateStr}*\nAI sessions today: *${count}* — all good.`;
 
-  const botToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
-  const chatId = Deno.env.get("TELEGRAM_CHAT_ID");
-
-  if (botToken && chatId) {
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  const webhookUrl = Deno.env.get("SLACK_WEBHOOK_URL");
+  if (webhookUrl) {
+    await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+      body: JSON.stringify({ text: slackText }),
     });
   }
 
