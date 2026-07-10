@@ -1,11 +1,22 @@
-import { Text, View } from 'react-native';
+import { Card, Text } from '../components/ui';
 
+// Disposable smoke test that the new Card/Text components render correctly
+// end-to-end (see docs/tickets/SS-008-design.md's migration decision) — SS-005
+// (Home Screen Shell) will replace this file's contents entirely.
 export default function HomeScreen() {
   return (
-    <View className="flex-1 items-center justify-center bg-white">
-      <Text className="text-xl font-semibold text-dark">StyleSense</Text>
-      <Text className="mt-2 text-base text-peacock">Expo Router + NativeWind is working.</Text>
-      <Text className="mt-2 text-base text-peacock">Prod</Text>
-    </View>
+    <Card
+      testID="home-card"
+      variant="flat"
+      className="m-md flex-1 items-center justify-center"
+    >
+      <Text variant="heading">StyleSense</Text>
+      <Text variant="body" color="peacock" className="mt-sm">
+        Expo Router + NativeWind is working.
+      </Text>
+      <Text variant="body" color="peacock" className="mt-sm">
+        Prod
+      </Text>
+    </Card>
   );
 }

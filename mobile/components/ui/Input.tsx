@@ -1,0 +1,264 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef } from 'react';
+import { Pressable, TextInput, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
+import { Text } from './Text';
+import { colors } from './tokens';
+
+export type InputVariant = 'text' | 'phone' | 'search' | 'otp';
+
+export interface InputProps {
+  variant?: InputVariant;
+  value: string;
+  onChangeText: (text: string) => void;
+  label?: string;
+  placeholder?: string;
+  /** Renders inline below the field; for variant='otp' also triggers a
+   * shake on the box row when it transitions from falsy -> truthy. */
+  error?: string;
+  disabled?: boolean;
+  autoFocus?: boolean;
+  // phone variant only
+  countryCode?: string;
+  onCountryCodePress?: () => void;
+  // otp variant only
+  length?: number;
+  onComplete?: (code: string) => void;
+  // search variant only
+  onClear?: () => void;
+}
+
+const DEFAULT_OTP_LENGTH = 6;
+const SHAKE_OFFSET_PX = 8;
+const SHAKE_STEP_MS = 50;
+
+// BL-007 (docs/BACKLOG.md, Open): no semantic error colour exists in the
+// design tokens yet — this reads the single parked placeholder in
+// tokens.ts (`colors.accent.errorPlaceholder`) so there is exactly one
+// place to change once BL-007 is resolved, not scattered hex values.
+const ERROR_COLOR = colors.accent.errorPlaceholder;
+
+function baseFieldClassName(disabled: boolean, hasError: boolean): string {
+  return [
+    'rounded-md border px-md py-sm font-body text-base text-textPrimary',
+    disabled ? 'bg-surfaceSecondary' : 'bg-surfacePrimary',
+    hasError ? '' : 'border-textMuted',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function ErrorText({ error }: { error?: string }) {
+  if (!error) return null;
+  return (
+    <Text variant="caption" style={{ color: ERROR_COLOR }} className="mt-xs">
+      {error}
+    </Text>
+  );
+}
+
+function FieldLabel({ label }: { label?: string }) {
+  if (!label) return null;
+  return (
+    <Text variant="caption" color="secondary" className="mb-xs">
+      {label}
+    </Text>
+  );
+}
+
+function OtpInput({
+  value,
+  onChangeText,
+  error,
+  disabled,
+  autoFocus,
+  length = DEFAULT_OTP_LENGTH,
+  onComplete,
+}: InputProps) {
+  const shakeX = useSharedValue(0);
+  const prevHadErrorRef = useRef(false);
+
+  useEffect(() => {
+    const hasError = Boolean(error);
+    if (hasError && !prevHadErrorRef.current) {
+      shakeX.value = withSequence(
+        withTiming(-SHAKE_OFFSET_PX, { duration: SHAKE_STEP_MS }),
+        withTiming(SHAKE_OFFSET_PX, { duration: SHAKE_STEP_MS }),
+        withTiming(-SHAKE_OFFSET_PX, { duration: SHAKE_STEP_MS }),
+        withTiming(SHAKE_OFFSET_PX, { duration: SHAKE_STEP_MS }),
+        withTiming(0, { duration: SHAKE_STEP_MS }),
+      );
+    }
+    prevHadErrorRef.current = hasError;
+  }, [error, shakeX]);
+
+  const shakeStyle = useAnimatedStyle(() => ({
+    flexDirection: 'row',
+    transform: [{ translateX: shakeX.value }],
+  }));
+
+  const handleChangeText = (text: string) => {
+    const digitsOnly = text.replace(/\D/g, '').slice(0, length);
+    onChangeText(digitsOnly);
+    if (digitsOnly.length === length) {
+      onComplete?.(digitsOnly);
+    }
+  };
+
+  const boxes = Array.from({ length }, (_, index) => value[index] ?? '');
+
+  return (
+    <View>
+      {/* NativeWind's className interop doesn't cover reanimated's
+       * Animated.View, so flex-row is set via the animated style object
+       * instead — a plain `className="flex-row"` here is silently dropped. */}
+      <Animated.View style={shakeStyle}>
+        {boxes.map((digit, index) => (
+          <View
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length box positions, not a reorderable list
+            key={index}
+            className="mr-xs h-12 w-10 items-center justify-center rounded-md border"
+            style={{ borderColor: error ? ERROR_COLOR : colors.text.muted }}
+          >
+            <Text variant="mono">{digit}</Text>
+          </View>
+        ))}
+      </Animated.View>
+      <TextInput
+        testID="otp-hidden-input"
+        value={value}
+        onChangeText={handleChangeText}
+        keyboardType="number-pad"
+        maxLength={length}
+        autoFocus={autoFocus}
+        editable={!disabled}
+        // Visually hidden but present so paste-fills-all-boxes works via a
+        // single underlying TextInput receiving one onChangeText call.
+        style={{ position: 'absolute', opacity: 0, height: 48, width: '100%' }}
+        accessibilityLabel="One-time password"
+      />
+      <ErrorText error={error} />
+    </View>
+  );
+}
+
+function PhoneInput({
+  value,
+  onChangeText,
+  placeholder,
+  error,
+  disabled,
+  autoFocus,
+  countryCode = '+91',
+  onCountryCodePress,
+}: InputProps) {
+  return (
+    <View>
+      <View className="flex-row items-center">
+        <Pressable
+          onPress={onCountryCodePress}
+          accessibilityRole="button"
+          accessibilityLabel="Change country code"
+          className="mr-xs rounded-md border border-textMuted bg-surfaceSecondary px-sm py-sm"
+        >
+          <Text variant="body">{countryCode}</Text>
+        </Pressable>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          keyboardType="phone-pad"
+          autoFocus={autoFocus}
+          editable={!disabled}
+          maxLength={10}
+          className={`flex-1 ${baseFieldClassName(Boolean(disabled), Boolean(error))}`}
+          style={{ borderColor: error ? ERROR_COLOR : undefined }}
+          accessibilityLabel="Phone number"
+        />
+      </View>
+      <ErrorText error={error} />
+    </View>
+  );
+}
+
+function SearchInput({
+  value,
+  onChangeText,
+  placeholder,
+  disabled,
+  autoFocus,
+  onClear,
+}: InputProps) {
+  const handleClear = () => {
+    onChangeText('');
+    onClear?.();
+  };
+
+  return (
+    <View className="flex-row items-center rounded-md border border-textMuted bg-surfacePrimary px-sm">
+      <Ionicons name="search" size={18} color={colors.text.muted} />
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        editable={!disabled}
+        autoFocus={autoFocus}
+        className="ml-xs flex-1 py-sm font-body text-base text-textPrimary"
+        accessibilityLabel="Search"
+      />
+      {value.length > 0 ? (
+        <Pressable
+          onPress={handleClear}
+          accessibilityRole="button"
+          accessibilityLabel="Clear search"
+        >
+          <Ionicons name="close-circle" size={18} color={colors.text.muted} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function TextVariantInput({
+  value,
+  onChangeText,
+  placeholder,
+  error,
+  disabled,
+  autoFocus,
+}: InputProps) {
+  return (
+    <View>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        editable={!disabled}
+        autoFocus={autoFocus}
+        className={baseFieldClassName(Boolean(disabled), Boolean(error))}
+        style={{ borderColor: error ? ERROR_COLOR : undefined }}
+        accessibilityLabel={placeholder ?? 'Text input'}
+      />
+      <ErrorText error={error} />
+    </View>
+  );
+}
+
+export function Input(props: InputProps) {
+  const { variant = 'text', label } = props;
+
+  return (
+    <View>
+      <FieldLabel label={label} />
+      {variant === 'otp' ? <OtpInput {...props} /> : null}
+      {variant === 'phone' ? <PhoneInput {...props} /> : null}
+      {variant === 'search' ? <SearchInput {...props} /> : null}
+      {variant === 'text' ? <TextVariantInput {...props} /> : null}
+    </View>
+  );
+}
