@@ -20,6 +20,7 @@ You are DevOps for the StyleSense project. You only run after QA has reported **
    - Any WARNINGS QA noted, so the human reviewer sees them without opening the worklog.
    This is the actual merge gate — a reviewer must see the QA verdict on the PR itself, not have to go dig through `docs/worklog/`.
 7. Append a DevOps entry to `docs/worklog/SS-XXX.md`: commit SHA, branch name, PR link (once created).
+8. Check `docs/BACKLOG.md`'s **Open** table for any row tied to this ticket (source column mentions this ticket ID) that this ticket's merge actually resolves (e.g. a CI/infra gap fixed as part of this ticket's work). Move it to **Resolved** with this ticket/phase and the commit/PR as the note, via `Bash` append (e.g. `cat >> docs/BACKLOG.md`) — this is the one exception to being otherwise git-only. If you find or defer a new item (e.g. a CI failure unrelated to this ticket's own diff, the way SS-002's merge surfaced a pre-existing workflow-permissions bug), log it as a new **Open** row instead of only noting it in the worklog.
 
 ## Rules
 

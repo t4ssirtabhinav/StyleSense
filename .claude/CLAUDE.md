@@ -50,5 +50,68 @@ You are helping build StyleSense, an India-first AI fashion app.
 - No prop drilling more than 2 levels — use Zustand
 - No inline styles in JSX — always NativeWind classes
 - No `console.log` in production — use Sentry logging
-- No direct Supabase calls in components — through query hooks only
+- No direct Supabase calls in components — only through `features/<domain>/*.queries.ts` (React Query hooks)
 - No hardcoded URLs — use `constants/api.ts`
+- No `useEffect` for derived state — compute it directly during render
+- Always use `useCallback` for event handlers passed to child components
+- All API response types live in `types/` — never inline `any`-shaped objects
+
+## Folder Structure (Clean Architecture / Modular Monolith)
+
+Frontend (`mobile/`):
+```
+app/                          # Expo Router route groups
+  (auth)/                     # login.tsx, onboarding.tsx
+  (tabs)/                     # index.tsx, wardrobe.tsx, discover.tsx, profile.tsx
+  outfit/[id].tsx
+  tryon/[outfitId].tsx
+features/<domain>/            # one folder per domain (wardrobe, outfit-ai, social, ...)
+  <domain>.store.ts           # Zustand store (client state)
+  <domain>.queries.ts         # React Query hooks (server state) — the ONLY place Supabase is called from
+  <domain>.service.ts         # raw API calls used by queries.ts
+  <domain>.types.ts
+  components/                 # domain-specific components
+components/ui/                # shared design system (Button, Card, Badge, ...) — see SS-008
+lib/                          # supabase.ts, api.ts, storage.ts
+hooks/                        # useAuth, useCamera, useLocation
+```
+
+Backend (`backend/`), hexagonal ports & adapters for every AI provider:
+```
+ai/ports/interfaces.py        # IVisionProvider, IStylingProvider, ISearchProvider (ABCs)
+ai/adapters/                  # GeminiVisionAdapter, ClaudeStylingAdapter, PerplexitySearchAdapter
+routers/                      # FastAPI route handlers — depend on ports via Depends(), never on adapters directly
+services/                     # WardrobeImageService, WardrobeTaggingService, OutfitSuggestionService (single-responsibility)
+adapters/                     # WardrobeRepository / IWardrobeRepository (DB access, separate from services)
+```
+Adding a new AI provider = a new adapter class implementing the existing port. Never modify a port to fit a new provider (Open/Closed).
+
+## Deployment Environments
+
+| Environment | Branch      | Backend               | Database                  |
+|-------------|-------------|------------------------|----------------------------|
+| Local       | `feature/*` | `localhost:8000`       | Supabase local (Docker)    |
+| Preview     | `develop`   | Railway (preview env)  | Supabase staging project   |
+| Production  | `main`      | Railway (prod)         | Supabase prod project      |
+
+`main` requires CI pass + 1 review before merge; `develop` requires CI pass. Never push directly to `main`.
+
+## Testing — Every User Story Ships With Tests
+
+- Frontend: Jest (`jest-expo` preset) + React Native Testing Library for every new component/hook in `features/<domain>/` or `components/ui/`.
+- Backend: Pytest (+ `pytest-asyncio`, `httpx`) for every new route/service in `routers/`/`services/`.
+- A ticket is not done until its acceptance criteria are covered by a test or manually verified and noted as such in the ticket's worklog (see below).
+
+## Ticket Workflow (Section 10 — Sprint Execution)
+
+- One ticket = one branch: `feature/SS-XXX-slug`, cut from `develop`.
+- Commit convention: `feat(SS-XXX): short description` (or `fix(SS-XXX): ...`, `chore(SS-XXX): ...`).
+- Ticket source of truth lives in `docs/tickets/raw/SS-XXX.md`. Every ticket goes through four phases, each a Claude Code subagent in `.claude/agents/`: **architect** (writes `docs/tickets/SS-XXX-design.md`) → **developer** (implements + tests) → **qa** (verifies AC + runs lint/type/test) → **devops** (commit/push/PR). See `.claude/skills/ticket/SKILL.md`.
+- Every phase appends to `docs/worklog/SS-XXX.md` — this is the audit trail for what each agent did and why.
+- Deferred items that aren't this ticket's blocker but might matter later (a product decision, a design-token gap, a CI issue) go in `docs/BACKLOG.md`, not just the worklog — worklogs stop being read once a ticket ships, the backlog doesn't.
+
+## Git Autonomy Contract
+
+- Subagents may `git add <named files>`, `git commit`, and `git push` on `feature/*` branches without asking each time.
+- Opening a PR (`gh pr create`) always pauses for explicit user confirmation first.
+- `main` is never touched directly by any agent. No `--no-verify`, no force-push, no `git add -A`.
