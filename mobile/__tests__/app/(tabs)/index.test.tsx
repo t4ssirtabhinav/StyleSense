@@ -1,11 +1,15 @@
 import { render } from '@testing-library/react-native';
-import HomeScreen from '../../app/index';
+import HomeScreen from '../../../app/(tabs)/index';
 
 // Smoke test for the SS-008 migration off raw View/Text (see
 // docs/tickets/SS-008-design.md's migration decision): asserts the rendered
 // tree is built from the token-driven Card/Text components, not the
 // pre-migration literal `bg-white`/`text-dark` raw RN primitives.
-describe('HomeScreen (app/index.tsx)', () => {
+//
+// Moved from __tests__/app/index.test.tsx as part of SS-003's app/index.tsx
+// -> app/(tabs)/index.tsx route move (docs/tickets/SS-003-design.md #12) —
+// identical assertions, updated import path only.
+describe('HomeScreen (app/(tabs)/index.tsx)', () => {
   it('renders inside a Card using the flat variant', async () => {
     const { getByTestId } = await render(<HomeScreen />);
     // Card has no accessibilityRole; assert via its computed variant classes
