@@ -6,7 +6,7 @@ Each ticket run through the 4-phase pipeline (architect → developer → qa →
 |--------|-----------------------------------------|-----------|-----------|-----------|----------------------|
 | SS-008 | Design System Foundation (UI Kit)       | done — deps + colour gaps flagged | done — all checks green | PASS (manual verification done, 2 bugs found+fixed) | merged (PR #9) |
 | SS-002 | Supabase Project Setup & DB Schema      | done — blocker flagged | done — Phone Auth deferred, DB tests unexecuted | PASS      | merged (PR #7)       |
-| SS-003 | Phone OTP Authentication Flow           | done — no Developer blocker | done — all checks green | PASS (manual verification done, 1 bug found+fixed) | in progress |
+| SS-003 | Phone OTP Authentication Flow           | done — no Developer blocker | done — all checks green | PASS (manual verification done, 1 bug found+fixed) | merged (PR #12) |
 | SS-004 | User Onboarding Wizard                  | pending   | pending   | pending   | pending              |
 | SS-005 | Home Screen Shell + Bottom Tab Nav      | pending   | pending   | pending   | pending              |
 | SS-009 | Error Monitoring & Analytics Instr.     | pending   | pending   | pending   | pending              |
