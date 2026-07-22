@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import {
+  useOnboardingCompletedQuery,
   useSendOtpMutation,
-  useUserProfileExistsQuery,
   useVerifyOtpMutation,
 } from '../../../features/auth/auth.queries';
 import * as authService from '../../../features/auth/auth.service';
@@ -11,7 +11,7 @@ import * as authService from '../../../features/auth/auth.service';
 jest.mock('../../../features/auth/auth.service', () => ({
   sendOtp: jest.fn(),
   verifyOtp: jest.fn(),
-  checkUserProfileExists: jest.fn(),
+  checkOnboardingCompleted: jest.fn(),
 }));
 
 function createWrapper() {
@@ -83,32 +83,32 @@ describe('useVerifyOtpMutation', () => {
   });
 });
 
-describe('useUserProfileExistsQuery', () => {
+describe('useOnboardingCompletedQuery', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it('does not fire the query when userId is undefined', async () => {
     const { result } = await renderHook(
-      () => useUserProfileExistsQuery(undefined),
+      () => useOnboardingCompletedQuery(undefined),
       { wrapper: createWrapper() },
     );
 
     expect(result.current.fetchStatus).toBe('idle');
-    expect(authService.checkUserProfileExists).not.toHaveBeenCalled();
+    expect(authService.checkOnboardingCompleted).not.toHaveBeenCalled();
   });
 
   it('fires the query and resolves when userId is provided', async () => {
-    (authService.checkUserProfileExists as jest.Mock).mockResolvedValue(true);
+    (authService.checkOnboardingCompleted as jest.Mock).mockResolvedValue(true);
     const { result } = await renderHook(
-      () => useUserProfileExistsQuery('user-1'),
+      () => useOnboardingCompletedQuery('user-1'),
       {
         wrapper: createWrapper(),
       },
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(authService.checkUserProfileExists).toHaveBeenCalledWith('user-1');
+    expect(authService.checkOnboardingCompleted).toHaveBeenCalledWith('user-1');
     expect(result.current.data).toBe(true);
   });
 });

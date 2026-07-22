@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Button, Card, Input, Text } from '../../components/ui';
 import {
+  useOnboardingCompletedQuery,
   useSendOtpMutation,
-  useUserProfileExistsQuery,
   useVerifyOtpMutation,
 } from '../../features/auth/auth.queries';
 import { useSmsAutoRead } from '../../hooks/useSmsAutoRead';
@@ -29,7 +29,7 @@ export default function VerifyOtpScreen() {
 
   const sendOtpMutation = useSendOtpMutation();
   const verifyOtpMutation = useVerifyOtpMutation();
-  const profileExistsQuery = useUserProfileExistsQuery(verifiedUserId);
+  const onboardingCompletedQuery = useOnboardingCompletedQuery(verifiedUserId);
 
   // Android SMS auto-read: a documented no-op stub on this pass (BL-019) —
   // manual typing, paste-fill, and auto-submit all work today without it.
@@ -50,14 +50,14 @@ export default function VerifyOtpScreen() {
   // Post-verify navigation decision: a real side effect (imperative
   // navigation once the profile-exists query settles), not derived state.
   useEffect(() => {
-    if (!verifiedUserId || !profileExistsQuery.isSuccess) {
+    if (!verifiedUserId || !onboardingCompletedQuery.isSuccess) {
       return;
     }
-    router.replace(profileExistsQuery.data ? '/' : '/onboarding');
+    router.replace(onboardingCompletedQuery.data ? '/' : '/onboarding');
   }, [
     verifiedUserId,
-    profileExistsQuery.isSuccess,
-    profileExistsQuery.data,
+    onboardingCompletedQuery.isSuccess,
+    onboardingCompletedQuery.data,
     router,
   ]);
 

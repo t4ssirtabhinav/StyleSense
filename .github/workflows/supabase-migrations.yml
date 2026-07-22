@@ -1,0 +1,83 @@
+name: Supabase Migrations
+
+# Single-project setup (see docs/BACKLOG.md BL-003, still open): develop and
+# main both currently deploy to the same Supabase project (vars.SUPABASE_PROJECT_ID).
+# When a separate production project is provisioned, split `deploy-migrations`
+# into two jobs gated by branch, each with its own *_PROJECT_ID/*_DB_PASSWORD
+# secret pair, per Supabase's own CI/CD guide.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "supabase/migrations/**"
+  push:
+    branches: [develop, main]
+    paths:
+      - "supabase/migrations/**"
+
+concurrency:
+  group: supabase-migrations
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    name: Check for schema drift before merge
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v3
+        with:
+          version: "2.107.0"
+      - name: Link project
+        run: supabase link --project-ref "${{ vars.SUPABASE_PROJECT_ID }}"
+      - name: Diff local migrations against linked project
+        run: |
+          supabase db diff --linked > diff_output.txt
+
+          # Supabase auto-configures baseline objects on every project at
+          # creation time (default-privilege GRANTs to anon/authenticated/
+          # service_role on every public-schema table/function, and its own
+          # pg_net/pg_cron extension setup) — none of this lives in our
+          # migration files, and `db diff` has no way to know it's expected
+          # rather than a real schema change. This is a documented CLI
+          # limitation, not something we caused: supabase/cli#1864 (db diff
+          # granting privileges to anon/authenticated it "never had") and
+          # #4163 (pg_cron/pg_net extension ownership diffs), both confirmed
+          # 2026-07-22. Filtering these known-noisy line shapes out before
+          # deciding whether there's real drift, rather than trying to
+          # "reconcile" Supabase's own auto-managed baseline into an
+          # application migration (which would just have to be redone for
+          # every future project anyway, per BL-003).
+          grep -vE '^(SET check_function_bodies|(DROP|CREATE) EXTENSION|ALTER DEFAULT PRIVILEGES|GRANT .+ TO (anon|authenticated|service_role);?$)' \
+            diff_output.txt > filtered_diff.txt || true
+
+          if [ -s filtered_diff.txt ]; then
+            echo "::error::Schema drift detected between supabase/migrations/ and the linked project's live schema (after filtering known Supabase-managed baseline noise — default-privilege grants, pg_net/pg_cron). This usually means the remote was changed outside a migration file (e.g. directly in the Dashboard). Review the diff below and add a migration to reconcile before merging."
+            cat filtered_diff.txt
+            exit 1
+          fi
+          echo "No meaningful drift — migration files match the linked project's current schema (ignoring known Supabase-managed baseline noise)."
+
+  deploy-migrations:
+    name: Apply pending migrations
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v3
+        with:
+          version: "2.107.0"
+      - name: Link project
+        run: supabase link --project-ref "${{ vars.SUPABASE_PROJECT_ID }}"
+      - name: Preview pending migrations
+        run: supabase db push --dry-run
+      - name: Apply migrations
+        run: supabase db push

@@ -19,5 +19,25 @@ module.exports = {
   // react-native-gesture-handler's own official jest setup (mocks its native
   // module) — BottomSheet.tsx and app/_layout.tsx's GestureHandlerRootView
   // otherwise schedule a native binding install that fails under Jest.
-  setupFiles: ['react-native-gesture-handler/jestSetup.js'],
+  //
+  // @shopify/flash-list's own official jest setup (SS-004) — mocks its
+  // internal measureLayout helpers with fixed dimensions so v2's
+  // RecyclerView-based engine can actually measure/render items under Jest
+  // (no real native layout pass exists in this environment). Without this,
+  // app/(auth)/onboarding.tsx's 4-item step pager renders zero items in
+  // tests.
+  setupFiles: [
+    'react-native-gesture-handler/jestSetup.js',
+    '@shopify/flash-list/jestSetup.js',
+  ],
+  // jest-expo's own default transformIgnorePatterns (jest-preset.js) doesn't
+  // include @shopify/flash-list, whose dist/index.js ships untranspiled ESM
+  // `import` syntax — without this override, any file importing FlashList
+  // fails with "Cannot use import statement outside a module". Same base
+  // pattern as jest-expo's default, with @shopify/flash-list added (SS-004).
+  transformIgnorePatterns: [
+    '/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|@shopify/flash-list))',
+    '/node_modules/react-native-reanimated/plugin/',
+    '/node_modules/@react-native/babel-preset/',
+  ],
 };

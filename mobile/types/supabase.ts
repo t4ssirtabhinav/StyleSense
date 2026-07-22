@@ -271,6 +271,7 @@ export type Database = {
           id: string
           language: string | null
           last_active_at: string | null
+          onboarding_completed: boolean
           phone: string | null
           plan_expires_at: string | null
           plan_tier: Database["public"]["Enums"]["plan_tier"] | null
@@ -289,6 +290,7 @@ export type Database = {
           id?: string
           language?: string | null
           last_active_at?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           plan_expires_at?: string | null
           plan_tier?: Database["public"]["Enums"]["plan_tier"] | null
@@ -307,6 +309,7 @@ export type Database = {
           id?: string
           language?: string | null
           last_active_at?: string | null
+          onboarding_completed?: boolean
           phone?: string | null
           plan_expires_at?: string | null
           plan_tier?: Database["public"]["Enums"]["plan_tier"] | null
@@ -314,6 +317,72 @@ export type Database = {
           skin_tone?: string | null
           style_preferences?: Json | null
           style_score?: number | null
+        }
+        Relationships: []
+      }
+      style_keywords: {
+        Row: {
+          active: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      occasion_types: {
+        Row: {
+          active: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      colour_palette: {
+        Row: {
+          active: boolean
+          hex: string
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          hex: string
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          hex?: string
+          key?: string
+          label?: string
+          sort_order?: number
         }
         Relationships: []
       }

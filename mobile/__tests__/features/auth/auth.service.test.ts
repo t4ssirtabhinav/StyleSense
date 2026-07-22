@@ -1,5 +1,5 @@
 import {
-  checkUserProfileExists,
+  checkOnboardingCompleted,
   sendOtp,
   validateIndianMobile,
   verifyOtp,
@@ -135,29 +135,41 @@ describe('verifyOtp', () => {
   });
 });
 
-describe('checkUserProfileExists', () => {
+describe('checkOnboardingCompleted', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('returns true when a row is present', async () => {
-    mockMaybeSingle.mockResolvedValue({ data: { id: 'user-1' }, error: null });
+  it('returns true when onboarding_completed is true', async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { onboarding_completed: true },
+      error: null,
+    });
 
-    await expect(checkUserProfileExists('user-1')).resolves.toBe(true);
+    await expect(checkOnboardingCompleted('user-1')).resolves.toBe(true);
     expect(mockFrom).toHaveBeenCalledWith('users');
-    expect(mockSelect).toHaveBeenCalledWith('id');
+    expect(mockSelect).toHaveBeenCalledWith('onboarding_completed');
     expect(mockEq).toHaveBeenCalledWith('id', 'user-1');
+  });
+
+  it('returns false when onboarding_completed is false', async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { onboarding_completed: false },
+      error: null,
+    });
+
+    await expect(checkOnboardingCompleted('user-2')).resolves.toBe(false);
   });
 
   it('returns false when no row is present', async () => {
     mockMaybeSingle.mockResolvedValue({ data: null, error: null });
 
-    await expect(checkUserProfileExists('user-2')).resolves.toBe(false);
+    await expect(checkOnboardingCompleted('user-2')).resolves.toBe(false);
   });
 
   it('returns false (fail-safe) when the query throws', async () => {
     mockMaybeSingle.mockRejectedValue(new Error('Network request failed'));
 
-    await expect(checkUserProfileExists('user-3')).resolves.toBe(false);
+    await expect(checkOnboardingCompleted('user-3')).resolves.toBe(false);
   });
 });

@@ -70,6 +70,43 @@ describe('Input', () => {
       expect(onChangeText).toHaveBeenCalledWith('123');
     });
 
+    it('highlights the active box (peacock border) on focus and reverts on blur', async () => {
+      const { getByTestId } = await render(
+        <Input variant="otp" length={6} value="" onChangeText={jest.fn()} />,
+      );
+      const hiddenInput = getByTestId('otp-hidden-input');
+      const firstBox = getByTestId('otp-box-0');
+
+      // Before focus: no box is highlighted (muted border, default width).
+      expect(firstBox.props.style).toMatchObject({ borderColor: '#9A9590' });
+
+      await fireEvent(hiddenInput, 'focus');
+      expect(getByTestId('otp-box-0').props.style).toMatchObject({
+        borderColor: '#0D6B6E',
+      });
+
+      await fireEvent(hiddenInput, 'blur');
+      expect(getByTestId('otp-box-0').props.style).toMatchObject({
+        borderColor: '#9A9590',
+      });
+    });
+
+    it('highlights the box at value.length (next digit lands there), not always box 0', async () => {
+      const { getByTestId } = await render(
+        <Input variant="otp" length={6} value="12" onChangeText={jest.fn()} />,
+      );
+      const hiddenInput = getByTestId('otp-hidden-input');
+
+      await fireEvent(hiddenInput, 'focus');
+
+      expect(getByTestId('otp-box-2').props.style).toMatchObject({
+        borderColor: '#0D6B6E',
+      });
+      expect(getByTestId('otp-box-0').props.style).toMatchObject({
+        borderColor: '#9A9590',
+      });
+    });
+
     it('renders an inline error and does not throw when error transitions from falsy to truthy', async () => {
       const { rerender, getByText, queryByText } = await render(
         <Input variant="otp" value="123456" onChangeText={jest.fn()} />,

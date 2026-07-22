@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -82,6 +82,15 @@ function OtpInput({
 }: InputProps) {
   const shakeX = useSharedValue(0);
   const prevHadErrorRef = useRef(false);
+  // (QA-blocker fix pass, 2026-07-22 — cross-ticket: this component
+  // originates in SS-008's design system, consumed by SS-003's
+  // verify-otp.tsx, fixed here during SS-004's manual-walkthrough blocker
+  // pass — same precedent as BL-014/015/016/021.) The hidden TextInput
+  // below does actually receive focus/input (blind typing works), but
+  // nothing ever surfaced that to the visible boxes, so the input looked
+  // broken. `isFocused` tracks the hidden input's focus state so the box at
+  // the "next digit lands here" position can be visually highlighted.
+  const [isFocused, setIsFocused] = useState(false);
 
   useEffect(() => {
     const hasError = Boolean(error);
@@ -111,6 +120,10 @@ function OtpInput({
   };
 
   const boxes = Array.from({ length }, (_, index) => value[index] ?? '');
+  // The box where the next typed digit will land — clamped so a fully
+  // filled value (value.length === length) still highlights the last box
+  // rather than pointing one past the end.
+  const activeIndex = Math.min(value.length, length - 1);
 
   return (
     <View>
@@ -118,21 +131,39 @@ function OtpInput({
        * Animated.View, so flex-row is set via the animated style object
        * instead — a plain `className="flex-row"` here is silently dropped. */}
       <Animated.View style={shakeStyle}>
-        {boxes.map((digit, index) => (
-          <View
-            // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length box positions, not a reorderable list
-            key={index}
-            className="mr-xs h-12 w-10 items-center justify-center rounded-md border"
-            style={{ borderColor: error ? ERROR_COLOR : colors.text.muted }}
-          >
-            <Text variant="mono">{digit}</Text>
-          </View>
-        ))}
+        {boxes.map((digit, index) => {
+          const isActive = isFocused && index === activeIndex;
+          // Reuses this design system's existing conventions rather than
+          // inventing a new focus colour: `accent.peacock` is the
+          // interactive-accent border already used for Button's secondary
+          // variant, and the 2px border width already denotes "this is the
+          // active one" per Badge's `selected` treatment.
+          const borderColor = error
+            ? ERROR_COLOR
+            : isActive
+              ? colors.accent.peacock
+              : colors.text.muted;
+          return (
+            <View
+              // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length box positions, not a reorderable list
+              key={index}
+              testID={`otp-box-${index}`}
+              className={`mr-xs h-12 w-10 items-center justify-center rounded-md ${
+                isActive ? 'border-2' : 'border'
+              }`}
+              style={{ borderColor }}
+            >
+              <Text variant="mono">{digit}</Text>
+            </View>
+          );
+        })}
       </Animated.View>
       <TextInput
         testID="otp-hidden-input"
         value={value}
         onChangeText={handleChangeText}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
         keyboardType="number-pad"
         maxLength={length}
         autoFocus={autoFocus}

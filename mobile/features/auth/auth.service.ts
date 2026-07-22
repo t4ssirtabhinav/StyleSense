@@ -123,18 +123,27 @@ export async function verifyOtp(
   return session;
 }
 
-export async function checkUserProfileExists(userId: string): Promise<boolean> {
+// SS-004 renames checkUserProfileExists -> checkOnboardingCompleted: once
+// 002_onboarding_completed.sql's auto-provisioning trigger ships, a
+// public.users row exists for every authenticated user immediately, which
+// would make a row-existence check return true for every user, always —
+// silently breaking the "first login vs. returning" distinction it was
+// built for. Checking the actual onboarding_completed flag instead is what
+// makes that distinction meaningful again.
+export async function checkOnboardingCompleted(
+  userId: string,
+): Promise<boolean> {
   try {
     const { data } = await supabase
       .from('users')
-      .select('id')
+      .select('onboarding_completed')
       .eq('id', userId)
       .maybeSingle();
-    return Boolean(data);
+    return data?.onboarding_completed ?? false;
   } catch {
-    // A failed profile-existence check should not crash the just-completed
-    // OTP verify flow — fail safe to "no profile yet" (routes to
-    // /onboarding), the same outcome a genuinely first-time user gets.
+    // A failed onboarding-completed check should not crash the
+    // just-completed OTP verify flow — fail safe to "not completed" (routes
+    // to /onboarding), the same outcome a genuinely first-time user gets.
     return false;
   }
 }

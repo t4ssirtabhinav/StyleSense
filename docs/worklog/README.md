@@ -2,13 +2,17 @@
 
 Each ticket run through the 4-phase pipeline (architect → developer → qa → devops, see `.claude/skills/ticket/SKILL.md`) gets one file here: `SS-XXX.md`. Every phase appends to its ticket's file — this is the audit trail for what each agent did, when, and why. Update the table below whenever a ticket's phase changes.
 
+**Keep entries tight.** A worklog is a pointer to the durable artifacts (the design doc, the git diff, the PR body), not a re-narration of them. Each phase logs: its verdict, the load-bearing decisions and any deviations, and backlog deltas (`BL-XXX` added/resolved) — a handful of lines, not a file-by-file walkthrough. The full detail already lives in the design doc (Architect), the diff + PR (Developer/DevOps), and QA's AC table. Don't duplicate it here. Note the ticket's `Risk:` lane (from the design doc) in the Architect entry so a reader knows whether it ran full-lane or fast-lane.
+
 | Ticket | Title                                  | Architect | Developer | QA        | DevOps              |
 |--------|-----------------------------------------|-----------|-----------|-----------|----------------------|
 | SS-008 | Design System Foundation (UI Kit)       | done — deps + colour gaps flagged | done — all checks green | PASS (manual verification done, 2 bugs found+fixed) | merged (PR #9) |
 | SS-002 | Supabase Project Setup & DB Schema      | done — blocker flagged | done — Phone Auth deferred, DB tests unexecuted | PASS      | merged (PR #7)       |
 | SS-003 | Phone OTP Authentication Flow           | done — no Developer blocker | done — all checks green | PASS (manual verification done, 1 bug found+fixed) | merged (PR #12) |
-| SS-004 | User Onboarding Wizard                  | pending   | pending   | pending   | pending              |
+| SS-004 | User Onboarding Wizard                  | done — DB-backed taxonomies (BL-018 resolved, BL-022/023/024/025/026/027 opened) | done — 5 fix passes complete (taxonomies auth-gating, Step 1 redirect, OTP focus indicator, colour swatch v3 redesign, Back button, caption/layout fixes, BL-029 DB backfill resolved, hydrate-on-resume fix, BL-030 opened) | PASS (re-verified after all fix passes, 192 tests, no critical findings) | committed & pushed (SHA 52878bd, branch feature/SS-004-onboarding-wizard); PR creation pending user confirmation |
 | SS-005 | Home Screen Shell + Bottom Tab Nav      | pending   | pending   | pending   | pending              |
+| SS-006 | Outfit Styling AI: Preference Consumption Spec | pending   | pending   | pending   | pending              |
+| SS-007 | Granular Preferences Editor (Edit Preferences) | pending   | pending   | pending   | pending              |
 | SS-009 | Error Monitoring & Analytics Instr.     | pending   | pending   | pending   | pending              |
 
-Sprint 1 order matters: SS-008 first (SS-003/004/005 all depend on the design system it produces), then SS-002 (verification pass — mostly done already), then SS-003 → SS-004 → SS-005, with SS-009 fit in wherever convenient (it only depends on SS-001/SS-003).
+Sprint 1 order matters: SS-008 first (SS-003/004/005 all depend on the design system it produces), then SS-002 (verification pass — mostly done already), then SS-003 → SS-004 → SS-005, with SS-009 fit in wherever convenient (it only depends on SS-001/SS-003). SS-006 and SS-007 are Sprint 2, surfaced during SS-004's design review (2026-07-13): SS-006 (styling AI consumption spec) depends on SS-004; SS-007 (granular preferences editor) depends on SS-004 and SS-005.

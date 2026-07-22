@@ -1,6 +1,6 @@
 import type { Session } from '@supabase/supabase-js';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { checkUserProfileExists, sendOtp, verifyOtp } from './auth.service';
+import { checkOnboardingCompleted, sendOtp, verifyOtp } from './auth.service';
 import type { AuthError } from './auth.types';
 
 // The only place these React Query hooks are called from is components (per
@@ -22,10 +22,18 @@ export function useVerifyOtpMutation() {
   });
 }
 
-export function useUserProfileExistsQuery(userId: string | undefined) {
+// Exported so other domains that need to invalidate this query (e.g.
+// onboarding.queries.ts's useCompleteOnboardingMutation, on completion) use
+// the exact same key instead of duplicating the literal and risking drift.
+// This query key is OWNED by this file — always build it via this helper.
+export function onboardingCompletedQueryKey(userId: string | undefined) {
+  return ['auth', 'onboarding-completed', userId] as const;
+}
+
+export function useOnboardingCompletedQuery(userId: string | undefined) {
   return useQuery({
-    queryKey: ['auth', 'profile-exists', userId],
-    queryFn: () => checkUserProfileExists(userId as string),
+    queryKey: onboardingCompletedQueryKey(userId),
+    queryFn: () => checkOnboardingCompleted(userId as string),
     enabled: Boolean(userId),
   });
 }

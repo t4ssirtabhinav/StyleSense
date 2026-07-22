@@ -15,7 +15,7 @@ jest.mock('expo-router', () => ({
 
 const mockSendOtpMutate = jest.fn();
 const mockVerifyOtpMutate = jest.fn();
-const mockUseUserProfileExistsQuery = jest.fn((userId: string | undefined) =>
+const mockUseOnboardingCompletedQuery = jest.fn((userId: string | undefined) =>
   userId
     ? { isSuccess: true, data: false }
     : { isSuccess: false, data: undefined },
@@ -27,14 +27,14 @@ jest.mock('../../../features/auth/auth.queries', () => ({
     mutate: mockVerifyOtpMutate,
     isPending: false,
   }),
-  useUserProfileExistsQuery: (userId: string | undefined) =>
-    mockUseUserProfileExistsQuery(userId),
+  useOnboardingCompletedQuery: (userId: string | undefined) =>
+    mockUseOnboardingCompletedQuery(userId),
 }));
 
 describe('VerifyOtpScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseUserProfileExistsQuery.mockImplementation((userId) =>
+    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
       userId
         ? { isSuccess: true, data: false }
         : { isSuccess: false, data: undefined },
@@ -94,7 +94,7 @@ describe('VerifyOtpScreen', () => {
         onSuccess({ user: { id: 'user-1' } });
       },
     );
-    mockUseUserProfileExistsQuery.mockImplementation((userId) =>
+    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
       userId
         ? { isSuccess: true, data: false }
         : { isSuccess: false, data: undefined },
@@ -117,7 +117,7 @@ describe('VerifyOtpScreen', () => {
         onSuccess({ user: { id: 'user-1' } });
       },
     );
-    mockUseUserProfileExistsQuery.mockImplementation((userId) =>
+    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
       userId
         ? { isSuccess: true, data: true }
         : { isSuccess: false, data: undefined },
