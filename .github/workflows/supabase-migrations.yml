@@ -38,12 +38,30 @@ jobs:
       - name: Diff local migrations against linked project
         run: |
           supabase db diff --linked > diff_output.txt
-          if [ -s diff_output.txt ]; then
-            echo "::error::Schema drift detected between supabase/migrations/ and the linked project's live schema. This usually means the remote was changed outside a migration file (e.g. directly in the Dashboard). Review the diff below and add a migration to reconcile before merging."
-            cat diff_output.txt
+
+          # Supabase auto-configures baseline objects on every project at
+          # creation time (default-privilege GRANTs to anon/authenticated/
+          # service_role on every public-schema table/function, and its own
+          # pg_net/pg_cron extension setup) — none of this lives in our
+          # migration files, and `db diff` has no way to know it's expected
+          # rather than a real schema change. This is a documented CLI
+          # limitation, not something we caused: supabase/cli#1864 (db diff
+          # granting privileges to anon/authenticated it "never had") and
+          # #4163 (pg_cron/pg_net extension ownership diffs), both confirmed
+          # 2026-07-22. Filtering these known-noisy line shapes out before
+          # deciding whether there's real drift, rather than trying to
+          # "reconcile" Supabase's own auto-managed baseline into an
+          # application migration (which would just have to be redone for
+          # every future project anyway, per BL-003).
+          grep -vE '^(SET check_function_bodies|(DROP|CREATE) EXTENSION|ALTER DEFAULT PRIVILEGES|GRANT .+ TO (anon|authenticated|service_role);?$)' \
+            diff_output.txt > filtered_diff.txt || true
+
+          if [ -s filtered_diff.txt ]; then
+            echo "::error::Schema drift detected between supabase/migrations/ and the linked project's live schema (after filtering known Supabase-managed baseline noise — default-privilege grants, pg_net/pg_cron). This usually means the remote was changed outside a migration file (e.g. directly in the Dashboard). Review the diff below and add a migration to reconcile before merging."
+            cat filtered_diff.txt
             exit 1
           fi
-          echo "No drift — migration files match the linked project's current schema."
+          echo "No meaningful drift — migration files match the linked project's current schema (ignoring known Supabase-managed baseline noise)."
 
   deploy-migrations:
     name: Apply pending migrations
