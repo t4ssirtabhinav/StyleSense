@@ -1,0 +1,65 @@
+name: Supabase Migrations
+
+# Single-project setup (see docs/BACKLOG.md BL-003, still open): develop and
+# main both currently deploy to the same Supabase project (vars.SUPABASE_PROJECT_ID).
+# When a separate production project is provisioned, split `deploy-migrations`
+# into two jobs gated by branch, each with its own *_PROJECT_ID/*_DB_PASSWORD
+# secret pair, per Supabase's own CI/CD guide.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "supabase/migrations/**"
+  push:
+    branches: [develop, main]
+    paths:
+      - "supabase/migrations/**"
+
+concurrency:
+  group: supabase-migrations
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    name: Check for schema drift before merge
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v3
+        with:
+          version: "2.107.0"
+      - name: Link project
+        run: supabase link --project-ref "${{ vars.SUPABASE_PROJECT_ID }}"
+      - name: Diff local migrations against linked project
+        run: |
+          supabase db diff --linked > diff_output.txt
+          if [ -s diff_output.txt ]; then
+            echo "::error::Schema drift detected between supabase/migrations/ and the linked project's live schema. This usually means the remote was changed outside a migration file (e.g. directly in the Dashboard). Review the diff below and add a migration to reconcile before merging."
+            cat diff_output.txt
+            exit 1
+          fi
+          echo "No drift — migration files match the linked project's current schema."
+
+  deploy-migrations:
+    name: Apply pending migrations
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v3
+        with:
+          version: "2.107.0"
+      - name: Link project
+        run: supabase link --project-ref "${{ vars.SUPABASE_PROJECT_ID }}"
+      - name: Preview pending migrations
+        run: supabase db push --dry-run
+      - name: Apply migrations
+        run: supabase db push
