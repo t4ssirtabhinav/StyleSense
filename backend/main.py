@@ -1,8 +1,11 @@
 import os
+
 import sentry_sdk
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+
+from routers import outfit_suggestions
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -23,7 +26,9 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+app.include_router(outfit_suggestions.router)
+
 
 @app.get('/health')
-def health():
+def health() -> dict[str, str]:
     return {'status': 'ok', 'version': '0.1.0'}
