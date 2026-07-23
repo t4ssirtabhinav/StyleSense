@@ -2,18 +2,27 @@ import { cleanup, render } from '@testing-library/react-native';
 import TabsLayout from '../../../app/(tabs)/_layout';
 import { useAuthStore } from '../../../features/auth/auth.store';
 
+// SS-005 (Home Screen Shell + Bottom Tab Navigation): extends the existing
+// expo-router mock to also stub Tabs/Tabs.Screen (previously only mocked
+// Redirect/Slot, back when this layout rendered <Slot />).
 jest.mock('expo-router', () => {
   const react = jest.requireActual('react');
   const reactNative = jest.requireActual('react-native');
+
+  const MockTabs = ({ children }: { children: React.ReactNode }) => {
+    void children;
+    return react.createElement(
+      reactNative.Text,
+      { testID: 'tabs' },
+      'guarded content',
+    );
+  };
+  MockTabs.Screen = () => null;
+
   return {
     Redirect: ({ href }: { href: string }) =>
       react.createElement(reactNative.Text, { testID: 'redirect' }, href),
-    Slot: () =>
-      react.createElement(
-        reactNative.Text,
-        { testID: 'slot' },
-        'guarded content',
-      ),
+    Tabs: MockTabs,
   };
 });
 
@@ -40,14 +49,14 @@ describe('TabsLayout (Auth Guard)', () => {
     expect(getByTestId('redirect')).toHaveTextContent('/login');
   });
 
-  it('renders the guarded child content (<Slot />) when a valid session exists', async () => {
+  it('renders the guarded child content (<Tabs>) when a valid session exists', async () => {
     useAuthStore.setState({
       isSessionLoading: false,
       session: { user: { id: 'user-1' } } as never,
     });
     const { getByTestId, queryByTestId } = await render(<TabsLayout />);
 
-    expect(getByTestId('slot')).toBeOnTheScreen();
+    expect(getByTestId('tabs')).toBeOnTheScreen();
     expect(queryByTestId('redirect')).toBeNull();
   });
 });

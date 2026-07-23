@@ -5,6 +5,7 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useAuth } from '../hooks/useAuth';
 import { fontAssets } from '../lib/fonts';
 import '../global.css';
@@ -38,11 +39,20 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <QueryClientProvider client={queryClient}>
-        <BottomSheetModalProvider>
-          <Stack screenOptions={{ headerShown: false }} />
-        </BottomSheetModalProvider>
-      </QueryClientProvider>
+      {/* SS-005 gap found: react-native-safe-area-context was a direct
+          dependency but SafeAreaProvider was never mounted anywhere in the
+          app tree — app/(tabs)/_layout.tsx's new CustomTabBar receives its
+          safe-area insets via the tab-bar navigator (which itself needs a
+          SafeAreaProvider ancestor to compute real device insets rather than
+          falling back to zeroed initial metrics). Must wrap everything else
+          so any current/future useSafeAreaInsets() call resolves correctly. */}
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <BottomSheetModalProvider>
+            <Stack screenOptions={{ headerShown: false }} />
+          </BottomSheetModalProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

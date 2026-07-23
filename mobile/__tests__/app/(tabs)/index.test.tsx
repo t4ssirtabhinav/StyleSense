@@ -1,45 +1,33 @@
 import { render } from '@testing-library/react-native';
 import HomeScreen from '../../../app/(tabs)/index';
 
-// Smoke test for the SS-008 migration off raw View/Text (see
-// docs/tickets/SS-008-design.md's migration decision): asserts the rendered
-// tree is built from the token-driven Card/Text components, not the
-// pre-migration literal `bg-white`/`text-dark` raw RN primitives.
-//
-// Moved from __tests__/app/index.test.tsx as part of SS-003's app/index.tsx
-// -> app/(tabs)/index.tsx route move (docs/tickets/SS-003-design.md #12) —
-// identical assertions, updated import path only.
+// SS-005 (Home Screen Shell + Bottom Tab Navigation) full rewrite — the
+// previous file was SS-008's disposable Card/Text smoke test, which no
+// longer exists after this ticket. Child components (GreetingHeader,
+// OccasionPillRow, WardrobeNudgeCard) call out to auth/query hooks, mocked
+// here purely to keep this a composition smoke test rather than duplicating
+// their own dedicated unit tests.
+const mockPush = jest.fn();
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
+
+jest.mock('../../../features/home/home.queries', () => ({
+  useUserGreetingQuery: () => ({
+    data: null,
+    isSuccess: true,
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 describe('HomeScreen (app/(tabs)/index.tsx)', () => {
-  it('renders inside a Card using the flat variant', async () => {
+  it('renders GreetingHeader, OccasionPillRow, WardrobeNudgeCard, and TrendingPicksPlaceholder', async () => {
     const { getByTestId } = await render(<HomeScreen />);
-    // Card has no accessibilityRole; assert via its computed variant classes
-    // rather than the file's raw JSX, since that's what actually renders.
-    const root = getByTestId('home-card');
-    expect(root).toHaveProp('className', expect.stringContaining('rounded-md'));
-    expect(root).toHaveProp(
-      'className',
-      expect.stringContaining('bg-surfaceSecondary'),
-    );
-  });
 
-  it('renders the StyleSense heading via the Text component (font-heading class)', async () => {
-    const { getByText } = await render(<HomeScreen />);
-    const heading = getByText('StyleSense');
-    expect(heading).toHaveProp(
-      'className',
-      expect.stringContaining('font-heading'),
-    );
-  });
-
-  it('renders the two status lines via the Text component (font-body class)', async () => {
-    const { getByText } = await render(<HomeScreen />);
-    expect(getByText('Expo Router + NativeWind is working.')).toHaveProp(
-      'className',
-      expect.stringContaining('font-body'),
-    );
-    expect(getByText('Prod')).toHaveProp(
-      'className',
-      expect.stringContaining('font-body'),
-    );
+    expect(getByTestId('greeting-header')).toBeOnTheScreen();
+    expect(getByTestId('occasion-pill-row')).toBeOnTheScreen();
+    expect(getByTestId('wardrobe-nudge-card')).toBeOnTheScreen();
+    expect(getByTestId('trending-picks-placeholder')).toBeOnTheScreen();
   });
 });

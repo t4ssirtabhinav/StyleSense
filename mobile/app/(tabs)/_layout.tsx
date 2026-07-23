@@ -1,12 +1,14 @@
-import { Redirect, Slot } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import { Card, Text } from '../../components/ui';
 import { useAuthStore } from '../../features/auth/auth.store';
+import { CustomTabBar } from '../../features/navigation/components/CustomTabBar';
+import { TAB_CONFIG } from '../../features/navigation/navigation.constants';
 
-// The Auth Guard wrapping the (tabs) route group. Deliberately renders
-// <Slot />, not Expo Router's <Tabs>, yet — there is no tab-bar UI to render
-// until SS-005 lands; using Slot here means SS-005's Architect pass can drop
-// <Tabs> in around/inside this same guard without redesigning the guard
-// logic itself.
+// The Auth Guard wrapping the (tabs) route group. SS-005 (Home Screen Shell
+// + Bottom Tab Navigation) replaces the previous <Slot /> placeholder with
+// the real 5-tab <Tabs> navigator + custom tab bar, once a valid session
+// exists — the guard logic above it (loading Card / <Redirect>) is
+// unchanged.
 export default function TabsLayout() {
   const session = useAuthStore((state) => state.session);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
@@ -32,5 +34,18 @@ export default function TabsLayout() {
     return <Redirect href="/login" />;
   }
 
-  return <Slot />;
+  return (
+    <Tabs
+      screenOptions={{ headerShown: false }}
+      tabBar={(props) => <CustomTabBar {...props} />}
+    >
+      {TAB_CONFIG.map((tab) => (
+        <Tabs.Screen
+          key={tab.name}
+          name={tab.name}
+          options={{ title: tab.label }}
+        />
+      ))}
+    </Tabs>
+  );
 }
