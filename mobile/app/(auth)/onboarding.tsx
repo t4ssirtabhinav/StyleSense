@@ -4,7 +4,7 @@ import {
   type ListRenderItemInfo,
 } from '@shopify/flash-list';
 import { Redirect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, useWindowDimensions } from 'react-native';
 import { Button, Card, Text, colors } from '../../components/ui';
 import { useAuthStore } from '../../features/auth/auth.store';
@@ -92,15 +92,46 @@ export default function OnboardingScreen() {
   const [step1Error, setStep1Error] = useState<string | undefined>(undefined);
 
   const pagerRef = useRef<FlashListRef<StepDescriptor>>(null);
+  const hasAutoHydratedRef = useRef(false);
 
   // Shown before Step 1 when a returning user has onboarding_completed:
-  // false and already has a non-null full_name (routing to this screen at
-  // all already implies onboarding_completed: false, per verify-otp.tsx's
-  // routing decision — see design doc's "Incremental save" section).
+  // false and already has a non-null full_name. The "routing to this screen
+  // at all already implies onboarding_completed: false" precondition only
+  // holds for the normal verify-otp.tsx routing path — it does NOT hold for
+  // direct-URL/deep-link entry, which can land a fully-onboarded user here
+  // too. The explicit !onboardingCompleted clause below covers that case —
+  // see docs/tickets/SS-016-design.md.
   const showResumePrompt =
     progressQuery.isSuccess &&
     Boolean(progressQuery.data?.fullName) &&
+    !progressQuery.data?.onboardingCompleted &&
     !hasDismissedResumePrompt;
+
+  // SS-016: a completed user who reaches this screen directly (bypassing
+  // ResumePrompt entirely, since showResumePrompt is false for them) would
+  // otherwise see a blank Step 1 — the only other hydrate call site,
+  // handleContinueSetup below, is gated behind ResumePrompt's "Continue
+  // Setup" button, which this user never presses. This effect auto-hydrates
+  // the store once per mount for that case only (guarded on
+  // onboardingCompleted being true), so it never fires for — and can never
+  // clobber — the genuinely-incomplete resume flow, which still hydrates
+  // only via handleContinueSetup. See docs/tickets/SS-016-design.md.
+  useEffect(() => {
+    if (
+      hasAutoHydratedRef.current ||
+      !progressQuery.isSuccess ||
+      !progressQuery.data?.onboardingCompleted
+    ) {
+      return;
+    }
+    hydrateFromProgress({
+      fullName: progressQuery.data.fullName,
+      gender: progressQuery.data.gender,
+      city: progressQuery.data.city,
+      stylePreferences: progressQuery.data.stylePreferences,
+    });
+    hasAutoHydratedRef.current = true;
+  }, [progressQuery.isSuccess, progressQuery.data, hydrateFromProgress]);
 
   // Fix pass 5, 2026-07-22 (SS-004): also pass through stylePreferences
   // (already fetched by useOnboardingProgressQuery) so Steps 2-4 pre-fill
