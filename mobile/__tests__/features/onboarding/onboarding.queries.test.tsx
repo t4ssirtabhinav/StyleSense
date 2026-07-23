@@ -8,6 +8,11 @@ import {
   useOnboardingProgressQuery,
   useOnboardingTaxonomiesQuery,
   useSaveStep1Mutation,
+  useUpdateBudgetRangeMutation,
+  useUpdateFavouriteColoursMutation,
+  useUpdateOccasionPrioritiesMutation,
+  useUpdateStyleKeywordsMutation,
+  useUpdateWardrobeTypeMutation,
 } from '../../../features/onboarding/onboarding.queries';
 import * as onboardingService from '../../../features/onboarding/onboarding.service';
 import * as onboardingTaxonomiesService from '../../../features/onboarding/onboarding.taxonomies.service';
@@ -16,6 +21,11 @@ jest.mock('../../../features/onboarding/onboarding.service', () => ({
   saveStep1Profile: jest.fn(),
   completeOnboarding: jest.fn(),
   fetchOnboardingProgress: jest.fn(),
+  updateStyleKeywords: jest.fn(),
+  updateWardrobeType: jest.fn(),
+  updateOccasionPriorities: jest.fn(),
+  updateBudgetRange: jest.fn(),
+  updateFavouriteColours: jest.fn(),
 }));
 
 jest.mock('../../../features/onboarding/onboarding.taxonomies.service', () => ({
@@ -183,6 +193,182 @@ describe('useOnboardingProgressQuery', () => {
 
     expect(result.current.fetchStatus).toBe('idle');
     expect(onboardingService.fetchOnboardingProgress).not.toHaveBeenCalled();
+  });
+});
+
+// (SS-007) Granular Preferences Editor — 5 partial-update mutation hooks.
+// Each mirrors useSaveStep1Mutation's shape and must invalidate the same
+// ['onboarding', 'progress', userId] key on success per the design doc's
+// Test plan.
+describe('useUpdateStyleKeywordsMutation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls through to updateStyleKeywords and invalidates the onboarding progress query key on success', async () => {
+    (onboardingService.updateStyleKeywords as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(
+      () => useUpdateStyleKeywordsMutation(),
+      {
+        wrapper: Wrapper,
+      },
+    );
+
+    result.current.mutate({ userId: 'user-1', styles: ['ethnic', 'western'] });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onboardingService.updateStyleKeywords).toHaveBeenCalledWith(
+      'user-1',
+      ['ethnic', 'western'],
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['onboarding', 'progress', 'user-1'],
+    });
+  });
+
+  it('exposes isError when the mutation rejects', async () => {
+    (onboardingService.updateStyleKeywords as jest.Mock).mockRejectedValue(
+      new Error('network error'),
+    );
+    const { result } = await renderHook(
+      () => useUpdateStyleKeywordsMutation(),
+      {
+        wrapper: createWrapper(),
+      },
+    );
+
+    result.current.mutate({ userId: 'user-1', styles: ['ethnic'] });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+describe('useUpdateWardrobeTypeMutation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls through to updateWardrobeType and invalidates the onboarding progress query key on success', async () => {
+    (onboardingService.updateWardrobeType as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(() => useUpdateWardrobeTypeMutation(), {
+      wrapper: Wrapper,
+    });
+
+    result.current.mutate({ userId: 'user-1', wardrobeType: 'mostly_western' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onboardingService.updateWardrobeType).toHaveBeenCalledWith(
+      'user-1',
+      'mostly_western',
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['onboarding', 'progress', 'user-1'],
+    });
+  });
+});
+
+describe('useUpdateOccasionPrioritiesMutation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls through to updateOccasionPriorities and invalidates the onboarding progress query key on success', async () => {
+    (onboardingService.updateOccasionPriorities as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(
+      () => useUpdateOccasionPrioritiesMutation(),
+      { wrapper: Wrapper },
+    );
+
+    result.current.mutate({
+      userId: 'user-1',
+      occasions: ['office', 'wedding'],
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onboardingService.updateOccasionPriorities).toHaveBeenCalledWith(
+      'user-1',
+      ['office', 'wedding'],
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['onboarding', 'progress', 'user-1'],
+    });
+  });
+});
+
+describe('useUpdateBudgetRangeMutation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls through to updateBudgetRange and invalidates the onboarding progress query key on success', async () => {
+    (onboardingService.updateBudgetRange as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(() => useUpdateBudgetRangeMutation(), {
+      wrapper: Wrapper,
+    });
+
+    result.current.mutate({ userId: 'user-1', budgetRange: '3000_10000' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onboardingService.updateBudgetRange).toHaveBeenCalledWith(
+      'user-1',
+      '3000_10000',
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['onboarding', 'progress', 'user-1'],
+    });
+  });
+});
+
+describe('useUpdateFavouriteColoursMutation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls through to updateFavouriteColours and invalidates the onboarding progress query key on success', async () => {
+    (onboardingService.updateFavouriteColours as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(
+      () => useUpdateFavouriteColoursMutation(),
+      { wrapper: Wrapper },
+    );
+
+    result.current.mutate({
+      userId: 'user-1',
+      colours: ['#000000', '#FFFFFF'],
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onboardingService.updateFavouriteColours).toHaveBeenCalledWith(
+      'user-1',
+      ['#000000', '#FFFFFF'],
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['onboarding', 'progress', 'user-1'],
+    });
   });
 });
 
