@@ -21,7 +21,12 @@ const CHECKMARK_BADGE_BG = colors.accent.marigold;
 const CHECKMARK_ICON_COLOR = colors.text.primary;
 const CHECKMARK_BADGE_OFFSET = -4;
 
-interface ColourSwatchProps {
+// (SS-007 revision) exported — mobile/features/onboarding/components/
+// EditFavouriteColoursSection.tsx reuses this exact presentation verbatim
+// (design doc's Open Questions #1: export vs. duplicate; export chosen as
+// the less-invasive option — one source of truth for the 64px-square/
+// corner-checkmark presentation rather than two copies drifting apart).
+export interface ColourSwatchProps {
   hex: string;
   label: string;
   selected: boolean;
@@ -63,7 +68,12 @@ interface ColourSwatchProps {
 // "colour blocks not vertically aligned" symptom, since nothing can drift
 // between swatches with short vs. long labels once both boxes share a fixed
 // width.
-function ColourSwatch({ hex, label, selected, onPress }: ColourSwatchProps) {
+export function ColourSwatch({
+  hex,
+  label,
+  selected,
+  onPress,
+}: ColourSwatchProps) {
   return (
     <View className="w-1/4 items-center py-xs">
       <Pressable

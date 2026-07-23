@@ -14,7 +14,7 @@ export default function ProfileScreen() {
   const greetingQuery = useUserGreetingQuery(userId);
 
   const handleEditPreferences = () => {
-    router.push('/onboarding');
+    router.push('/edit-preferences');
   };
 
   return (

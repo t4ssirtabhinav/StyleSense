@@ -7,9 +7,20 @@ import {
   completeOnboarding,
   fetchOnboardingProgress,
   saveStep1Profile,
+  updateBudgetRange,
+  updateFavouriteColours,
+  updateOccasionPriorities,
+  updateStyleKeywords,
+  updateWardrobeType,
 } from './onboarding.service';
 import { fetchOnboardingTaxonomies } from './onboarding.taxonomies.service';
-import type { StylePreferences } from './onboarding.types';
+import type {
+  BudgetRangeKey,
+  OccasionPriorityKey,
+  StyleKeywordKey,
+  StylePreferences,
+  WardrobeTypeKey,
+} from './onboarding.types';
 
 // The only place these React Query hooks are called from is components (per
 // CLAUDE.md's anti-pattern rule extended to this domain: no direct Supabase
@@ -47,6 +58,95 @@ export function useCompleteOnboardingMutation() {
       // from features/auth/auth.queries.ts, which owns the key.
       queryClient.invalidateQueries({
         queryKey: onboardingCompletedQueryKey(userId),
+      });
+    },
+  });
+}
+
+// (SS-007) Granular Preferences Editor — 5 partial-update mutation hooks, one
+// per mobile/app/edit-preferences.tsx section, each following
+// useSaveStep1Mutation's shape exactly: mutationFn calls the matching
+// service function, onSuccess invalidates the same ['onboarding', 'progress',
+// userId] query key useOnboardingProgressQuery reads (so the edited screen —
+// and the wizard, if the user later re-enters it — both see the fresh
+// value). None of these touch onboarding_completed, so
+// onboardingCompletedQueryKey never needs invalidating here.
+
+export function useUpdateStyleKeywordsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { userId: string; styles: StyleKeywordKey[] }
+  >({
+    mutationFn: ({ userId, styles }) => updateStyleKeywords(userId, styles),
+    onSuccess: (_data, { userId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['onboarding', 'progress', userId],
+      });
+    },
+  });
+}
+
+export function useUpdateWardrobeTypeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { userId: string; wardrobeType: WardrobeTypeKey }
+  >({
+    mutationFn: ({ userId, wardrobeType }) =>
+      updateWardrobeType(userId, wardrobeType),
+    onSuccess: (_data, { userId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['onboarding', 'progress', userId],
+      });
+    },
+  });
+}
+
+export function useUpdateOccasionPrioritiesMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { userId: string; occasions: OccasionPriorityKey[] }
+  >({
+    mutationFn: ({ userId, occasions }) =>
+      updateOccasionPriorities(userId, occasions),
+    onSuccess: (_data, { userId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['onboarding', 'progress', userId],
+      });
+    },
+  });
+}
+
+export function useUpdateBudgetRangeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    void,
+    Error,
+    { userId: string; budgetRange: BudgetRangeKey }
+  >({
+    mutationFn: ({ userId, budgetRange }) =>
+      updateBudgetRange(userId, budgetRange),
+    onSuccess: (_data, { userId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['onboarding', 'progress', userId],
+      });
+    },
+  });
+}
+
+export function useUpdateFavouriteColoursMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, { userId: string; colours: string[] }>({
+    mutationFn: ({ userId, colours }) =>
+      updateFavouriteColours(userId, colours),
+    onSuccess: (_data, { userId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['onboarding', 'progress', userId],
       });
     },
   });

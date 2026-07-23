@@ -35,9 +35,11 @@ describe('ProfileScreen (app/(tabs)/profile.tsx)', () => {
     expect(getByText('Edit Preferences')).toBeOnTheScreen();
   });
 
-  it('tapping "Edit Preferences" calls router.push(\'/onboarding\') — BL-023 regression guard', async () => {
+  // (SS-007 revision) BL-025: repointed from '/onboarding' (full wizard
+  // replay) to the new dedicated '/edit-preferences' screen.
+  it('tapping "Edit Preferences" calls router.push(\'/edit-preferences\')', async () => {
     const { getByText } = await render(<ProfileScreen />);
     fireEvent.press(getByText('Edit Preferences'));
-    expect(mockPush).toHaveBeenCalledWith('/onboarding');
+    expect(mockPush).toHaveBeenCalledWith('/edit-preferences');
   });
 });
