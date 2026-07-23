@@ -10,7 +10,7 @@ Each ticket run through the 4-phase pipeline (architect → developer → qa →
 | SS-002 | Supabase Project Setup & DB Schema      | done — blocker flagged | done — Phone Auth deferred, DB tests unexecuted | PASS      | merged (PR #7)       |
 | SS-003 | Phone OTP Authentication Flow           | done — no Developer blocker | done — all checks green | PASS (manual verification done, 1 bug found+fixed) | merged (PR #12) |
 | SS-004 | User Onboarding Wizard                  | done — DB-backed taxonomies (BL-018 resolved, BL-022/023/024/025/026/027 opened) | done — 5 fix passes complete (taxonomies auth-gating, Step 1 redirect, OTP focus indicator, colour swatch v3 redesign, Back button, caption/layout fixes, BL-029 DB backfill resolved, hydrate-on-resume fix, BL-030 opened) | PASS (re-verified after all fix passes, 192 tests, no critical findings) | merged (PR #13) |
-| SS-005 | Home Screen Shell + Bottom Tab Nav      | pending   | pending   | pending   | pending              |
+| SS-005 | Home Screen Shell + Bottom Tab Nav      | done — Risk: low (fast lane); BL-023 resolved, BL-008 addressed, BL-031 opened | done — all checks green (222 tests), SafeAreaProvider mounted, BL-032 opened | PASS PENDING MANUAL VERIFICATION | pending              |
 | SS-006 | Outfit Styling AI: Preference Consumption Spec | pending   | pending   | pending   | pending              |
 | SS-007 | Granular Preferences Editor (Edit Preferences) | pending   | pending   | pending   | pending              |
 | SS-009 | Error Monitoring & Analytics Instr.     | pending   | pending   | pending   | pending              |

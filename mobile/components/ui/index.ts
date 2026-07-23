@@ -11,6 +11,8 @@ export { Button } from './Button';
 export type { ButtonProps, ButtonVariant } from './Button';
 export { Card } from './Card';
 export type { CardProps, CardVariant } from './Card';
+export { EmptyState } from './EmptyState';
+export type { EmptyStateProps } from './EmptyState';
 export { IconButton } from './IconButton';
 export type {
   IconButtonProps,
