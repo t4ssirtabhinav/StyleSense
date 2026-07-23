@@ -16,9 +16,9 @@ describe('OccasionPillRow', () => {
     const { getByTestId } = await render(<OccasionPillRow />);
 
     expect(OCCASION_PILLS).toHaveLength(6);
-    OCCASION_PILLS.forEach((pill) => {
+    for (const pill of OCCASION_PILLS) {
       expect(getByTestId(`occasion-pill-${pill.key}`)).toBeOnTheScreen();
-    });
+    }
   });
 
   it("every pill renders via Badge's neutral style (no occasion prop) — BL-008 regression guard", async () => {

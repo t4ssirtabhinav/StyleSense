@@ -37,9 +37,9 @@ describe('CustomTabBar', () => {
 
   it('renders all 5 tab labels from TAB_CONFIG', async () => {
     const { getByText } = await render(<CustomTabBar {...buildProps()} />);
-    TAB_CONFIG.forEach((tab) => {
+    for (const tab of TAB_CONFIG) {
       expect(getByText(tab.label)).toBeOnTheScreen();
-    });
+    }
   });
 
   it('focused tab renders its activeIcon + marigold dot indicator; unfocused tabs render inactiveIcon, no dot', async () => {
