@@ -7,6 +7,13 @@ exclude = ["venv", "__pycache__"]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own recommended DI pattern is `param: T = Depends(...)` in a
+# function signature -- not a mutable-default-argument bug. Without this,
+# ruff's B008 flags every route/dependency-provider function in the
+# codebase (first introduced by SS-006's outfit-suggestions router).
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Body", "fastapi.Query"]
+
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
