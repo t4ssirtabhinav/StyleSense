@@ -51,7 +51,11 @@ class OutfitSuggestionService:
         rate_limiter: RateLimiter | None = None,
     ) -> None:
         self._provider = provider
-        self._rate_limiter = rate_limiter or RateLimiter()
+        # fail_open=True: this fallback only ever constructs a RateLimiter for
+        # the MockStylingAdapter-only path (a real adapter should always be
+        # given an explicit rate_limiter). Opt-in per SS-018 so this stays
+        # zero-risk while RateLimiter's own default is fail-closed.
+        self._rate_limiter = rate_limiter or RateLimiter(fail_open=True)
 
     async def generate_suggestions(
         self,

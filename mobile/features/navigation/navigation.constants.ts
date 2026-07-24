@@ -12,6 +12,7 @@ export const TAB_CONFIG: TabConfig[] = [
     activeIcon: 'home',
     inactiveIcon: 'home-outline',
     accessibilityLabel: 'Home tab',
+    href: '/',
   },
   {
     name: 'wardrobe',
@@ -19,6 +20,7 @@ export const TAB_CONFIG: TabConfig[] = [
     activeIcon: 'shirt',
     inactiveIcon: 'shirt-outline',
     accessibilityLabel: 'Wardrobe tab',
+    href: '/wardrobe',
   },
   {
     name: 'style',
@@ -26,6 +28,7 @@ export const TAB_CONFIG: TabConfig[] = [
     activeIcon: 'sparkles',
     inactiveIcon: 'sparkles-outline',
     accessibilityLabel: 'Style tab',
+    href: '/style',
   },
   {
     name: 'discover',
@@ -33,6 +36,7 @@ export const TAB_CONFIG: TabConfig[] = [
     activeIcon: 'compass',
     inactiveIcon: 'compass-outline',
     accessibilityLabel: 'Discover tab',
+    href: '/discover',
   },
   {
     name: 'profile',
@@ -40,6 +44,7 @@ export const TAB_CONFIG: TabConfig[] = [
     activeIcon: 'person',
     inactiveIcon: 'person-outline',
     accessibilityLabel: 'Profile tab',
+    href: '/profile',
   },
 ];
 
