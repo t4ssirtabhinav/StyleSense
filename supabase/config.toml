@@ -371,6 +371,14 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
+[functions.get-upload-url]
+# Explicit rather than relying on the platform default (unverified this
+# session -- see docs/tickets/SS-010-design.md's Concrete values §E-flagged
+# note) so the security boundary is self-documenting regardless of what the
+# default actually turns out to be. The function also calls
+# supabase.auth.getUser() itself (defense in depth).
+verify_jwt = true
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
