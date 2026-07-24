@@ -359,10 +359,7 @@ describe('OnboardingScreen', () => {
       useOnboardingStore.getState().toggleStyle('western');
     });
 
-    expect(useOnboardingStore.getState().styles).toEqual([
-      'ethnic',
-      'western',
-    ]);
+    expect(useOnboardingStore.getState().styles).toEqual(['ethnic', 'western']);
   });
 
   it('pressing Skip at any step calls router.replace("/") without calling completeOnboarding', async () => {
