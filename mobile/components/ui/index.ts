@@ -21,6 +21,8 @@ export type {
 } from './IconButton';
 export { Input } from './Input';
 export type { InputProps, InputVariant } from './Input';
+export { ProgressBar } from './ProgressBar';
+export type { ProgressBarProps } from './ProgressBar';
 export { Skeleton } from './Skeleton';
 export type { SkeletonProps, SkeletonVariant } from './Skeleton';
 export { Text } from './Text';
