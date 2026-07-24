@@ -20,9 +20,9 @@ Each ticket run through the 4-phase pipeline (architect → developer → qa →
 | SS-013 | Wardrobe Item Upload Flow UI (Single + Bulk) | not started | —         | —         | —                    |
 | SS-014 | Wardrobe Grid & Catalogue View          | not started | —         | —         | —                    |
 | SS-015 | Wardrobe Item Edit, Delete & Mark Worn  | not started | —         | —         | —                    |
-| SS-016 | Fix "Welcome back!" resume prompt for completed users (resolves BL-030) | done — fast lane | done — all checks green (266 tests) | PASS | PR #17 open |
-| SS-017 | Migrate off deprecated expo-router Tabs/tabBar API (resolves BL-032) | done — fast lane; corrected migration target to expo-router/ui | done — hook-export deviation (verified against installed source), 262 tests | PASS | PR #18 open |
-| SS-018 | Verify Upstash REST shape & flip rate limiter to fail-closed (resolves BL-035) | done — fast lane; REST shape verified live by orchestrator | done — all checks green (26 tests) | PASS | PR #19 open |
+| SS-016 | Fix "Welcome back!" resume prompt for completed users (resolves BL-030) | done — fast lane | done — all checks green (266 tests) | PASS | merged (PR #17) |
+| SS-017 | Migrate off deprecated expo-router Tabs/tabBar API (resolves BL-032) | done — fast lane; corrected migration target to expo-router/ui | done — hook-export deviation (verified against installed source), 262 tests | PASS | merged (PR #18) |
+| SS-018 | Verify Upstash REST shape & flip rate limiter to fail-closed (resolves BL-035) | done — fast lane; REST shape verified live by orchestrator | done — all checks green (26 tests) | PASS | merged (PR #19) |
 
 Sprint 1 order matters: SS-008 first (SS-003/004/005 all depend on the design system it produces), then SS-002 (verification pass — mostly done already), then SS-003 → SS-004 → SS-005, with SS-009 fit in wherever convenient (it only depends on SS-001/SS-003). **SS-009 parked 2026-07-23** (user decision — low priority for now; all dependencies are met, so it's ready to resume whenever). SS-006 and SS-007 are Sprint 2, surfaced during SS-004's design review (2026-07-13): SS-006 (styling AI consumption spec) depends on SS-004; SS-007 (granular preferences editor) depends on SS-004 and SS-005. Both are now unblocked and the next candidates.
 
