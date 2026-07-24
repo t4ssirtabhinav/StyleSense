@@ -7,28 +7,35 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import outfit_suggestions
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-sentry_dsn = os.getenv('SENTRY_DSN_BACKEND')
+# SS-009: kept as a module constant (rather than the design doc's literal
+# `f'stylesense-backend@{app.version}'`) because `app` is constructed below
+# this sentry_sdk.init() call -- referencing it here would be a NameError.
+# Same value as FastAPI(version=...) below, single source of truth.
+APP_VERSION = "0.1.0"
+
+sentry_dsn = os.getenv("SENTRY_DSN_BACKEND")
 if sentry_dsn:
     sentry_sdk.init(
         dsn=sentry_dsn,
         traces_sample_rate=0.1,
-        environment=os.getenv('ENVIRONMENT', 'development'),
+        environment=os.getenv("ENVIRONMENT", "development"),
+        release=f"stylesense-backend@{APP_VERSION}",
     )
 
-app = FastAPI(title='StyleSense API', version='0.1.0')
+app = FastAPI(title="StyleSense API", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
-    allow_methods=['*'],
-    allow_headers=['*'],
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(outfit_suggestions.router)
 
 
-@app.get('/health')
+@app.get("/health")
 def health() -> dict[str, str]:
-    return {'status': 'ok', 'version': '0.1.0'}
+    return {"status": "ok", "version": APP_VERSION}

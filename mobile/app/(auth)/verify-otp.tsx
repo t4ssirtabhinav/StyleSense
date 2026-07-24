@@ -2,11 +2,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Button, Card, Input, Text } from '../../components/ui';
+import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 import {
   useOnboardingCompletedQuery,
   useSendOtpMutation,
   useVerifyOtpMutation,
 } from '../../features/auth/auth.queries';
+import { useAnalytics } from '../../hooks/useAnalytics';
 import { useSmsAutoRead } from '../../hooks/useSmsAutoRead';
 
 const RESEND_COOLDOWN_SECONDS = 30;
@@ -30,6 +32,7 @@ export default function VerifyOtpScreen() {
   const sendOtpMutation = useSendOtpMutation();
   const verifyOtpMutation = useVerifyOtpMutation();
   const onboardingCompletedQuery = useOnboardingCompletedQuery(verifiedUserId);
+  const { track } = useAnalytics();
 
   // Android SMS auto-read: a documented no-op stub on this pass (BL-019) —
   // manual typing, paste-fill, and auto-submit all work today without it.
@@ -68,6 +71,14 @@ export default function VerifyOtpScreen() {
       {
         onSuccess: (session) => {
           setVerifiedUserId(session.user.id);
+          // Supabase sets created_at/last_sign_in_at identically on a fresh
+          // sign-up (first-ever verify for this phone number) — a returning
+          // user's later verify has a later last_sign_in_at. Not literally
+          // specified by Supabase docs, a reasonable/standard heuristic
+          // (see docs/tickets/SS-009-design.md Open Questions #6).
+          if (session.user.created_at === session.user.last_sign_in_at) {
+            track(ANALYTICS_EVENTS.REGISTER, { method: 'phone_otp' });
+          }
         },
         onError: (authError) => {
           setOtpError(authError.message ?? GENERIC_OTP_ERROR_MESSAGE);

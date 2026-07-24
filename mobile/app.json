@@ -24,7 +24,19 @@
       "bundler": "metro",
       "output": "static"
     },
-    "plugins": ["expo-router", "expo-font", "expo-asset"],
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-asset",
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "TODO-sentry-org-slug",
+          "project": "TODO-sentry-project-slug",
+          "url": "https://sentry.io/"
+        }
+      ]
+    ],
     "platforms": ["ios", "android", "web"]
   }
 }

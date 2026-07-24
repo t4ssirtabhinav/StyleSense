@@ -31,6 +31,12 @@ jest.mock('../../../features/auth/auth.queries', () => ({
     mockUseOnboardingCompletedQuery(userId),
 }));
 
+// SS-009: track() is asserted on directly for the REGISTER-event tests below.
+const mockTrack = jest.fn();
+jest.mock('../../../hooks/useAnalytics', () => ({
+  useAnalytics: () => ({ track: mockTrack }),
+}));
+
 describe('VerifyOtpScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -153,5 +159,51 @@ describe('VerifyOtpScreen', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('tracks REGISTER on verify success when created_at === last_sign_in_at (new sign-up)', async () => {
+    mockVerifyOtpMutate.mockImplementation(
+      (
+        _vars: unknown,
+        { onSuccess }: { onSuccess: (session: unknown) => void },
+      ) => {
+        onSuccess({
+          user: {
+            id: 'user-1',
+            created_at: '2026-07-24T00:00:00.000Z',
+            last_sign_in_at: '2026-07-24T00:00:00.000Z',
+          },
+        });
+      },
+    );
+    const { getByTestId } = await render(<VerifyOtpScreen />);
+
+    await fireEvent.changeText(getByTestId('otp-hidden-input'), '123456');
+
+    expect(mockTrack).toHaveBeenCalledWith('register', {
+      method: 'phone_otp',
+    });
+  });
+
+  it('does not track REGISTER on verify success when the timestamps differ (returning user)', async () => {
+    mockVerifyOtpMutate.mockImplementation(
+      (
+        _vars: unknown,
+        { onSuccess }: { onSuccess: (session: unknown) => void },
+      ) => {
+        onSuccess({
+          user: {
+            id: 'user-1',
+            created_at: '2026-01-01T00:00:00.000Z',
+            last_sign_in_at: '2026-07-24T00:00:00.000Z',
+          },
+        });
+      },
+    );
+    const { getByTestId } = await render(<VerifyOtpScreen />);
+
+    await fireEvent.changeText(getByTestId('otp-hidden-input'), '123456');
+
+    expect(mockTrack).not.toHaveBeenCalledWith('register', expect.anything());
   });
 });
