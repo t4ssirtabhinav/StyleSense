@@ -6,6 +6,33 @@ You are helping build StyleSense, an India-first AI fashion app.
 
 ---
 
+## Authoritative Documents
+
+An inclusion map, not a table of contents — read the one line that applies, not the whole doc, unless the task actually needs it.
+
+- `docs/tickets/raw/SS-XXX.md` — that ticket's acceptance criteria (ground truth for "done"). Read for the ticket at hand only.
+- `docs/tickets/SS-XXX-design.md` — the Developer phase's spec. Read this instead of re-deriving from the architecture.
+- `docs/worklog/SS-XXX.md` — that ticket's audit trail. Once it's long, read the last Verdict + relevant tail, not the full history.
+- `docs/BACKLOG.md` — cross-ticket deferrals, split into **Active** (scanned once per ticket at the Architect phase, grep by Tag) and **Parked** (owned by `/audit`, never scanned during ticket runs). Log/close are scan-free appends; only the Architect + `/ticket` orchestrator resurface-scan, and Active only.
+- `docs/ARCHITECTURE_AMENDMENTS.md` — dated deltas from the original HLD/LLD doc. Read when checking whether a ticket's assumptions are still current; append when `/new-feature` or `/audit` finds the architecture doc has fallen behind.
+- `docs/AUDIT_LOG.md` — dated record of `/audit` runs. Read to see when the repo was last checked; not part of normal ticket work.
+- `docs/OPERATOR_RULEBOOK.md` — dense, checkable rules by phase of work. Read when a phase needs the letter of a rule; Process Discipline below already covers the highest-value ones.
+- `docs/OPERATING_MANUAL.md` — the reasoning behind the rulebook. Read only when a rule meets a case it didn't anticipate.
+- `docs/PROMPT_PLAYBOOK.md` — meta-process for authoring new tickets/agents/audits. Not read during normal ticket execution.
+
+## Process Discipline
+
+Highest-value rules from `docs/OPERATOR_RULEBOOK.md`, inline so it rarely needs loading in full:
+
+- Verify, don't recite: anything about a third-party platform (Supabase, Expo, Razorpay, DLT/SMS rules) gets checked against the current source, never asserted from memory.
+- Label known vs. guessed: `[VERIFIED <date>]` / trained-knowledge / inference / assumption / guess — unlabeled is read as verified.
+- "Should work" is not "works" — report only what was actually run and observed.
+- Self-attack before handoff: on anything auth/payment/schema-adjacent, run the boundary sweep (empty/max/duplicate/concurrent/stale) before calling it done.
+- Distill once, reference forever: a design doc or a ticket's Technical Notes is the next phase's spec — don't re-open the source it was distilled from.
+- Risk-weight effort: spend it on what's irreversible, external-facing, security- or money-related — not evenly across a diff.
+
+---
+
 ## React Native / Web
 
 - NEVER use `StyleSheet.create` — use NativeWind `className` instead
@@ -107,8 +134,11 @@ Adding a new AI provider = a new adapter class implementing the existing port. N
 - One ticket = one branch: `feature/SS-XXX-slug`, cut from `develop`.
 - Commit convention: `feat(SS-XXX): short description` (or `fix(SS-XXX): ...`, `chore(SS-XXX): ...`).
 - Ticket source of truth lives in `docs/tickets/raw/SS-XXX.md`. Every ticket goes through four phases, each a Claude Code subagent in `.claude/agents/`: **architect** (writes `docs/tickets/SS-XXX-design.md`) → **developer** (implements + tests) → **qa** (verifies AC + runs lint/type/test) → **devops** (commit/push/PR). See `.claude/skills/ticket/SKILL.md`.
-- Every phase appends to `docs/worklog/SS-XXX.md` — this is the audit trail for what each agent did and why.
+- **Two lanes, gated by the ticket's `Risk:` field** (set by the Architect / `/new-feature`): **full lane** (`Risk: high` — auth, payments, schema/migrations, RLS, secrets, external-facing/irreversible) keeps every human gate; **fast lane** (`Risk: low`/`med` — everything else) auto-chains architect→developer→qa and pauses only at the PR. Risk-weight the *process* the same way §C6/§F5 risk-weight the code — don't spend three gates on a placeholder screen. On the fence → classify up.
+- **Parallelize by default.** Independent tickets (no file/folder overlap, no dependency) run concurrently in separate git worktrees, each on its own `feature/*` branch — this is the throughput lever for a solo sprint, not token-shaving. Serialize only true dependencies.
+- Every phase appends a **tight** entry to `docs/worklog/SS-XXX.md` (verdict + key decisions + backlog deltas — a pointer to the design doc/diff/PR, not a re-narration of them). This is the audit trail for what each agent did and why.
 - Deferred items that aren't this ticket's blocker but might matter later (a product decision, a design-token gap, a CI issue) go in `docs/BACKLOG.md`, not just the worklog — worklogs stop being read once a ticket ships, the backlog doesn't.
+- A feature idea that isn't already an `SS-XXX` ticket and isn't in the original architecture/epics docs goes through `.claude/skills/new-feature/SKILL.md` first (impact analysis, always pauses for sign-off before a ticket is created) — don't hand-write a ticket for genuinely new scope without it. A repo-wide health check (not tied to any one ticket) is `.claude/skills/audit/SKILL.md`, run manually on your own cadence.
 
 ## Git Autonomy Contract
 
