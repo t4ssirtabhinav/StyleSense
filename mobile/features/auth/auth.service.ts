@@ -4,6 +4,7 @@ import type {
   AuthError,
   AuthErrorCode,
   PhoneValidationResult,
+  PlanTier,
 } from './auth.types';
 
 // The only place `supabase.auth.*` / `supabase.from('users')` is called from
@@ -145,5 +146,24 @@ export async function checkOnboardingCompleted(
     // just-completed OTP verify flow — fail safe to "not completed" (routes
     // to /onboarding), the same outcome a genuinely first-time user gets.
     return false;
+  }
+}
+
+// SS-009: feeds hooks/useAuth.ts's Sentry `plan_tier` error-context tagging.
+// Same fail-safe-to-null shape as checkOnboardingCompleted above — a failed
+// plan_tier lookup (network blip, RLS edge case) must not crash the auth
+// flow; setSentryUserContext simply skips the plan_tier tag on a null.
+export async function fetchUserPlanTier(
+  userId: string,
+): Promise<PlanTier | null> {
+  try {
+    const { data } = await supabase
+      .from('users')
+      .select('plan_tier')
+      .eq('id', userId)
+      .maybeSingle();
+    return data?.plan_tier ?? null;
+  } catch {
+    return null;
   }
 }

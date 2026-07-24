@@ -6,11 +6,22 @@ import { Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ANALYTICS_EVENTS } from '../constants/analyticsEvents';
+import { useAnalytics } from '../hooks/useAnalytics';
 import { useAuth } from '../hooks/useAuth';
+import { initAnalytics } from '../lib/analytics';
 import { fontAssets } from '../lib/fonts';
+import { initSentry } from '../lib/sentry';
 import '../global.css';
 
-export default function RootLayout() {
+// SS-009: both initialised at module scope, before any user-interaction
+// code runs — mirrors lib/supabase.ts's existing module-scope createClient()
+// side effect. Each init*() function is itself idempotent/no-op-safe, so
+// this also tolerates a fast-refresh remount of this module in dev.
+initSentry();
+initAnalytics();
+
+function RootLayout() {
   const [, fontError] = useFonts(fontAssets);
   // SS-003 gap found: `@tanstack/react-query` was a dependency but nothing
   // in the app tree ever mounted a QueryClientProvider before this ticket —
@@ -27,6 +38,8 @@ export default function RootLayout() {
   // session state to read from features/auth/auth.store.ts.
   useAuth();
 
+  const { track } = useAnalytics();
+
   // Edge case: font loading failure must fall back to the system font, not a
   // blank screen. React Native already falls back to the OS default font
   // when a requested custom fontFamily isn't registered, so the render tree
@@ -36,6 +49,14 @@ export default function RootLayout() {
       Sentry.captureException(fontError);
     }
   }, [fontError]);
+
+  // SS-009 AC: "PostHog records an app_opened event on launch." A real side
+  // effect (fires exactly once per app launch, not derived render state) —
+  // the empty dependency array is intentional, matching `track`'s stable
+  // useCallback identity.
+  useEffect(() => {
+    track(ANALYTICS_EVENTS.APP_OPENED);
+  }, [track]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -56,3 +77,8 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// Standard @sentry/react-native pattern: wraps the root component to also
+// capture React render-tree errors, not just the manually-reported
+// font-load exception above.
+export default Sentry.wrap(RootLayout);

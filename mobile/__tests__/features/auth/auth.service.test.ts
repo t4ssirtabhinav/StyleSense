@@ -1,5 +1,6 @@
 import {
   checkOnboardingCompleted,
+  fetchUserPlanTier,
   sendOtp,
   validateIndianMobile,
   verifyOtp,
@@ -171,5 +172,35 @@ describe('checkOnboardingCompleted', () => {
     mockMaybeSingle.mockRejectedValue(new Error('Network request failed'));
 
     await expect(checkOnboardingCompleted('user-3')).resolves.toBe(false);
+  });
+});
+
+describe('fetchUserPlanTier', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('queries users.plan_tier filtered by id and returns the tier', async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { plan_tier: 'premium' },
+      error: null,
+    });
+
+    await expect(fetchUserPlanTier('user-1')).resolves.toBe('premium');
+    expect(mockFrom).toHaveBeenCalledWith('users');
+    expect(mockSelect).toHaveBeenCalledWith('plan_tier');
+    expect(mockEq).toHaveBeenCalledWith('id', 'user-1');
+  });
+
+  it('returns null when no row is present', async () => {
+    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
+
+    await expect(fetchUserPlanTier('user-2')).resolves.toBeNull();
+  });
+
+  it('fails safe to null when the query throws', async () => {
+    mockMaybeSingle.mockRejectedValue(new Error('Network request failed'));
+
+    await expect(fetchUserPlanTier('user-3')).resolves.toBeNull();
   });
 });
