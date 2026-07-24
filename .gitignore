@@ -15,6 +15,10 @@ venv/
 .expo/
 dist/
 build/
+coverage/
+
+# Backend test cache
+.pytest_cache/
 
 # OS
 .DS_Store
