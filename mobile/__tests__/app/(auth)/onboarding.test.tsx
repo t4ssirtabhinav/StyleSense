@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -138,6 +139,7 @@ describe('OnboardingScreen', () => {
         gender: undefined,
         city: '',
         stylePreferences: null,
+        onboardingCompleted: false,
       },
     });
 
@@ -145,6 +147,109 @@ describe('OnboardingScreen', () => {
 
     expect(queryByText('Welcome back!')).toBeNull();
     expect(getByLabelText('Select city')).toBeOnTheScreen();
+  });
+
+  // SS-016: locks in the new !onboardingCompleted clause's correctness with
+  // an explicit false rather than relying on undefined happening to be
+  // falsy (see the brand-new/loading/no-session tests above, which
+  // intentionally leave onboardingCompleted unset).
+  it('genuinely-incomplete returning user (onboardingCompleted: false, fullName set) still sees ResumePrompt — unaffected by this fix', async () => {
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      isSuccess: true,
+      data: {
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        stylePreferences: null,
+        onboardingCompleted: false,
+      },
+    });
+
+    const { getByText } = await render(<OnboardingScreen />);
+
+    expect(getByText('Welcome back!')).toBeOnTheScreen();
+  });
+
+  // SS-016: a completed user hitting /onboarding directly (bypassing the
+  // normal verify-otp.tsx routing decision via a direct URL/deep link)
+  // must not see the "Welcome back!" interstitial, and must see the wizard
+  // pre-filled with their saved answers via the new auto-hydrate effect.
+  it('completed user (onboardingCompleted: true, fullName set) hitting /onboarding directly skips ResumePrompt and renders Step 1 pre-filled with their saved answers', async () => {
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      isSuccess: true,
+      data: {
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        stylePreferences: {
+          styles: ['ethnic'],
+          wardrobe_type: 'mostly_ethnic',
+          occasions_priority: ['office'],
+          budget_range: '1000_3000',
+          favourite_colours: ['#000000'],
+          gender: 'woman',
+        },
+        onboardingCompleted: true,
+      },
+    });
+
+    const { queryByText, getByDisplayValue, getByLabelText } = await render(
+      <OnboardingScreen />,
+    );
+
+    expect(queryByText('Welcome back!')).toBeNull();
+    expect(getByDisplayValue('Priya Sharma')).toBeOnTheScreen();
+    expect(getByLabelText('Select city')).toHaveTextContent('Mumbai');
+    await waitFor(() =>
+      expect(useOnboardingStore.getState()).toMatchObject({
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        styles: ['ethnic'],
+        wardrobeType: 'mostly_ethnic',
+        occasionsPriority: ['office'],
+        budgetRange: '1000_3000',
+        favouriteColours: ['#000000'],
+      }),
+    );
+  });
+
+  // SS-016 regression guard: onboarding_completed can in principle be true
+  // without a populated style_preferences JSONB (not schema-enforced) — the
+  // auto-hydrate effect must not crash, and must still pre-fill
+  // fullName/gender/city while leaving Steps 2-4 at their INITIAL_STATE
+  // defaults, mirroring hydrateFromProgress's existing defensive guard.
+  it('completed user with no stylePreferences blob (onboardingCompleted: true, stylePreferences: null) still skips ResumePrompt without crashing, Step 1 pre-filled from fullName/gender/city only', async () => {
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      isSuccess: true,
+      data: {
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        stylePreferences: null,
+        onboardingCompleted: true,
+      },
+    });
+
+    const { queryByText, getByDisplayValue, getByLabelText } = await render(
+      <OnboardingScreen />,
+    );
+
+    expect(queryByText('Welcome back!')).toBeNull();
+    expect(getByDisplayValue('Priya Sharma')).toBeOnTheScreen();
+    expect(getByLabelText('Select city')).toHaveTextContent('Mumbai');
+    await waitFor(() =>
+      expect(useOnboardingStore.getState()).toMatchObject({
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        styles: [],
+        wardrobeType: undefined,
+        occasionsPriority: [],
+        budgetRange: undefined,
+        favouriteColours: [],
+      }),
+    );
   });
 
   it('returning incomplete user (full_name non-null, onboarding_completed false) renders ResumePrompt first; Continue Setup advances the pager and pre-fills the store', async () => {
@@ -155,6 +260,7 @@ describe('OnboardingScreen', () => {
         gender: 'woman',
         city: 'Mumbai',
         stylePreferences: null,
+        onboardingCompleted: false,
       },
     });
 
@@ -191,6 +297,7 @@ describe('OnboardingScreen', () => {
           favourite_colours: ['#000000'],
           gender: 'woman',
         },
+        onboardingCompleted: false,
       },
     });
 
@@ -211,6 +318,48 @@ describe('OnboardingScreen', () => {
       budgetRange: '1000_3000',
       favouriteColours: ['#000000'],
     });
+  });
+
+  // SS-016 regression guard: the new auto-hydrate effect is gated on
+  // onboardingCompleted being true, so pressing "Continue Setup" on the
+  // genuinely-incomplete path (onboardingCompleted stays false throughout)
+  // must never race with a second, stale re-hydration that would clobber a
+  // live in-progress edit on a later step.
+  it('pressing Continue Setup on the genuinely-incomplete path does not trigger a second, conflicting auto-hydration', async () => {
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      isSuccess: true,
+      data: {
+        fullName: 'Priya Sharma',
+        gender: 'woman',
+        city: 'Mumbai',
+        stylePreferences: {
+          styles: ['ethnic'],
+          wardrobe_type: 'mostly_ethnic',
+          occasions_priority: ['office'],
+          budget_range: '1000_3000',
+          favourite_colours: ['#000000'],
+          gender: 'woman',
+        },
+        onboardingCompleted: false,
+      },
+    });
+
+    const { getByText, queryByText } = await render(<OnboardingScreen />);
+
+    expect(getByText('Welcome back!')).toBeOnTheScreen();
+
+    await fireEvent.press(getByText('Continue Setup'));
+
+    await waitFor(() => expect(queryByText('Welcome back!')).toBeNull());
+    expect(useOnboardingStore.getState().currentStepIndex).toBe(1);
+
+    // Live edit on Step 2 after hydration — must not be reverted by a
+    // second auto-hydration firing behind the scenes.
+    await act(async () => {
+      useOnboardingStore.getState().toggleStyle('western');
+    });
+
+    expect(useOnboardingStore.getState().styles).toEqual(['ethnic', 'western']);
   });
 
   it('pressing Skip at any step calls router.replace("/") without calling completeOnboarding', async () => {
