@@ -53,10 +53,32 @@ jobs:
           # "reconcile" Supabase's own auto-managed baseline into an
           # application migration (which would just have to be redone for
           # every future project anyway, per BL-003).
-          grep -vE '^(SET check_function_bodies|(DROP|CREATE) EXTENSION|ALTER DEFAULT PRIVILEGES|GRANT .+ TO (anon|authenticated|service_role);?$)' \
-            diff_output.txt > filtered_diff.txt || true
+          #
+          # [2026-07-25, SS-011/PR #23 CI run]: this filter previously
+          # false-positived on exactly the pg_net case it claims to handle.
+          # The real generated diff line was a lowercase, quoted
+          # `drop extension if exists "pg_net";` (Supabase's schema-diff
+          # tooling emits lowercase SQL with quoted identifiers), but the
+          # regex only matched an uppercase, unquoted `DROP EXTENSION`
+          # prefix and an unquoted role name in the GRANT pattern — so both
+          # survived filtering. The CLI also prints its own human-readable
+          # reminder ("Found drop statements in schema diff. Please double
+          # check if these are expected:") into the same output, which isn't
+          # SQL at all and never matched any pattern either. Fixed: strip
+          # blank lines and `--` comment lines first, make the keyword
+          # match case-insensitive, tolerate optional double-quotes around
+          # role names, and explicitly exclude the CLI's own reminder text.
+          # Also switched the "is there real drift" check from raw file
+          # size (`-s`, which a lone leftover blank line would still trip)
+          # to "does any non-blank line remain" (`grep -q '\S'`). Logged as
+          # `BL-060` (ci) — revisit if a future Supabase CLI version changes
+          # this wording again.
+          grep -v '^--' diff_output.txt \
+            | grep -v '^[[:space:]]*$' \
+            | grep -viE '^(SET check_function_bodies|(DROP|CREATE) EXTENSION|ALTER DEFAULT PRIVILEGES|GRANT .+ TO "?(anon|authenticated|service_role)"?;?$|found drop statements in schema diff\.|please double check if these are expected:?$)' \
+            > filtered_diff.txt || true
 
-          if [ -s filtered_diff.txt ]; then
+          if grep -q '\S' filtered_diff.txt 2>/dev/null; then
             echo "::error::Schema drift detected between supabase/migrations/ and the linked project's live schema (after filtering known Supabase-managed baseline noise — default-privilege grants, pg_net/pg_cron). This usually means the remote was changed outside a migration file (e.g. directly in the Dashboard). Review the diff below and add a migration to reconcile before merging."
             cat filtered_diff.txt
             exit 1

@@ -14,6 +14,7 @@ import io
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -123,7 +124,12 @@ def _override_infra(repository: _FakeRepository, rate_limiter: _FakeRateLimiter)
     app.dependency_overrides[get_circuit_breaker] = lambda: _FakeCircuitBreaker()
 
 
-def test_missing_or_invalid_auth_returns_401_via_real_dependency() -> None:
+def test_missing_or_invalid_auth_returns_401_via_real_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
     with patch("dependencies.auth.create_client") as mock_create_client:
         mock_create_client.return_value.auth.get_user.side_effect = RuntimeError("invalid")
 
