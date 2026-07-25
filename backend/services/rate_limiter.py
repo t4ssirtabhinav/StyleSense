@@ -42,12 +42,15 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "stylesense:outfit_suggestions:rate_limit"
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 class RateLimiter:
@@ -122,6 +125,91 @@ class RateLimiter:
             except httpx.HTTPError as exc:
                 logger.warning(
                     "rate_limiter_expire_error",
+                    extra={"user_id": user_id, "error": str(exc)},
+                )
+
+        return bool(count <= self.max_requests)
+
+
+def _seconds_until_next_ist_midnight(now: datetime | None = None) -> int:
+    """Exact seconds remaining until the next 00:00 IST (Asia/Kolkata), not a
+    fixed 86400 -- this, combined with the IST-date-in-key, is what makes
+    "resets at IST midnight, not UTC" literally true rather than an
+    approximate rolling window."""
+    current = now.astimezone(_IST) if now else datetime.now(_IST)
+    next_midnight = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((next_midnight - current).total_seconds()))
+
+
+class DailyRateLimiter:
+    """Per-``user_id``-per-IST-calendar-day rate limiter for a real, costed
+    Replicate call (SS-011). Kept as a separate class from ``RateLimiter``
+    above -- different reset semantics (IST-midnight day boundary vs. a
+    fixed rolling window) -- rather than overloading one class with two
+    incompatible TTL strategies.
+
+    **Fails closed by default** (denies the request) on Redis-unavailable --
+    matching ``RateLimiter``'s SS-018-established convention for a real,
+    costed gate. This directly protects real money exposure, unlike
+    ``CircuitBreaker`` (see circuit_breaker.py), which deliberately fails the
+    opposite way since it's a resilience heuristic, not a money gate.
+    """
+
+    def __init__(self, max_requests: int = 20, *, fail_open: bool = False) -> None:
+        self.max_requests = max_requests
+        self.fail_open = fail_open
+
+    async def check_and_increment(self, user_id: str, *, skip: bool = False) -> bool:
+        """``skip=True`` (premium/premium_annual) returns True immediately,
+        with zero Redis round-trips at all -- mirrors SS-010's "skip the
+        check entirely for premium" convention."""
+        if skip:
+            return True
+
+        url = os.getenv("UPSTASH_REDIS_REST_URL")
+        token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+
+        if not url or not token:
+            logger.warning(
+                "daily_rate_limiter_env_unset",
+                extra={"user_id": user_id, "fail_open": self.fail_open},
+            )
+            return self.fail_open
+
+        ist_date = datetime.now(_IST).strftime("%Y-%m-%d")
+        key = f"bg_remove:{user_id}:{ist_date}"
+        headers = {"Authorization": f"Bearer {token}"}
+        ttl_seconds = _seconds_until_next_ist_midnight()
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                incr_response = await client.post(f"{url}/incr/{key}", headers=headers)
+                incr_response.raise_for_status()
+                incr_body = incr_response.json()
+                if incr_body.get("error"):
+                    raise httpx.HTTPError(f"Upstash INCR error: {incr_body['error']}")
+                count = incr_body.get("result", 0)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "daily_rate_limiter_incr_error",
+                    extra={"user_id": user_id, "error": str(exc), "fail_open": self.fail_open},
+                )
+                return self.fail_open
+
+            # Best-effort TTL maintenance -- always attempted, never gated on
+            # `count == 1`. NX makes this idempotent (see RateLimiter above
+            # for the same established SS-018 reasoning).
+            try:
+                expire_response = await client.post(
+                    f"{url}/expire/{key}/{ttl_seconds}/NX", headers=headers
+                )
+                expire_response.raise_for_status()
+                expire_body = expire_response.json()
+                if expire_body.get("error"):
+                    raise httpx.HTTPError(f"Upstash EXPIRE error: {expire_body['error']}")
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "daily_rate_limiter_expire_error",
                     extra={"user_id": user_id, "error": str(exc)},
                 )
 
