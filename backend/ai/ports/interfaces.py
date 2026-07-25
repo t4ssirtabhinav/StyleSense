@@ -33,6 +33,7 @@ new adapter class instead (Open/Closed, per CLAUDE.md).
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel
@@ -89,4 +90,43 @@ class IStylingProvider(ABC):
     ) -> OutfitSuggestionResult:
         """Must degrade gracefully (generic suggestions, is_personalized=False)
         when preferences is effectively empty, rather than raise."""
+        raise NotImplementedError
+
+
+@dataclass
+class BackgroundRemovalResult:
+    """Result of a single background-removal attempt (SS-011).
+
+    A dataclass, not a Pydantic ``BaseModel`` like ``OutfitSuggestionResult``
+    above -- ``image_bytes`` is a binary payload (a PNG with alpha channel),
+    not a JSON-shaped value, so Pydantic's JSON-schema machinery buys nothing
+    here and would force an awkward bytes<->base64 dance for no benefit.
+
+    ``success=False`` (SDK raised, or the provider otherwise failed) never
+    propagates the underlying exception to the caller -- the caller (
+    ``WardrobeBgRemovalService``) is the one that owns retry/circuit-breaker
+    policy, not this port.
+    """
+
+    success: bool
+    image_bytes: bytes | None = None
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class IBackgroundRemovalProvider(ABC):
+    """Hexagonal port for image->image background-removal AI providers
+    (SS-011). Distinct from ``IStylingProvider`` above (text/structured
+    suggestions) and from SS-012's not-yet-created ``IVisionProvider``
+    (image->structured-tags) -- a different capability from both.
+
+    Never modify this signature to fit a new provider -- add a new adapter
+    class instead (Open/Closed, per CLAUDE.md).
+    """
+
+    @abstractmethod
+    async def remove_background(self, image_bytes: bytes) -> BackgroundRemovalResult:
+        """Must never raise -- any SDK/network failure is caught and
+        returned as ``BackgroundRemovalResult(success=False, error=...)`` so
+        the caller can apply circuit-breaker/fallback policy uniformly."""
         raise NotImplementedError

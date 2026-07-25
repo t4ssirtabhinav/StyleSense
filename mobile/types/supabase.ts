@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -14,6 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      colour_palette: {
+        Row: {
+          active: boolean
+          hex: string
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          hex: string
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          hex?: string
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      occasion_types: {
+        Row: {
+          active: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
       outfits: {
         Row: {
           ai_generated: boolean | null
@@ -177,6 +222,27 @@ export type Database = {
           },
         ]
       }
+      style_keywords: {
+        Row: {
+          active: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          key: string
+          label: string
+          sort_order: number
+        }
+        Update: {
+          active?: boolean
+          key?: string
+          label?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
       suggestion_sessions: {
         Row: {
           accepted_outfit_id: string | null
@@ -320,77 +386,11 @@ export type Database = {
         }
         Relationships: []
       }
-      style_keywords: {
-        Row: {
-          active: boolean
-          key: string
-          label: string
-          sort_order: number
-        }
-        Insert: {
-          active?: boolean
-          key: string
-          label: string
-          sort_order: number
-        }
-        Update: {
-          active?: boolean
-          key?: string
-          label?: string
-          sort_order?: number
-        }
-        Relationships: []
-      }
-      occasion_types: {
-        Row: {
-          active: boolean
-          key: string
-          label: string
-          sort_order: number
-        }
-        Insert: {
-          active?: boolean
-          key: string
-          label: string
-          sort_order: number
-        }
-        Update: {
-          active?: boolean
-          key?: string
-          label?: string
-          sort_order?: number
-        }
-        Relationships: []
-      }
-      colour_palette: {
-        Row: {
-          active: boolean
-          hex: string
-          key: string
-          label: string
-          sort_order: number
-        }
-        Insert: {
-          active?: boolean
-          hex: string
-          key: string
-          label: string
-          sort_order: number
-        }
-        Update: {
-          active?: boolean
-          hex?: string
-          key?: string
-          label?: string
-          sort_order?: number
-        }
-        Relationships: []
-      }
       wardrobe_items: {
         Row: {
           ai_tags: Json | null
           brand: string | null
-          category: Database["public"]["Enums"]["wardrobe_category"]
+          category: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary: string | null
           color_secondary: string | null
           cost_per_wear: number | null
@@ -403,6 +403,7 @@ export type Database = {
           last_worn_at: string | null
           occasion_tags: Database["public"]["Enums"]["occasion_type"][] | null
           pattern: string | null
+          processing_status: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date: string | null
           purchase_price: number | null
           season_tags: string[] | null
@@ -415,7 +416,7 @@ export type Database = {
         Insert: {
           ai_tags?: Json | null
           brand?: string | null
-          category: Database["public"]["Enums"]["wardrobe_category"]
+          category?: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary?: string | null
           color_secondary?: string | null
           cost_per_wear?: number | null
@@ -428,6 +429,7 @@ export type Database = {
           last_worn_at?: string | null
           occasion_tags?: Database["public"]["Enums"]["occasion_type"][] | null
           pattern?: string | null
+          processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
           purchase_price?: number | null
           season_tags?: string[] | null
@@ -440,7 +442,7 @@ export type Database = {
         Update: {
           ai_tags?: Json | null
           brand?: string | null
-          category?: Database["public"]["Enums"]["wardrobe_category"]
+          category?: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary?: string | null
           color_secondary?: string | null
           cost_per_wear?: number | null
@@ -453,6 +455,7 @@ export type Database = {
           last_worn_at?: string | null
           occasion_tags?: Database["public"]["Enums"]["occasion_type"][] | null
           pattern?: string | null
+          processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
           purchase_price?: number | null
           season_tags?: string[] | null
@@ -516,6 +519,11 @@ export type Database = {
         | "accessory_watch"
         | "accessory_belt"
         | "accessory_scarf"
+      wardrobe_processing_status:
+        | "uploaded"
+        | "bg_processing"
+        | "bg_removed"
+        | "bg_pending"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -681,7 +689,12 @@ export const Constants = {
         "accessory_belt",
         "accessory_scarf",
       ],
+      wardrobe_processing_status: [
+        "uploaded",
+        "bg_processing",
+        "bg_removed",
+        "bg_pending",
+      ],
     },
   },
 } as const
-
