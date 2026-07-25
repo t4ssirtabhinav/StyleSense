@@ -19,7 +19,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from adapters.interfaces import IWardrobeRepository
-from ai.ports.interfaces import BackgroundRemovalResult, IBackgroundRemovalProvider
+from ai.ports.interfaces import (
+    BackgroundRemovalResult,
+    GarmentTags,
+    IBackgroundRemovalProvider,
+    IVisionProvider,
+    VisionTaggingResult,
+)
 from dependencies.auth import get_current_user_id
 from main import app
 from routers.wardrobe import (
@@ -27,6 +33,7 @@ from routers.wardrobe import (
     get_circuit_breaker,
     get_daily_rate_limiter,
     get_r2_storage_client,
+    get_vision_provider,
     get_wardrobe_repository,
 )
 
@@ -43,10 +50,12 @@ def _jpeg_bytes() -> bytes:
 
 
 class _FakeRepository(IWardrobeRepository):
-    def __init__(self, plan_tier: str = "free") -> None:
+    def __init__(self, plan_tier: str = "free", *, exists: bool = True) -> None:
         self.plan_tier = plan_tier
+        self.exists = exists
         self.upserts: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
+        self.tagging_updates: list[dict[str, Any]] = []
 
     async def upsert_uploaded_row(
         self, *, jwt: str, item_id: str, user_id: str, image_key: str
@@ -67,6 +76,24 @@ class _FakeRepository(IWardrobeRepository):
 
     async def get_plan_tier(self, *, jwt: str, user_id: str) -> str:
         return self.plan_tier
+
+    # SS-012 mechanical addition: IWardrobeRepository gained two new
+    # abstractmethods -- this fake must implement both or it fails to
+    # instantiate against the extended ABC.
+    async def item_exists(self, *, jwt: str, item_id: str) -> bool:
+        return self.exists
+
+    async def update_tagging_result(
+        self,
+        *,
+        jwt: str,
+        item_id: str,
+        tag_columns: dict[str, Any] | None,
+        tagging_tags: dict[str, Any],
+    ) -> None:
+        self.tagging_updates.append(
+            {"item_id": item_id, "tag_columns": tag_columns, "tagging_tags": tagging_tags}
+        )
 
 
 class _FakeRateLimiter:
@@ -99,6 +126,25 @@ class _FakeStorage:
 
     def put_object_bytes(self, key: str, data: bytes, content_type: str) -> None:
         pass
+
+
+class _FakeVisionProvider(IVisionProvider):
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def tag_garment(self, image_bytes: bytes) -> VisionTaggingResult:
+        self.call_count += 1
+        return VisionTaggingResult(
+            success=True,
+            tags=GarmentTags(
+                category="ethnic_kurta",
+                confidence=0.9,
+                content_flag="ok",
+                contains_person=False,
+            ),
+            latency_ms=10,
+            source="gemini",
+        )
 
 
 class _FakeCircuitBreaker:
@@ -250,3 +296,94 @@ def test_malformed_item_id_returns_422_not_500() -> None:
     )
 
     assert response.status_code == 422
+
+
+# --- SS-012: POST /wardrobe/tag -------------------------------------------
+
+
+def _override_tag_infra(repository: _FakeRepository, provider: _FakeVisionProvider) -> None:
+    app.dependency_overrides[get_wardrobe_repository] = lambda: repository
+    app.dependency_overrides[get_vision_provider] = lambda: provider
+    app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
+
+
+def test_tag_missing_authorization_header_returns_401() -> None:
+    response = client.post("/wardrobe/tag", json={"item_id": VALID_ITEM_ID})
+
+    assert response.status_code == 401
+
+
+def test_tag_existing_row_returns_202_and_queues_background_task() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    _override_tag_infra(repository, provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(
+            "/wardrobe/tag",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "processing", "item_id": VALID_ITEM_ID}
+    mock_add_task.assert_called_once()
+
+
+def test_tag_nonexistent_row_returns_404_no_background_task_queued() -> None:
+    repository = _FakeRepository(exists=False)
+    provider = _FakeVisionProvider()
+    _override_tag_infra(repository, provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-2"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(
+            "/wardrobe/tag",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 404
+    mock_add_task.assert_not_called()
+    assert provider.call_count == 0
+
+
+def test_tag_malformed_item_id_returns_422_not_500() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    _override_tag_infra(repository, provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-3"
+
+    response = client.post(
+        "/wardrobe/tag",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_id": "not-a-uuid"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_tag_dependency_override_swaps_the_vision_provider() -> None:
+    """Mirrors the remove-bg suite's own
+    test_dependency_override_swaps_the_background_removal_provider --
+    dependency_overrides keys on the exact callable passed to Depends()
+    (`get_vision_provider`), not the IVisionProvider ABC directly."""
+    repository = _FakeRepository(exists=True)
+    counting_provider = _FakeVisionProvider()
+    _override_tag_infra(repository, counting_provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-4"
+
+    response = client.post(
+        "/wardrobe/tag",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_id": VALID_ITEM_ID},
+    )
+
+    assert response.status_code == 202
+    # Background task runs synchronously within TestClient's request call
+    # (see module docstring) -- the fake provider was actually invoked.
+    assert counting_provider.call_count == 1
+    assert len(repository.tagging_updates) == 1
+    assert repository.tagging_updates[0]["item_id"] == VALID_ITEM_ID
+    assert repository.tagging_updates[0]["tag_columns"]["category"] == "ethnic_kurta"

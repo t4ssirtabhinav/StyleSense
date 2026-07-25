@@ -62,3 +62,56 @@ class IWardrobeRepository(ABC):
         """select plan_tier from users, scoped to the caller's own JWT (RLS
         user_owns_profile restricts this to one row, the caller's own)."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def item_exists(self, *, jwt: str, item_id: str) -> bool:
+        """SELECT id ... .eq('id', item_id).limit(1), scoped to the
+        caller's own JWT (SS-012). Backs ``POST /wardrobe/tag``'s
+        synchronous existence check -- SS-012 only ever ``UPDATE``s, never
+        ``INSERT``s (``BL-041`` directive), so the router must confirm the
+        row already exists (created by ``POST /wardrobe/remove-bg``)
+        *before* queuing any background task, returning 404 immediately
+        rather than silently no-op'ing a 0-row UPDATE deep inside a
+        background task (the ``BL-029`` precedent this guards against).
+
+        Not named in the design doc's own "Files to create/modify" file
+        list (which only calls out ``update_tagging_result`` by name), but
+        required by that same doc's literal Endpoint-contract text ("a
+        synchronous existence check... SELECT id on the RLS-scoped
+        client") -- added as the minimal, hexagonal-consistent way to
+        satisfy it without an inline Supabase call in the router (flagged
+        explicitly in the worklog as a doc-internal gap-fill, not a
+        divergence from anything the doc says explicitly)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_tagging_result(
+        self,
+        *,
+        jwt: str,
+        item_id: str,
+        tag_columns: dict[str, Any] | None,
+        tagging_tags: dict[str, Any],
+    ) -> None:
+        """Merges ``tagging_tags`` under ``ai_tags.tagging`` without
+        clobbering any other pre-existing top-level ``ai_tags`` keys
+        (``BL-053`` namespacing contract -- mirrors
+        ``update_bg_removal_result``'s own ``ai_tags.bg_removal`` handling
+        exactly, read-then-merge-then-write).
+
+        ``tag_columns``, when not ``None``, is applied wholesale as the 8
+        first-class columns (``category``, ``subcategory``,
+        ``color_primary``, ``color_secondary``, ``pattern``, ``fabric``,
+        ``occasion_tags``, ``season_tags``) on the UPDATE. When ``None``
+        (a failed/timed-out tagging attempt), **no columns are written at
+        all** -- only ``ai_tags.tagging`` is updated (to record
+        ``status='failed'``), leaving any prior column values untouched.
+
+        Known race (``BL-066``, amended A1): this app-level read-merge-
+        write shares ``BL-036``'s concurrent-write class -- a tag-vs-tag or
+        tag-vs-``bg_removal`` write racing this one can lose a key.
+        Accepted-and-reduced (the in-flight marker collapses the common
+        double-tap case) rather than fixed here; a durable fix would need
+        an RPC/``jsonb_set``-in-``UPDATE``, deliberately deferred to
+        preserve "no migration"."""
+        raise NotImplementedError

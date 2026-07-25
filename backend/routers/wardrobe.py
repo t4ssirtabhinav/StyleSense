@@ -28,12 +28,16 @@ from pydantic import BaseModel, field_validator
 from adapters.interfaces import IWardrobeRepository
 from adapters.r2_storage import R2StorageClient
 from adapters.wardrobe_repository import SupabaseWardrobeRepository
+from ai.adapters.gemini_vision_adapter import GeminiVisionAdapter
 from ai.adapters.replicate_bg_removal_adapter import ReplicateBgRemovalAdapter
-from ai.ports.interfaces import IBackgroundRemovalProvider
+from ai.ports.interfaces import IBackgroundRemovalProvider, IVisionProvider
 from dependencies.auth import get_current_user_id
 from services.circuit_breaker import CircuitBreaker
+from services.gemini_rate_limiter import GeminiRateLimiter
 from services.rate_limiter import DailyRateLimiter
+from services.tag_cache import TagCache
 from services.wardrobe_bg_removal_service import WardrobeBgRemovalService
+from services.wardrobe_tagging_service import WardrobeTaggingService
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,15 @@ router = APIRouter(prefix="/wardrobe", tags=["wardrobe"])
 
 _PREMIUM_PLAN_TIERS = {"premium", "premium_annual"}
 _FREE_DAILY_LIMIT = 20
+
+# SS-012: GeminiRateLimiter holds real in-process state (a sliding-window
+# deque of call timestamps) that must be shared across requests to mean
+# anything -- unlike CircuitBreaker/DailyRateLimiter/TagCache below, whose
+# state lives in Upstash Redis, so a fresh wrapper instance per request is
+# harmless for those. A fresh GeminiRateLimiter() per request would never
+# remember any prior call and would make the 15 RPM gate a no-op. Built
+# once at import time; still swappable via dependency_overrides for tests.
+_gemini_rate_limiter = GeminiRateLimiter()
 
 
 def get_background_removal_provider() -> IBackgroundRemovalProvider:
@@ -75,9 +88,50 @@ def get_bg_removal_service(
     return WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)
 
 
+def get_vision_provider() -> IVisionProvider:
+    """The binding from port to concrete adapter lives here, and only here
+    -- the route handler never imports GeminiVisionAdapter directly.
+    Override via app.dependency_overrides to swap in a fake for tests."""
+    return GeminiVisionAdapter()
+
+
+def get_tag_cache() -> TagCache:
+    return TagCache()
+
+
+def get_gemini_rate_limiter() -> GeminiRateLimiter:
+    return _gemini_rate_limiter
+
+
+def get_tagging_service(
+    provider: IVisionProvider = Depends(get_vision_provider),
+    repository: IWardrobeRepository = Depends(get_wardrobe_repository),
+    storage: R2StorageClient = Depends(get_r2_storage_client),
+    cache: TagCache = Depends(get_tag_cache),
+    rate_limiter: GeminiRateLimiter = Depends(get_gemini_rate_limiter),
+) -> WardrobeTaggingService:
+    return WardrobeTaggingService(provider, repository, storage, cache, rate_limiter)
+
+
 class RemoveBgRequest(BaseModel):
     item_id: str
 
+    @field_validator("item_id")
+    @classmethod
+    def _item_id_must_be_uuid(cls, value: str) -> str:
+        try:
+            uuid.UUID(value)
+        except ValueError as exc:
+            raise ValueError("item_id must be a valid UUID") from exc
+        return value
+
+
+class TagRequest(BaseModel):
+    item_id: str
+
+    # Reuses RemoveBgRequest's own UUID field_validator pattern verbatim
+    # (SS-012 design doc's Endpoint contract) -- malformed UUID -> 422, not
+    # 500.
     @field_validator("item_id")
     @classmethod
     def _item_id_must_be_uuid(cls, value: str) -> str:
@@ -132,3 +186,32 @@ async def remove_background(
     except Exception as exc:  # pragma: no cover - defensive catch-all
         logger.exception("wardrobe_remove_bg_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="Failed to start background removal") from exc
+
+
+@router.post("/tag", status_code=202)
+async def tag_wardrobe_item(
+    request: TagRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+    user_id: str = Depends(get_current_user_id),
+    repository: IWardrobeRepository = Depends(get_wardrobe_repository),
+    service: WardrobeTaggingService = Depends(get_tagging_service),
+) -> dict[str, Any]:
+    jwt = _extract_bearer_token(authorization)
+
+    try:
+        exists = await repository.item_exists(jwt=jwt, item_id=request.item_id)
+        if not exists:
+            raise HTTPException(
+                status_code=404,
+                detail="Wardrobe item not found. Call /wardrobe/remove-bg first.",
+            )
+
+        background_tasks.add_task(service.tag, jwt=jwt, user_id=user_id, item_id=request.item_id)
+
+        return {"status": "processing", "item_id": request.item_id}
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        logger.exception("wardrobe_tag_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to start tagging") from exc

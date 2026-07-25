@@ -107,3 +107,40 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
             return "free"
         first_row = cast(dict[str, Any], response.data[0])
         return str(first_row["plan_tier"])
+
+    async def item_exists(self, *, jwt: str, item_id: str) -> bool:
+        client = await _client_for(jwt)
+        response = (
+            await client.table("wardrobe_items").select("id").eq("id", item_id).limit(1).execute()
+        )
+        return bool(response.data)
+
+    async def update_tagging_result(
+        self,
+        *,
+        jwt: str,
+        item_id: str,
+        tag_columns: dict[str, Any] | None,
+        tagging_tags: dict[str, Any],
+    ) -> None:
+        client = await _client_for(jwt)
+
+        existing = (
+            await client.table("wardrobe_items")
+            .select("ai_tags")
+            .eq("id", item_id)
+            .limit(1)
+            .execute()
+        )
+        existing_ai_tags: dict[str, Any] = {}
+        if existing.data:
+            existing_row = cast(dict[str, Any], existing.data[0])
+            existing_ai_tags = dict(existing_row.get("ai_tags") or {})
+
+        merged_ai_tags = {**existing_ai_tags, "tagging": tagging_tags}
+
+        update_payload: dict[str, Any] = {"ai_tags": merged_ai_tags}
+        if tag_columns is not None:
+            update_payload.update(tag_columns)
+
+        await client.table("wardrobe_items").update(update_payload).eq("id", item_id).execute()

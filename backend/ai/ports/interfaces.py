@@ -34,9 +34,9 @@ new adapter class instead (Open/Closed, per CLAUDE.md).
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 GenderKey = Literal["woman", "man", "non_binary", "prefer_not_to_say"]
 WardrobeTypeKey = Literal[
@@ -129,4 +129,153 @@ class IBackgroundRemovalProvider(ABC):
         """Must never raise -- any SDK/network failure is caught and
         returned as ``BackgroundRemovalResult(success=False, error=...)`` so
         the caller can apply circuit-breaker/fallback policy uniformly."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# SS-012 -- IVisionProvider (image -> structured India-taxonomy tags).
+#
+# This repo's first **vision** port -- distinct from IStylingProvider
+# (text/structured outfit suggestions) and IBackgroundRemovalProvider
+# (image -> image). Never modify this port's signature or GarmentTags'
+# enum-backed fields to fit a new provider -- add a new adapter class
+# instead (Open/Closed, per CLAUDE.md).
+#
+# Amendment 1 (2026-07-25): the original ticket/first Architect pass named
+# `gemini-1.5-flash` + the `google-generativeai` SDK -- both were live-
+# verified DEAD (not just unverified) during the amendment pass: the model
+# was retired 2025-09-29 and the SDK's support ended 2025-11-30. This port
+# and its adapter target the current model (`gemini-3.5-flash-lite`) and
+# SDK (`google-genai`) instead -- see gemini_vision_adapter.py.
+# ---------------------------------------------------------------------------
+
+WardrobeCategory = Literal[
+    # Transcribed verbatim from supabase/migrations/001_initial.sql (lines
+    # 7-14), the real wardrobe_category DB enum -- 21 values, not the raw
+    # ticket's "20-value" claim. The DB write rejects any non-member.
+    "western_top",
+    "western_bottom",
+    "western_dress",
+    "western_outerwear",
+    "ethnic_kurta",
+    "ethnic_saree",
+    "ethnic_lehenga",
+    "ethnic_anarkali",
+    "ethnic_salwar_kameez",
+    "ethnic_dupatta",
+    "ethnic_sherwani",
+    "indo_western",
+    "footwear_formal",
+    "footwear_casual",
+    "footwear_ethnic",
+    "footwear_sports",
+    "accessory_bag",
+    "accessory_jewellery",
+    "accessory_watch",
+    "accessory_belt",
+    "accessory_scarf",
+]
+
+OccasionType = Literal[
+    # Transcribed verbatim from supabase/migrations/001_initial.sql (lines
+    # 18-21), the real occasion_type DB enum. occasion_tags is a real
+    # occasion_type[] column -- validated strictly (an out-of-enum member
+    # fails the whole payload), unlike SeasonTag/pattern/fabric below.
+    "office",
+    "casual",
+    "date_night",
+    "wedding_guest",
+    "festival",
+    "puja",
+    "party",
+    "travel",
+    "workout",
+    "beach",
+    "formal_event",
+    "college",
+]
+
+SeasonTag = Literal["summer", "winter", "monsoon", "all"]
+"""``season_tags`` is a ``TEXT[]`` column, not a DB enum -- validated
+against this closed set, but leniently (see GarmentTags' validator below):
+an unknown value is dropped, not a whole-payload failure. India-first:
+``monsoon`` is a first-class season, not folded into ``all``/``summer``."""
+
+ContentFlag = Literal["ok", "nsfw", "not_clothing", "other"]
+"""Resolves BL-044 (content moderation, deferred from SS-010). Distinct
+from ``contains_person`` below -- a mirror selfie is a normal, non-NSFW way
+to shoot an outfit, so "is a person visible" and "is this explicit/
+not-clothing" are kept as two separate signals rather than conflated."""
+
+
+class GarmentTags(BaseModel):
+    """Structured output of a single Gemini vision-tagging pass (SS-012).
+
+    ``category``/``occasion_tags`` are validated STRICTLY against the real
+    DB enums (``wardrobe_category``, ``occasion_type``) -- an out-of-enum
+    value on either fails the whole payload (a Pydantic ``ValidationError``
+    the adapter catches and turns into ``VisionTaggingResult(success=False)``,
+    never a raise). ``pattern``/``fabric``/``subcategory`` are free ``TEXT``
+    columns in the DB, so kept as plain ``str | None`` with no enum
+    enforcement -- an odd/out-of-vocabulary value must never nuke an
+    otherwise-good result (risk-weighted: strict where the DB enforces an
+    enum, lenient where it's free text). ``season_tags`` (``TEXT[]``, not a
+    DB enum) is validated against SeasonTag's closed set but leniently --
+    an unknown member is silently dropped rather than failing validation.
+
+    ``category = None`` is a valid state (non-clothing photo, prompt-
+    instructed ``confidence = 0.0``) -- not an error.
+    """
+
+    category: WardrobeCategory | None
+    subcategory: str | None = None
+    color_primary: str | None = None  # hex, e.g. "#1E3A8A"
+    color_secondary: str | None = None
+    pattern: str | None = None
+    fabric: str | None = None
+    occasion_tags: list[OccasionType] = Field(default_factory=list)
+    season_tags: list[SeasonTag] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+    content_flag: ContentFlag
+    contains_person: bool
+    alternatives: list[WardrobeCategory] | None = None
+    """Top-2 category candidates for the Indo-Western fusion ambiguity edge
+    case (SS-013 renders a disambiguation picker). ``None``/empty when the
+    model is confident in a single category."""
+
+    @field_validator("season_tags", mode="before")
+    @classmethod
+    def _drop_unknown_season_tags(cls, value: Any) -> Any:
+        """Lenient by design (season_tags is free TEXT[], not a DB enum) --
+        an out-of-vocabulary season is dropped, never fails the payload."""
+        if value is None:
+            return []
+        valid = {"summer", "winter", "monsoon", "all"}
+        return [v for v in value if isinstance(v, str) and v in valid]
+
+
+class VisionTaggingResult(BaseModel):
+    """Pydantic ``BaseModel`` (JSON-shaped, like ``OutfitSuggestionResult``)
+    -- unlike the binary ``BackgroundRemovalResult`` dataclass, this result
+    carries a rich structured payload, so Pydantic's JSON-schema machinery
+    is a real fit here, not overkill."""
+
+    success: bool
+    tags: GarmentTags | None = None
+    latency_ms: int | None = None
+    model: str = "gemini-3.5-flash-lite"
+    source: Literal["gemini", "cache", "mock"] = "gemini"
+    error: str | None = None
+
+
+class IVisionProvider(ABC):
+    """Never modify this signature to fit a new provider -- add a new
+    adapter class instead (Open/Closed, per CLAUDE.md)."""
+
+    @abstractmethod
+    async def tag_garment(self, image_bytes: bytes) -> VisionTaggingResult:
+        """Must never raise -- any SDK/network/safety-block/parse/timeout
+        failure is caught and returned as
+        ``VisionTaggingResult(success=False, error=...)`` so the caller
+        (``WardrobeTaggingService``) applies fallback policy uniformly."""
         raise NotImplementedError
