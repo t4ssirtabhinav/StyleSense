@@ -102,6 +102,17 @@ class _FakeRepository(IWardrobeRepository):
     async def get_plan_tier(self, *, jwt: str, user_id: str) -> str:
         return "free"
 
+    # SS-012 mechanical addition: IWardrobeRepository gained two new
+    # abstractmethods (item_exists, update_tagging_result) -- this fake
+    # must implement both (no-op stubs) or it fails to instantiate against
+    # the extended ABC. Flagged in the SS-012 design doc as a
+    # green-locally/red-in-CI trap if skipped.
+    async def item_exists(self, *, jwt: str, item_id: str) -> bool:
+        return True
+
+    async def update_tagging_result(self, **kwargs: Any) -> None:
+        pass
+
 
 class _FakeStorage:
     def __init__(self, original_bytes: bytes, fail_put: bool = False) -> None:
@@ -165,7 +176,9 @@ async def test_happy_path_uploads_clean_and_thumbnail_and_marks_bg_removed() -> 
 
     # The stored clean.png must be composited back to the *original's*
     # full resolution, not left at the proxy's smaller resolution.
-    clean_bytes = next(data for key, data, _ in storage.puts if key == clean_image_key("user-1", "item-1"))
+    clean_bytes = next(
+        data for key, data, _ in storage.puts if key == clean_image_key("user-1", "item-1")
+    )
     with Image.open(io.BytesIO(clean_bytes)) as clean_image:
         assert clean_image.mode == "RGBA"
         assert clean_image.size == (1200, 800)

@@ -168,6 +168,114 @@ async def test_update_bg_removal_result_merges_ai_tags_under_bg_removal_key(
     assert payload["thumbnail_url"] == "wardrobe/user-1/item-1/thumbnail.jpg"
 
 
+async def test_update_tagging_result_writes_columns_and_merges_ai_tags_under_tagging_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    # Pre-existing ai_tags has SS-011's bg_removal key, which must survive.
+    fake_client = _FakeAsyncClient(
+        response_data=[{"ai_tags": {"bg_removal": {"source": "replicate"}}}]
+    )
+    repo = SupabaseWardrobeRepository()
+
+    tag_columns = {
+        "category": "ethnic_kurta",
+        "subcategory": "straight-fit kurta",
+        "color_primary": "#1E3A8A",
+        "color_secondary": None,
+        "pattern": "block_print",
+        "fabric": "cotton",
+        "occasion_tags": ["festival", "puja"],
+        "season_tags": ["summer"],
+    }
+    tagging_tags = {
+        "status": "tagged",
+        "source": "gemini",
+        "confidence": 0.9,
+        "flagged_for_review": False,
+        "moderation": {"content_flag": "ok", "contains_person": False},
+    }
+
+    with _patch_acreate_client(fake_client):
+        await repo.update_tagging_result(
+            jwt="caller-jwt",
+            item_id="item-1",
+            tag_columns=tag_columns,
+            tagging_tags=tagging_tags,
+        )
+
+    assert fake_client.postgrest.auth_calls == ["caller-jwt"]
+    update_call = next(c for c in fake_client.calls if c[0] == "update")
+    payload = update_call[1][0]
+
+    assert payload["ai_tags"]["bg_removal"] == {"source": "replicate"}
+    assert payload["ai_tags"]["tagging"] == tagging_tags
+    assert payload["category"] == "ethnic_kurta"
+    assert payload["occasion_tags"] == ["festival", "puja"]
+    assert payload["season_tags"] == ["summer"]
+
+
+async def test_update_tagging_result_writes_no_columns_when_tag_columns_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(
+        response_data=[{"ai_tags": {"bg_removal": {"source": "replicate"}}}]
+    )
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        await repo.update_tagging_result(
+            jwt="caller-jwt",
+            item_id="item-1",
+            tag_columns=None,
+            tagging_tags={"status": "failed"},
+        )
+
+    update_call = next(c for c in fake_client.calls if c[0] == "update")
+    payload = update_call[1][0]
+
+    assert payload["ai_tags"]["bg_removal"] == {"source": "replicate"}
+    assert payload["ai_tags"]["tagging"] == {"status": "failed"}
+    assert "category" not in payload
+    assert "occasion_tags" not in payload
+
+
+async def test_item_exists_returns_true_when_row_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[{"id": "item-1"}])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        exists = await repo.item_exists(jwt="caller-jwt", item_id="item-1")
+
+    assert exists is True
+    assert fake_client.postgrest.auth_calls == ["caller-jwt"]
+
+
+async def test_item_exists_returns_false_when_row_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        exists = await repo.item_exists(jwt="caller-jwt", item_id="item-1")
+
+    assert exists is False
+
+
 async def test_get_plan_tier_scopes_select_to_callers_own_jwt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
