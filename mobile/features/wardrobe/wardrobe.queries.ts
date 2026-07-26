@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/react-native';
 import { useMutation } from '@tanstack/react-query';
 import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 import { useAnalytics } from '../../hooks/useAnalytics';
+import { supabase } from '../../lib/supabase';
 import {
   EXPIRED_URL_MAX_RETRIES,
   RETRY_BACKOFF_FACTOR,
@@ -12,11 +13,14 @@ import {
 } from './wardrobe.constants';
 import {
   compressImageForUpload,
+  removeBackground,
   requestUploadUrl,
+  tagItem,
   uploadToR2WithProgress,
 } from './wardrobe.service';
 import { useWardrobeUploadStore } from './wardrobe.store';
 import type {
+  GarmentTagsDraft,
   UploadWardrobeItemInput,
   UploadWardrobeItemResult,
   WardrobeUploadError,
@@ -152,6 +156,62 @@ export function useUploadWardrobeItem() {
       }
 
       return { itemId: uploadUrlResponse.itemId, key: uploadUrlResponse.key };
+    },
+  });
+}
+
+// --- SS-013 additions ---
+
+export interface ProcessWardrobeItemInput {
+  itemId: string;
+  jwt: string;
+}
+
+// Calls remove-bg then tag, sequentially, against the same item_id (BL-041's
+// resolution -- see docs/tickets/SS-013-design.md's "Call sequencing"). Both
+// endpoints dispatch async background work server-side and return 202
+// immediately; this hook only owns request *order*, not completion --
+// completion is signalled by the Realtime subscription the *screen* owns
+// (per the design doc, subscriptions don't live in this file).
+export function useProcessWardrobeItem() {
+  return useMutation<void, WardrobeUploadError, ProcessWardrobeItemInput>({
+    mutationFn: async ({ itemId, jwt }) => {
+      await removeBackground(itemId, jwt);
+      await tagItem(itemId, jwt);
+    },
+  });
+}
+
+export interface SaveWardrobeItemTagsInput {
+  itemId: string;
+  tags: GarmentTagsDraft;
+}
+
+// The one place in this domain a direct Supabase table write happens
+// (mirrors SS-007's patchStylePreferences precedent for partial-field
+// saves) -- everywhere else routes through the FastAPI endpoints. RLS-scoped
+// via the caller's own session (supabase client already carries the user's
+// auth token), never service_role.
+export function useSaveWardrobeItemTags() {
+  return useMutation<void, Error, SaveWardrobeItemTagsInput>({
+    mutationFn: async ({ itemId, tags }) => {
+      const { error } = await supabase
+        .from('wardrobe_items')
+        .update({
+          category: tags.category,
+          subcategory: tags.subcategory,
+          color_primary: tags.colorPrimary,
+          color_secondary: tags.colorSecondary,
+          pattern: tags.pattern,
+          fabric: tags.fabric,
+          occasion_tags: tags.occasionTags,
+          season_tags: tags.seasonTags,
+        })
+        .eq('id', itemId);
+
+      if (error) {
+        throw error;
+      }
     },
   });
 }

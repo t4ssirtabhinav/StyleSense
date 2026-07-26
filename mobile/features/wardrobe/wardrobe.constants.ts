@@ -47,3 +47,93 @@ export const INVALID_FILE_ERROR_MESSAGE =
   "This photo couldn't be uploaded. Please try a different photo.";
 export const UNKNOWN_UPLOAD_ERROR_MESSAGE =
   'Something went wrong while uploading. Please try again.';
+
+// --- SS-013 (Wardrobe Item Upload Flow UI) ---
+// WARDROBE_CATEGORIES/OCCASION_TYPES/SEASON_TAGS transcribed verbatim from
+// docs/tickets/SS-013-design.md's "Concrete values" section (itself
+// transcribed from supabase/migrations/001_initial.sql).
+
+import type {
+  OccasionType,
+  SeasonTag,
+  WardrobeCategory,
+} from './wardrobe.types';
+
+export interface CategoryOption {
+  value: WardrobeCategory;
+  label: string;
+}
+
+function humanize(value: string): string {
+  return value
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+const WARDROBE_CATEGORY_VALUES: WardrobeCategory[] = [
+  'western_top',
+  'western_bottom',
+  'western_dress',
+  'western_outerwear',
+  'ethnic_kurta',
+  'ethnic_saree',
+  'ethnic_lehenga',
+  'ethnic_anarkali',
+  'ethnic_salwar_kameez',
+  'ethnic_dupatta',
+  'ethnic_sherwani',
+  'indo_western',
+  'footwear_formal',
+  'footwear_casual',
+  'footwear_ethnic',
+  'footwear_sports',
+  'accessory_bag',
+  'accessory_jewellery',
+  'accessory_watch',
+  'accessory_belt',
+  'accessory_scarf',
+];
+
+export const WARDROBE_CATEGORIES: CategoryOption[] =
+  WARDROBE_CATEGORY_VALUES.map((value) => ({ value, label: humanize(value) }));
+
+export const OCCASION_TYPES: OccasionType[] = [
+  'office',
+  'casual',
+  'date_night',
+  'wedding_guest',
+  'festival',
+  'puja',
+  'party',
+  'travel',
+  'workout',
+  'beach',
+  'formal_event',
+  'college',
+];
+
+export const SEASON_TAGS: SeasonTag[] = ['summer', 'winter', 'monsoon', 'all'];
+
+export const MAX_BATCH_SIZE = 10;
+export const REALTIME_CHANNEL_PREFIX = 'wardrobe_item_';
+// AC: "may take longer on slow connections" hint after 10s of no status
+// change within a single stage.
+export const SLOW_NETWORK_HINT_DELAY_MS = 10000;
+
+// BL-057 (accepted for MVP): permanent, unconditional Capture-step copy.
+export const ONE_ITEM_AT_A_TIME_TIP =
+  'Tip: photograph one item at a time for the best results';
+
+export const LOW_CONFIDENCE_THRESHOLD = 0.7;
+
+// wedding_guest (occasion_type) vs. Badge's 'wedding' OccasionKey -- see
+// docs/tickets/SS-013-design.md's "Concrete values" note on this mismatch.
+export const OCCASION_BADGE_COLOR_MAP: Partial<
+  Record<OccasionType, 'wedding' | 'office' | 'festival' | 'casual'>
+> = {
+  wedding_guest: 'wedding',
+  office: 'office',
+  festival: 'festival',
+  casual: 'casual',
+};

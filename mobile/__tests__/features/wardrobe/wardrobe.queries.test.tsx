@@ -1,7 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { useUploadWardrobeItem } from '../../../features/wardrobe/wardrobe.queries';
+import {
+  useProcessWardrobeItem,
+  useSaveWardrobeItemTags,
+  useUploadWardrobeItem,
+} from '../../../features/wardrobe/wardrobe.queries';
 import * as wardrobeService from '../../../features/wardrobe/wardrobe.service';
 import { useWardrobeUploadStore } from '../../../features/wardrobe/wardrobe.store';
 
@@ -19,6 +23,15 @@ jest.mock('../../../features/wardrobe/wardrobe.service', () => ({
   compressImageForUpload: jest.fn(),
   requestUploadUrl: jest.fn(),
   uploadToR2WithProgress: jest.fn(),
+  removeBackground: jest.fn(),
+  tagItem: jest.fn(),
+}));
+
+const mockEq = jest.fn();
+const mockUpdate = jest.fn((..._args: unknown[]) => ({ eq: mockEq }));
+const mockFrom = jest.fn((..._args: unknown[]) => ({ update: mockUpdate }));
+jest.mock('../../../lib/supabase', () => ({
+  supabase: { from: (...args: unknown[]) => mockFrom(...args) },
 }));
 
 function createWrapper() {
@@ -292,5 +305,94 @@ describe('useUploadWardrobeItem', () => {
       expect.objectContaining({ code: 'invalid_file' }),
       expect.objectContaining({ tags: { feature: 'wardrobe_upload' } }),
     );
+  });
+});
+
+describe('useProcessWardrobeItem', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls removeBackground then tagItem, in that order (awaits the first before firing the second)', async () => {
+    const callOrder: string[] = [];
+    (wardrobeService.removeBackground as jest.Mock).mockImplementation(
+      async () => {
+        callOrder.push('removeBackground');
+      },
+    );
+    (wardrobeService.tagItem as jest.Mock).mockImplementation(async () => {
+      callOrder.push('tagItem');
+    });
+
+    const { result } = await renderHook(() => useProcessWardrobeItem(), {
+      wrapper: createWrapper(),
+    });
+    result.current.mutate({ itemId: 'item-1', jwt: 'jwt-token' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(callOrder).toEqual(['removeBackground', 'tagItem']);
+    expect(wardrobeService.removeBackground).toHaveBeenCalledWith(
+      'item-1',
+      'jwt-token',
+    );
+    expect(wardrobeService.tagItem).toHaveBeenCalledWith('item-1', 'jwt-token');
+  });
+
+  it('if removeBackground rejects, tagItem is never called', async () => {
+    (wardrobeService.removeBackground as jest.Mock).mockRejectedValue({
+      code: 'unknown',
+      message: 'failed',
+      retryable: true,
+    });
+
+    const { result } = await renderHook(() => useProcessWardrobeItem(), {
+      wrapper: createWrapper(),
+    });
+    result.current.mutate({ itemId: 'item-1', jwt: 'jwt-token' });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(wardrobeService.tagItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('useSaveWardrobeItemTags', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEq.mockResolvedValue({ error: null });
+  });
+
+  it('issues a scoped .update() against wardrobe_items for the given itemId with exactly the edited fields', async () => {
+    const tags = {
+      category: 'ethnic_kurta' as const,
+      subcategory: 'kurta',
+      colorPrimary: 'blue',
+      colorSecondary: null,
+      pattern: 'solid',
+      fabric: 'cotton',
+      occasionTags: ['festival' as const],
+      seasonTags: ['summer' as const],
+      confidence: 0.9,
+      contentFlag: 'ok' as const,
+      containsPerson: false,
+    };
+
+    const { result } = await renderHook(() => useSaveWardrobeItemTags(), {
+      wrapper: createWrapper(),
+    });
+    result.current.mutate({ itemId: 'item-1', tags });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockUpdate).toHaveBeenCalledWith({
+      category: 'ethnic_kurta',
+      subcategory: 'kurta',
+      color_primary: 'blue',
+      color_secondary: null,
+      pattern: 'solid',
+      fabric: 'cotton',
+      occasion_tags: ['festival'],
+      season_tags: ['summer'],
+    });
+    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
   });
 });

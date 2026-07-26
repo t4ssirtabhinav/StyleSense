@@ -5,7 +5,10 @@ import {
 import {
   compressImageForUpload,
   computeBatchDedupeHash,
+  removeBackground,
   requestUploadUrl,
+  subscribeToItemUpdates,
+  tagItem,
   uploadToR2WithProgress,
 } from '../../../features/wardrobe/wardrobe.service';
 
@@ -22,9 +25,15 @@ jest.mock('expo-crypto', () => ({
 }));
 
 const mockInvoke = jest.fn();
+const mockOn = jest.fn();
+const mockSubscribe = jest.fn();
+const mockChannel = jest.fn();
+const mockRemoveChannel = jest.fn();
 jest.mock('../../../lib/supabase', () => ({
   supabase: {
     functions: { invoke: (...args: unknown[]) => mockInvoke(...args) },
+    channel: (...args: unknown[]) => mockChannel(...args),
+    removeChannel: (...args: unknown[]) => mockRemoveChannel(...args),
   },
 }));
 
@@ -267,5 +276,90 @@ describe('computeBatchDedupeHash', () => {
       'SHA-256',
       'same-base64-bytes',
     );
+  });
+});
+
+describe('removeBackground / tagItem', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // biome-ignore lint/suspicious/noExplicitAny: test-only global stub
+    (global as any).fetch = jest.fn();
+  });
+
+  it('removeBackground POSTs to /wardrobe/remove-bg with { item_id } and the bearer token, expects 202', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ status: 202 });
+
+    await removeBackground('item-1', 'jwt-token');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/wardrobe/remove-bg'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer jwt-token' }),
+        body: JSON.stringify({ item_id: 'item-1' }),
+      }),
+    );
+  });
+
+  it('removeBackground throws when the response is not 202', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ status: 500 });
+
+    await expect(removeBackground('item-1', 'jwt-token')).rejects.toEqual(
+      expect.objectContaining({ code: 'unknown' }),
+    );
+  });
+
+  it('tagItem POSTs to /wardrobe/tag with the same shape', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ status: 202 });
+
+    await tagItem('item-1', 'jwt-token');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/wardrobe/tag'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ item_id: 'item-1' }),
+      }),
+    );
+  });
+});
+
+describe('subscribeToItemUpdates', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockChannel.mockReturnValue({ on: mockOn });
+    mockOn.mockReturnValue({ subscribe: mockSubscribe });
+    mockSubscribe.mockReturnValue('the-channel');
+  });
+
+  it('subscribes with filter id=eq.{itemId} on wardrobe_items and invokes the callback on an UPDATE payload', () => {
+    const onUpdate = jest.fn();
+    subscribeToItemUpdates('item-1', onUpdate);
+
+    expect(mockChannel).toHaveBeenCalledWith('wardrobe_item_item-1');
+    expect(mockOn).toHaveBeenCalledWith(
+      'postgres_changes',
+      expect.objectContaining({
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'wardrobe_items',
+        filter: 'id=eq.item-1',
+      }),
+      expect.any(Function),
+    );
+
+    const handler = mockOn.mock.calls[0][2];
+    handler({ new: { id: 'item-1', processing_status: 'bg_removed' } });
+    expect(onUpdate).toHaveBeenCalledWith({
+      id: 'item-1',
+      processing_status: 'bg_removed',
+    });
+  });
+
+  it('returns an unsubscribe function that removes the channel', () => {
+    const unsubscribe = subscribeToItemUpdates('item-1', jest.fn());
+    unsubscribe();
+
+    expect(mockRemoveChannel).toHaveBeenCalledWith('the-channel');
   });
 });

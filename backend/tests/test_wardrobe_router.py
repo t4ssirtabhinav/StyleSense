@@ -50,9 +50,16 @@ def _jpeg_bytes() -> bytes:
 
 
 class _FakeRepository(IWardrobeRepository):
-    def __init__(self, plan_tier: str = "free", *, exists: bool = True) -> None:
+    def __init__(
+        self,
+        plan_tier: str = "free",
+        *,
+        exists: bool = True,
+        image_info: dict[str, Any] | None = None,
+    ) -> None:
         self.plan_tier = plan_tier
         self.exists = exists
+        self.image_info = image_info
         self.upserts: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
         self.tagging_updates: list[dict[str, Any]] = []
@@ -95,6 +102,10 @@ class _FakeRepository(IWardrobeRepository):
             {"item_id": item_id, "tag_columns": tag_columns, "tagging_tags": tagging_tags}
         )
 
+    # SS-013
+    async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
+        return self.image_info
+
 
 class _FakeRateLimiter:
     def __init__(self, allowed: bool = True) -> None:
@@ -126,6 +137,9 @@ class _FakeStorage:
 
     def put_object_bytes(self, key: str, data: bytes, content_type: str) -> None:
         pass
+
+    def generate_presigned_get_url(self, key: str, expiry_seconds: int) -> str:
+        return f"https://fake-r2.example.com/{key}?expires={expiry_seconds}"
 
 
 class _FakeVisionProvider(IVisionProvider):
@@ -387,3 +401,106 @@ def test_tag_dependency_override_swaps_the_vision_provider() -> None:
     assert len(repository.tagging_updates) == 1
     assert repository.tagging_updates[0]["item_id"] == VALID_ITEM_ID
     assert repository.tagging_updates[0]["tag_columns"]["category"] == "ethnic_kurta"
+
+
+# --- SS-013: GET /wardrobe/items/{id}/image-url ----------------------------
+
+
+def _override_image_url_infra(repository: _FakeRepository) -> None:
+    app.dependency_overrides[get_wardrobe_repository] = lambda: repository
+    app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
+
+
+def test_image_url_missing_authorization_header_returns_401() -> None:
+    response = client.get(f"/wardrobe/items/{VALID_ITEM_ID}/image-url")
+
+    assert response.status_code == 401
+
+
+def test_image_url_malformed_item_id_returns_422_not_500() -> None:
+    repository = _FakeRepository()
+    _override_image_url_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.get(
+        "/wardrobe/items/not-a-uuid/image-url",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_image_url_nonexistent_or_unowned_item_returns_404() -> None:
+    repository = _FakeRepository(image_info=None)
+    _override_image_url_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.get(
+        f"/wardrobe/items/{VALID_ITEM_ID}/image-url",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_image_url_bg_removed_returns_clean_png_presigned_url() -> None:
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": f"wardrobe/user-1/{VALID_ITEM_ID}/clean.png",
+            "processing_status": "bg_removed",
+        }
+    )
+    _override_image_url_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.get(
+        f"/wardrobe/items/{VALID_ITEM_ID}/image-url",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "clean"
+    assert "clean.png" in body["url"]
+
+
+def test_image_url_bg_pending_falls_back_to_original_jpg() -> None:
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": None,
+            "processing_status": "bg_pending",
+        }
+    )
+    _override_image_url_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.get(
+        f"/wardrobe/items/{VALID_ITEM_ID}/image-url",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "original"
+    assert "original.jpg" in body["url"]
+
+
+def test_image_url_no_image_at_all_returns_404() -> None:
+    repository = _FakeRepository(
+        image_info={
+            "image_url": None,
+            "image_clean_url": None,
+            "processing_status": "uploaded",
+        }
+    )
+    _override_image_url_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.get(
+        f"/wardrobe/items/{VALID_ITEM_ID}/image-url",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 404

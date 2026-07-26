@@ -90,3 +90,104 @@ export interface UploadWardrobeItemResult {
   itemId: string;
   key: string;
 }
+
+// --- SS-013 (Wardrobe Item Upload Flow UI -- Capture/Processing/Review) ---
+// Per docs/tickets/SS-013-design.md's "Concrete values to use, not invent" --
+// transcribed verbatim, not re-derived.
+
+export type UploadFlowStep = 'capture' | 'processing' | 'review';
+
+export type WardrobeCategory =
+  | 'western_top'
+  | 'western_bottom'
+  | 'western_dress'
+  | 'western_outerwear'
+  | 'ethnic_kurta'
+  | 'ethnic_saree'
+  | 'ethnic_lehenga'
+  | 'ethnic_anarkali'
+  | 'ethnic_salwar_kameez'
+  | 'ethnic_dupatta'
+  | 'ethnic_sherwani'
+  | 'indo_western'
+  | 'footwear_formal'
+  | 'footwear_casual'
+  | 'footwear_ethnic'
+  | 'footwear_sports'
+  | 'accessory_bag'
+  | 'accessory_jewellery'
+  | 'accessory_watch'
+  | 'accessory_belt'
+  | 'accessory_scarf';
+
+export type OccasionType =
+  | 'office'
+  | 'casual'
+  | 'date_night'
+  | 'wedding_guest'
+  | 'festival'
+  | 'puja'
+  | 'party'
+  | 'travel'
+  | 'workout'
+  | 'beach'
+  | 'formal_event'
+  | 'college';
+
+export type SeasonTag = 'summer' | 'winter' | 'monsoon' | 'all';
+
+export type WardrobeItemProcessingStatus =
+  | 'uploaded'
+  | 'bg_removed'
+  | 'bg_pending';
+
+export type WardrobeContentFlag = 'ok' | 'not_clothing' | 'nsfw' | 'other';
+
+// The editable-in-Review shape (SS-012's tagging output, plus the draft
+// state the user can edit before saving).
+export interface GarmentTagsDraft {
+  category: WardrobeCategory | null;
+  subcategory: string | null;
+  colorPrimary: string | null;
+  colorSecondary: string | null;
+  pattern: string | null;
+  fabric: string | null;
+  occasionTags: OccasionType[];
+  seasonTags: SeasonTag[];
+  confidence: number;
+  alternatives?: WardrobeCategory[];
+  contentFlag: WardrobeContentFlag;
+  containsPerson: boolean;
+}
+
+export type BatchItemStatus =
+  | 'queued'
+  | 'uploading'
+  | 'removing_bg'
+  | 'tagging'
+  | 'ready'
+  | 'review'
+  | 'saved'
+  | 'failed';
+
+export interface BatchItemState {
+  taskId: string;
+  itemId?: string;
+  localUri: string;
+  source: WardrobeUploadSource;
+  status: BatchItemStatus;
+  tags?: GarmentTagsDraft;
+  error?: string;
+}
+
+// Minimal shape of the Realtime `postgres_changes` UPDATE payload's `.new`
+// this domain actually reads (not the full generated Row -- only the
+// columns SS-013's readiness signal and Review step need).
+export interface WardrobeItemRealtimeRow {
+  id: string;
+  processing_status: WardrobeItemProcessingStatus;
+  ai_tags: {
+    tagging?: { status?: 'tagging' | 'tagged' | 'flagged' | 'failed' };
+    bg_removal?: { status?: string };
+  } | null;
+}
