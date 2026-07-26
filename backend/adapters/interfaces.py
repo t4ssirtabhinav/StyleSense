@@ -115,3 +115,16 @@ class IWardrobeRepository(ABC):
         an RPC/``jsonb_set``-in-``UPDATE``, deliberately deferred to
         preserve "no migration"."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
+        """SELECT image_url, image_clean_url, processing_status ...
+        .eq('id', item_id).limit(1), scoped to the caller's own JWT (SS-013).
+
+        RLS's ``user_owns_wardrobe`` policy restricts visible rows to the
+        caller's own -- a non-owned ``item_id`` returns 0 rows, identical to
+        a nonexistent one, so this returns ``None`` for both. Callers (the
+        new ``GET /wardrobe/items/{id}/image-url`` route) must map ``None``
+        to a flat 404, never distinguishing "not yours" from "doesn't
+        exist" (avoids turning this endpoint into an ownership oracle)."""
+        raise NotImplementedError

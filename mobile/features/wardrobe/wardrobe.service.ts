@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import { SaveFormat, manipulateAsync } from 'expo-image-manipulator';
+import { EXPO_PUBLIC_BACKEND_URL } from '../../constants/api';
 import { supabase } from '../../lib/supabase';
 import {
   COMPRESS_QUALITY_FLOOR,
@@ -16,6 +17,7 @@ import {
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
+  WardrobeItemRealtimeRow,
   WardrobeUploadError,
   WardrobeUploadErrorCode,
 } from './wardrobe.types';
@@ -188,6 +190,84 @@ export function uploadToR2WithProgress(
 
     xhr.send(blob);
   });
+}
+
+// --- SS-013 additions: POST /wardrobe/remove-bg, POST /wardrobe/tag, and a
+// Realtime subscription wrapper. Both REST calls use constants/api.ts's
+// base URL, never a hardcoded host (CLAUDE.md).
+
+async function postWardrobeAction(
+  path: '/wardrobe/remove-bg' | '/wardrobe/tag',
+  itemId: string,
+  jwt: string,
+): Promise<void> {
+  const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${jwt}`,
+    },
+    body: JSON.stringify({ item_id: itemId }),
+  });
+
+  if (response.status !== 202) {
+    throw buildWardrobeUploadError('unknown', UNKNOWN_UPLOAD_ERROR_MESSAGE);
+  }
+}
+
+export async function removeBackground(
+  itemId: string,
+  jwt: string,
+): Promise<void> {
+  await postWardrobeAction('/wardrobe/remove-bg', itemId, jwt);
+}
+
+export async function tagItem(itemId: string, jwt: string): Promise<void> {
+  await postWardrobeAction('/wardrobe/tag', itemId, jwt);
+}
+
+export async function fetchWardrobeItemImageUrl(
+  itemId: string,
+  jwt: string,
+): Promise<{ url: string; source: 'clean' | 'original' }> {
+  const response = await fetch(
+    `${EXPO_PUBLIC_BACKEND_URL}/wardrobe/items/${itemId}/image-url`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+  if (!response.ok) {
+    throw buildWardrobeUploadError('unknown', UNKNOWN_UPLOAD_ERROR_MESSAGE);
+  }
+  return response.json();
+}
+
+// Thin wrapper around a Supabase Realtime `postgres_changes` UPDATE
+// subscription -- the readiness signal (processing_status='bg_removed' AND
+// ai_tags.tagging.status='tagged'|'flagged') is combined by the *caller*
+// (the screen owning the subscription lifecycle, per the design doc), not
+// here. Returns an unsubscribe function.
+export function subscribeToItemUpdates(
+  itemId: string,
+  onUpdate: (row: WardrobeItemRealtimeRow) => void,
+): () => void {
+  const channel = supabase
+    .channel(`wardrobe_item_${itemId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'wardrobe_items',
+        filter: `id=eq.${itemId}`,
+      },
+      (payload: { new: WardrobeItemRealtimeRow }) => {
+        onUpdate(payload.new);
+      },
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 // In-batch dedupe only (see Edge Cases -- scoped down from the ticket's

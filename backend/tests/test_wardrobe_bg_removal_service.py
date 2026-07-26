@@ -113,6 +113,10 @@ class _FakeRepository(IWardrobeRepository):
     async def update_tagging_result(self, **kwargs: Any) -> None:
         pass
 
+    # SS-013 mechanical addition: same ABC-extension trap as above.
+    async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
+        return None
+
 
 class _FakeStorage:
     def __init__(self, original_bytes: bytes, fail_put: bool = False) -> None:

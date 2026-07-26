@@ -1,5 +1,6 @@
 import {
   isUploadTaskStale,
+  useWardrobeBatchStore,
   useWardrobeUploadStore,
 } from '../../../features/wardrobe/wardrobe.store';
 
@@ -129,5 +130,93 @@ describe('isUploadTaskStale', () => {
         30_000,
       ),
     ).toBe(false);
+  });
+});
+
+describe('useWardrobeBatchStore', () => {
+  beforeEach(() => {
+    useWardrobeBatchStore.setState({ items: [], currentIndex: 0 });
+  });
+
+  it('initBatch seeds items from the given sources, currentIndex=0', () => {
+    useWardrobeBatchStore.getState().initBatch([
+      { taskId: 't1', localUri: 'file://a.jpg', source: 'camera' },
+      { taskId: 't2', localUri: 'file://b.jpg', source: 'gallery' },
+    ]);
+
+    const state = useWardrobeBatchStore.getState();
+    expect(state.items).toHaveLength(2);
+    expect(state.items[0]).toEqual(
+      expect.objectContaining({
+        taskId: 't1',
+        localUri: 'file://a.jpg',
+        source: 'camera',
+        status: 'queued',
+      }),
+    );
+    expect(state.currentIndex).toBe(0);
+  });
+
+  it('updateItemStatus/updateItemTags mutate only the targeted item', () => {
+    useWardrobeBatchStore.getState().initBatch([
+      { taskId: 't1', localUri: 'file://a.jpg', source: 'camera' },
+      { taskId: 't2', localUri: 'file://b.jpg', source: 'camera' },
+    ]);
+
+    useWardrobeBatchStore
+      .getState()
+      .updateItemStatus('t1', 'tagging', { itemId: 'item-1' });
+
+    let state = useWardrobeBatchStore.getState();
+    expect(state.items[0].status).toBe('tagging');
+    expect(state.items[0].itemId).toBe('item-1');
+    expect(state.items[1].status).toBe('queued');
+
+    const tags = {
+      category: 'ethnic_kurta' as const,
+      subcategory: null,
+      colorPrimary: null,
+      colorSecondary: null,
+      pattern: null,
+      fabric: null,
+      occasionTags: [],
+      seasonTags: [],
+      confidence: 0.9,
+      contentFlag: 'ok' as const,
+      containsPerson: false,
+    };
+    useWardrobeBatchStore.getState().updateItemTags('t1', tags);
+    state = useWardrobeBatchStore.getState();
+    expect(state.items[0].tags).toEqual(tags);
+    expect(state.items[1].tags).toBeUndefined();
+  });
+
+  it('advanceToNext increments currentIndex and is a no-op past the last item', () => {
+    useWardrobeBatchStore
+      .getState()
+      .initBatch([
+        { taskId: 't1', localUri: 'file://a.jpg', source: 'camera' },
+      ]);
+
+    useWardrobeBatchStore.getState().advanceToNext();
+    expect(useWardrobeBatchStore.getState().currentIndex).toBe(1);
+
+    useWardrobeBatchStore.getState().advanceToNext();
+    expect(useWardrobeBatchStore.getState().currentIndex).toBe(1);
+  });
+
+  it('reset clears items back to empty and currentIndex to 0', () => {
+    useWardrobeBatchStore
+      .getState()
+      .initBatch([
+        { taskId: 't1', localUri: 'file://a.jpg', source: 'camera' },
+      ]);
+    useWardrobeBatchStore.getState().advanceToNext();
+
+    useWardrobeBatchStore.getState().reset();
+
+    const state = useWardrobeBatchStore.getState();
+    expect(state.items).toEqual([]);
+    expect(state.currentIndex).toBe(0);
   });
 });

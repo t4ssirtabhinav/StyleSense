@@ -56,3 +56,15 @@ class R2StorageClient:
 
     def put_object_bytes(self, key: str, data: bytes, content_type: str) -> None:
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
+
+    def generate_presigned_get_url(self, key: str, expiry_seconds: int) -> str:
+        """SS-013's read-path (`GET /wardrobe/items/{id}/image-url`) --
+        boto3's `generate_presigned_url` is a local signature computation,
+        not a network call, so this stays synchronous like the two methods
+        above (no `asyncio.to_thread` needed here either)."""
+        url: str = self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": key},
+            ExpiresIn=expiry_seconds,
+        )
+        return url

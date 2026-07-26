@@ -144,3 +144,16 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
             update_payload.update(tag_columns)
 
         await client.table("wardrobe_items").update(update_payload).eq("id", item_id).execute()
+
+    async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
+        client = await _client_for(jwt)
+        response = (
+            await client.table("wardrobe_items")
+            .select("image_url, image_clean_url, processing_status")
+            .eq("id", item_id)
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            return None
+        return cast(dict[str, Any], response.data[0])

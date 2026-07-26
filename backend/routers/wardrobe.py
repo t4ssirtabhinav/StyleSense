@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
@@ -126,6 +126,17 @@ class RemoveBgRequest(BaseModel):
         return value
 
 
+# SS-013: GET /wardrobe/items/{id}/image-url -- short-lived presigned GET,
+# same expiry window as SS-010's presigned PUT (PRESIGNED_URL_EXPIRY_SECONDS)
+# rather than inventing a new value.
+_IMAGE_URL_EXPIRY_SECONDS = 300
+
+
+class ImageUrlResponse(BaseModel):
+    url: str
+    source: Literal["clean", "original"]
+
+
 class TagRequest(BaseModel):
     item_id: str
 
@@ -215,3 +226,54 @@ async def tag_wardrobe_item(
     except Exception as exc:  # pragma: no cover - defensive catch-all
         logger.exception("wardrobe_tag_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="Failed to start tagging") from exc
+
+
+@router.get("/items/{item_id}/image-url", response_model=ImageUrlResponse)
+async def get_item_image_url(
+    item_id: str,
+    authorization: str | None = Header(default=None),
+    user_id: str = Depends(get_current_user_id),
+    repository: IWardrobeRepository = Depends(get_wardrobe_repository),
+    storage: R2StorageClient = Depends(get_r2_storage_client),
+) -> ImageUrlResponse:
+    """SS-013 (BL-046 read path, authorized 2026-07-25 -- see
+    docs/tickets/SS-013-design.md's Open questions #1). Returns a fresh
+    short-lived presigned GET for the item's `clean.png`, falling back to
+    `original.jpg` when `processing_status` never reached `bg_removed`
+    (BG-removal failed/pending doesn't block reviewing/tagging the item --
+    the two pipelines are independent per SS-012's own design)."""
+    jwt = _extract_bearer_token(authorization)
+
+    try:
+        uuid.UUID(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="item_id must be a valid UUID") from exc
+
+    try:
+        info = await repository.get_item_image_info(jwt=jwt, item_id=item_id)
+        if info is None:
+            # Covers both "doesn't exist" and "not owned by this user" (RLS
+            # already filtered the latter out) -- deliberately the same 404,
+            # not an ownership oracle.
+            raise HTTPException(status_code=404, detail="Wardrobe item not found")
+
+        processing_status = info.get("processing_status")
+        image_clean_url = info.get("image_clean_url")
+        image_url = info.get("image_url")
+
+        if processing_status == "bg_removed" and image_clean_url:
+            key = image_clean_url
+            source: Literal["clean", "original"] = "clean"
+        elif image_url:
+            key = image_url
+            source = "original"
+        else:
+            raise HTTPException(status_code=404, detail="Wardrobe item has no image yet")
+
+        url = storage.generate_presigned_get_url(key, _IMAGE_URL_EXPIRY_SECONDS)
+        return ImageUrlResponse(url=url, source=source)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        logger.exception("wardrobe_image_url_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to generate image URL") from exc

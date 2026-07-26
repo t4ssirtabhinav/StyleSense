@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { STALE_UPLOAD_THRESHOLD_MS } from './wardrobe.constants';
 import type {
+  BatchItemState,
+  BatchItemStatus,
+  GarmentTagsDraft,
   WardrobeUploadError,
   WardrobeUploadSource,
   WardrobeUploadStatus,
@@ -135,6 +138,78 @@ export const useWardrobeUploadStore = create<WardrobeUploadState>((set) => ({
       delete nextTasks[taskId];
       return { tasks: nextTasks };
     }),
+}));
+
+// --- SS-013: useWardrobeBatchStore ---
+// Kept separate from useWardrobeUploadStore above (per the design doc's
+// "Files to create/modify" note): the upload store's tasks end at
+// 'uploaded'/'success'; this store's tasks continue through
+// BG-removal/tagging/review/save -- a different lifecycle, not folded in.
+
+export interface WardrobeBatchSource {
+  taskId: string;
+  localUri: string;
+  source: WardrobeUploadSource;
+}
+
+export interface WardrobeBatchState {
+  items: BatchItemState[];
+  currentIndex: number;
+  initBatch: (sources: WardrobeBatchSource[]) => void;
+  updateItemStatus: (
+    taskId: string,
+    status: BatchItemStatus,
+    extra?: { itemId?: string; error?: string },
+  ) => void;
+  updateItemTags: (taskId: string, tags: GarmentTagsDraft) => void;
+  advanceToNext: () => void;
+  reset: () => void;
+}
+
+export const useWardrobeBatchStore = create<WardrobeBatchState>((set) => ({
+  items: [],
+  currentIndex: 0,
+
+  initBatch: (sources) =>
+    set({
+      items: sources.map((source) => ({
+        taskId: source.taskId,
+        localUri: source.localUri,
+        source: source.source,
+        status: 'queued' as BatchItemStatus,
+      })),
+      currentIndex: 0,
+    }),
+
+  updateItemStatus: (taskId, status, extra) =>
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.taskId === taskId
+          ? {
+              ...item,
+              status,
+              itemId: extra?.itemId ?? item.itemId,
+              error: extra?.error,
+            }
+          : item,
+      ),
+    })),
+
+  updateItemTags: (taskId, tags) =>
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.taskId === taskId ? { ...item, tags } : item,
+      ),
+    })),
+
+  // No-op past the last item -- batch-summary is a separate signal (see
+  // BatchSummaryToast), not an out-of-bounds index.
+  advanceToNext: () =>
+    set((state) => ({
+      currentIndex: Math.min(state.currentIndex + 1, state.items.length),
+    })),
+
+  reset: () => set({ items: [], currentIndex: 0 }),
 }));
 
 // Derived "stale" check (Edge Cases: app backgrounded/closed mid-upload) --
