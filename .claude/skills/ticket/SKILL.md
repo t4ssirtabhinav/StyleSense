@@ -16,6 +16,20 @@ Every ticket carries a `Risk:` field (`low` | `med` | `high`), set by the Archit
 
 If the Architect hasn't tagged a ticket yet (first run, ticket predates this field), treat it as **Full lane** until the Architect assigns a Risk — never guess a ticket *down* into the fast lane. A QA verdict of **BLOCKED** stops both lanes and loops back to Developer regardless of risk; and a **PASS PENDING MANUAL VERIFICATION** always pauses both lanes for the human (fast lane doesn't skip a genuinely-needed visual check — it just doesn't add gates a low-risk ticket never needed).
 
+## Model triage — picking the Architect's model before it runs
+
+The Architect's own `Risk:` verdict is written *during* its design pass — by the time it exists, the Architect is already running on whichever model you invoked it with. A subagent can't judge its own risk and then swap its own model mid-run. So model selection has to happen *before* invocation, from signals available in the raw ticket alone — not from the Architect's reasoning, which hasn't started yet.
+
+Before invoking the Architect, do a cheap scan (grep, not judgment) and pick its model:
+
+- **Already tagged?** If `docs/tickets/raw/SS-XXX.md`'s header already carries a `Risk:` field (set by `/new-feature` Stage 2), use it directly — skip the keyword scan.
+- **Keyword/path scan** — grep the raw ticket (and any ticket named in its `Depends on:`) for: `auth`, `OTP`, `session`, `JWT`, `login`, `RLS`, `policy`, `migration`, `schema`, `payment`, `razorpay`, `webhook`, `HMAC`, `secret`, `service_role`, `presigned`, `upload`, `credential`. A `Depends on:` ticket that itself ran `Risk: high` also counts as a hit.
+- **Any hit, or any doubt → classify up.** Invoke the Architect with an explicit `model: opus` override on the `Agent` tool call (this overrides `architect.md`'s own frontmatter for just this invocation — don't edit the file). No hit → invoke with the agent's default (`model: sonnet`, per its frontmatter — no override needed).
+
+This triage is provisional and mechanical — it only decides which model *reasons through* the design. The Architect's own `Risk:` line at the end of its pass remains the authoritative verdict that picks the ticket's lane (see "Two lanes" above); it can confirm, raise, or lower what triage guessed, and raising it costs nothing since the design is already done.
+
+**Escalation valve:** triage is deliberately conservative (any doubt → Opus) so this stays the rare path — but if the Architect, running on Sonnet because triage under-called it, concludes mid-design that the ticket is genuinely `Risk: high`, its own rules (`architect.md`) tell it to stop and say so instead of finishing the design. Re-invoke it with `model: opus` and let it redo the pass, same shape as `qa.md`'s existing Sonnet-escalation clause.
+
 ## 1. Determine current state
 
 - Read `docs/worklog/SS-XXX.md` if it exists. If it doesn't, this ticket hasn't started — begin at Architect.
@@ -25,7 +39,7 @@ If the Architect hasn't tagged a ticket yet (first run, ticket predates this fie
 
 ## 2. Run exactly one phase
 
-Invoke the matching subagent via the `Agent` tool with `subagent_type` set to `architect`, `developer`, `qa`, or `devops` (defined in `.claude/agents/`). Give it the ticket ID and point it at `docs/tickets/raw/SS-XXX.md` (and the design doc / worklog, once they exist).
+Invoke the matching subagent via the `Agent` tool with `subagent_type` set to `architect`, `developer`, `qa`, or `devops` (defined in `.claude/agents/`). Give it the ticket ID and point it at `docs/tickets/raw/SS-XXX.md` (and the design doc / worklog, once they exist). **If the phase is Architect, pick its model first** — see "Model triage" below.
 
 If `docs/worklog/SS-XXX.md` doesn't exist yet, create it first with a header (ticket title, branch name `feature/SS-XXX-slug`) before invoking the Architect.
 
