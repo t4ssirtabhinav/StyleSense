@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import { useRef, useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import { Linking } from 'react-native';
 import { Button, Card, IconButton, Text } from '../../../components/ui';
 import { MAX_BATCH_SIZE, ONE_ITEM_AT_A_TIME_TIP } from '../wardrobe.constants';
@@ -79,25 +79,28 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
     }
   };
 
+  // Camera and Gallery are independent capabilities -- a user who can't (or
+  // hasn't yet) granted camera access must still be able to reach Gallery
+  // (e.g. web camera access requires a secure context; a permanently-denied
+  // camera permission shouldn't strand the whole capture flow). Only the
+  // camera preview area itself is gated below; Gallery/tip/clamp UI always
+  // renders.
+  let cameraArea: ReactNode;
   if (cameraPermission && !cameraPermission.granted) {
-    if (!cameraPermission.canAskAgain) {
-      return (
-        <Card testID="camera-permission-denied" className="m-md">
-          <Text variant="body" className="mb-sm">
-            Camera access is needed to photograph your wardrobe items.
-          </Text>
-          <Button
-            variant="primary"
-            accessibilityLabel="Open Settings"
-            onPress={() => Linking.openSettings()}
-          >
-            Open Settings
-          </Button>
-        </Card>
-      );
-    }
-
-    return (
+    cameraArea = !cameraPermission.canAskAgain ? (
+      <Card testID="camera-permission-denied" className="m-md">
+        <Text variant="body" className="mb-sm">
+          Camera access is needed to photograph your wardrobe items.
+        </Text>
+        <Button
+          variant="primary"
+          accessibilityLabel="Open Settings"
+          onPress={() => Linking.openSettings()}
+        >
+          Open Settings
+        </Button>
+      </Card>
+    ) : (
       <Card testID="camera-permission-request" className="m-md">
         <Text variant="body" className="mb-sm">
           StyleSense needs camera access to photograph your wardrobe items.
@@ -111,16 +114,34 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
         </Button>
       </Card>
     );
+  } else {
+    cameraArea = (
+      <>
+        <CameraView
+          testID="camera-view"
+          ref={cameraRef}
+          style={{ flex: 1 }}
+          facing={facing}
+        />
+        <IconButton
+          icon="camera-reverse-outline"
+          accessibilityLabel="Flip camera"
+          onPress={handleFlip}
+        />
+        <Button
+          variant="primary"
+          accessibilityLabel="Capture photo"
+          onPress={handleCapture}
+        >
+          Capture
+        </Button>
+      </>
+    );
   }
 
   return (
     <>
-      <CameraView
-        testID="camera-view"
-        ref={cameraRef}
-        style={{ flex: 1 }}
-        facing={facing}
-      />
+      {cameraArea}
       <Text variant="caption" testID="one-item-tip-banner" className="p-sm">
         {ONE_ITEM_AT_A_TIME_TIP}
       </Text>
@@ -133,18 +154,6 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
           {clampMessage}
         </Text>
       ) : null}
-      <IconButton
-        icon="camera-reverse-outline"
-        accessibilityLabel="Flip camera"
-        onPress={handleFlip}
-      />
-      <Button
-        variant="primary"
-        accessibilityLabel="Capture photo"
-        onPress={handleCapture}
-      >
-        Capture
-      </Button>
       <Button
         variant="secondary"
         accessibilityLabel="Gallery"
