@@ -37,6 +37,7 @@ from services.gemini_rate_limiter import GeminiRateLimiter
 from services.rate_limiter import DailyRateLimiter
 from services.tag_cache import TagCache
 from services.wardrobe_bg_removal_service import WardrobeBgRemovalService
+from services.wardrobe_deletion_service import WardrobeDeletionService
 from services.wardrobe_tagging_service import WardrobeTaggingService
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,12 @@ def get_tag_cache() -> TagCache:
 
 def get_gemini_rate_limiter() -> GeminiRateLimiter:
     return _gemini_rate_limiter
+
+
+def get_deletion_service(
+    storage: R2StorageClient = Depends(get_r2_storage_client),
+) -> WardrobeDeletionService:
+    return WardrobeDeletionService(storage)
 
 
 def get_tagging_service(
@@ -359,3 +366,58 @@ async def get_bulk_item_image_urls(
     except Exception as exc:  # pragma: no cover - defensive catch-all
         logger.exception("wardrobe_bulk_image_urls_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="Failed to generate image URLs") from exc
+
+
+@router.delete("/items/{item_id}")
+async def delete_wardrobe_item(
+    item_id: str,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+    user_id: str = Depends(get_current_user_id),
+    repository: IWardrobeRepository = Depends(get_wardrobe_repository),
+    deletion_service: WardrobeDeletionService = Depends(get_deletion_service),
+) -> dict[str, Any]:
+    """SS-015 (resolves BL-068). Captures the item's three R2 keys *before*
+    deleting the DB row, then deletes the row, then fires the storage
+    cleanup asynchronously via BackgroundTasks -- in that order (DB row
+    first, storage second), so a request that dies partway through never
+    leaves an item that survives with its images gone. ON DELETE CASCADE on
+    wardrobe_item_wears' composite FK removes that item's wear-history rows
+    as part of the same DB delete."""
+    jwt = _extract_bearer_token(authorization)
+
+    try:
+        uuid.UUID(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="item_id must be a valid UUID") from exc
+
+    try:
+        info = await repository.get_item_image_info(jwt=jwt, item_id=item_id)
+        if info is None:
+            # Covers both "doesn't exist" and "not owned by this user" --
+            # same not-an-ownership-oracle posture as get_item_image_url.
+            raise HTTPException(status_code=404, detail="Wardrobe item not found")
+
+        deleted = await repository.delete_item(jwt=jwt, item_id=item_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Wardrobe item not found")
+
+        keys = [
+            key
+            for key in (
+                info.get("image_url"),
+                info.get("image_clean_url"),
+                info.get("thumbnail_url"),
+            )
+            if key
+        ]
+        background_tasks.add_task(
+            deletion_service.cleanup_storage, user_id=user_id, item_id=item_id, keys=keys
+        )
+
+        return {"status": "deleted", "item_id": item_id}
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        logger.exception("wardrobe_item_delete_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to delete wardrobe item") from exc

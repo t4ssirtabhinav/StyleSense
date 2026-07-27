@@ -92,6 +92,9 @@ class _FakeRepository(IWardrobeRepository):
     ) -> dict[str, dict[str, Any]]:
         return {}
 
+    async def delete_item(self, *, jwt: str, item_id: str) -> bool:
+        return True
+
 
 class _FakeStorage:
     def __init__(self, data: bytes = b"fake-original-bytes", fail: bool = False) -> None:

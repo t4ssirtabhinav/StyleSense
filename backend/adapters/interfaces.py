@@ -118,8 +118,12 @@ class IWardrobeRepository(ABC):
 
     @abstractmethod
     async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
-        """SELECT image_url, image_clean_url, processing_status ...
-        .eq('id', item_id).limit(1), scoped to the caller's own JWT (SS-013).
+        """SELECT image_url, image_clean_url, thumbnail_url,
+        processing_status ... .eq('id', item_id).limit(1), scoped to the
+        caller's own JWT (SS-013; ``thumbnail_url`` added by SS-015 so this
+        same method can double as the delete endpoint's "capture the R2
+        keys before deleting the row" read, rather than adding a near-
+        duplicate method).
 
         RLS's ``user_owns_wardrobe`` policy restricts visible rows to the
         caller's own -- a non-owned ``item_id`` returns 0 rows, identical to
@@ -141,4 +145,15 @@ class IWardrobeRepository(ABC):
         ``get_item_image_info`` above, not a per-id error. Keyed by ``id``
         (stringified) so the router can build ``BulkImageUrlsResponse.urls``
         directly from this dict."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def delete_item(self, *, jwt: str, item_id: str) -> bool:
+        """RLS-scoped ``.delete().eq('id', item_id)`` (SS-015). Returns
+        whether a row was actually removed (``True``) vs. matched nothing
+        (``False`` -- covers both "doesn't exist" and "not owned", same
+        "not an ownership oracle" posture as ``get_item_image_info``).
+        ``ON DELETE CASCADE`` on ``wardrobe_item_wears``' composite FK
+        removes that item's wear-history rows as part of the same delete,
+        no separate call needed."""
         raise NotImplementedError

@@ -3,6 +3,12 @@ import { Image } from 'expo-image';
 import { forwardRef, useState } from 'react';
 import type { ComponentProps } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import {
   AppBottomSheet,
   type AppBottomSheetRef,
@@ -10,13 +16,17 @@ import {
   Card,
   Text,
 } from '../../../components/ui';
+import { useAuthStore } from '../../auth/auth.store';
 import {
   OCCASION_BADGE_COLOR_MAP,
   WARDROBE_CATEGORIES,
+  WEAR_LOGGED_NO_PRICE_PREFIX,
+  WEAR_LOGGED_TODAY_MESSAGE,
+  WEAR_LOGGED_WITH_COST_PREFIX,
 } from '../wardrobe.constants';
 import {
   useDeleteWardrobeItem,
-  useMarkWardrobeItemWorn,
+  useLogWardrobeItemWear,
   useToggleWardrobeItemFavourite,
   useWardrobeItemImageUrlQuery,
 } from '../wardrobe.queries';
@@ -24,15 +34,21 @@ import type {
   GarmentTagsDraft,
   OccasionType,
   SeasonTag,
+  WardrobeItemDetailsDraft,
   WardrobeItemRow,
 } from '../wardrobe.types';
 import { EditItemTagsForm } from './EditItemTagsForm';
+import { istTodayIso } from './WearDateField';
+import { WearHistorySection } from './WearHistorySection';
+import { WearLoggedToast } from './WearLoggedToast';
 
 export interface ItemDetailSheetProps {
   item: WardrobeItemRow | null;
   jwt: string | undefined;
   onDismiss?: () => void;
 }
+
+type ItemDetailSheetMode = 'view' | 'edit' | 'wears';
 
 const CATEGORY_LABEL_BY_VALUE: Record<string, string> = Object.fromEntries(
   WARDROBE_CATEGORIES.map((option) => [option.value, option.label]),
@@ -84,6 +100,32 @@ function toEditableDraft(item: WardrobeItemRow): GarmentTagsDraft {
   };
 }
 
+// SS-015: brand/purchase_price/purchase_date/user_notes -- the fields
+// SS-014's EditItemTagsForm never built.
+function toEditableDetailsDraft(
+  item: WardrobeItemRow,
+): WardrobeItemDetailsDraft {
+  return {
+    brand: item.brand,
+    purchasePrice: item.purchase_price,
+    purchaseDate: item.purchase_date,
+    userNotes: item.user_notes,
+  };
+}
+
+// Wear-logged toast copy (design doc's "Concrete values"): never renders
+// ₹null/₹NaN when cost_per_wear is null (purchase_price unset).
+function buildWearLoggedMessage(
+  costPerWear: number | null,
+  wornOn: string,
+): string {
+  if (costPerWear == null) {
+    const dateLabel = formatLastWornDate(wornOn) ?? wornOn;
+    return `${WEAR_LOGGED_NO_PRICE_PREFIX} ${dateLabel}`;
+  }
+  return `${WEAR_LOGGED_WITH_COST_PREFIX} ${formatIndianCurrency(costPerWear)}`;
+}
+
 interface ActionTileProps {
   icon: ComponentProps<typeof Ionicons>['name'];
   label: string;
@@ -98,6 +140,9 @@ interface ActionTileProps {
    * Button.tsx already uses for its own variants. */
   textClassName: string;
   iconColor: string;
+  /** SS-015: optional reanimated style applied to the icon (the favourite
+   * tile's heart-bounce) -- undefined for every other tile. */
+  animatedIconStyle?: ReturnType<typeof useAnimatedStyle>;
 }
 
 // SS-014 fix pass (2026-07-27) -- manual-verification finding #3: the 2x2
@@ -117,6 +162,7 @@ function ActionTile({
   bgClassName,
   textClassName,
   iconColor,
+  animatedIconStyle,
 }: ActionTileProps) {
   return (
     <Pressable
@@ -131,6 +177,10 @@ function ActionTile({
     >
       {loading ? (
         <ActivityIndicator testID="action-tile-spinner" color={iconColor} />
+      ) : animatedIconStyle ? (
+        <Animated.View style={animatedIconStyle}>
+          <Ionicons name={icon} size={20} color={iconColor} />
+        </Animated.View>
       ) : (
         <Ionicons name={icon} size={20} color={iconColor} />
       )}
@@ -141,10 +191,10 @@ function ActionTile({
   );
 }
 
-// AppBottomSheet, view/edit mode toggle -- per docs/tickets/
-// SS-014-design.md's Files section. Fetches the full clean/original image
-// via useWardrobeItemImageUrlQuery only when the sheet actually opens (an
-// item is set), not the grid's bulk thumbnail.
+// AppBottomSheet, view/edit/wears mode toggle -- per docs/tickets/
+// SS-014-design.md's + SS-015-design.md's Files sections. Fetches the full
+// clean/original image via useWardrobeItemImageUrlQuery only when the sheet
+// actually opens (an item is set), not the grid's bulk thumbnail.
 //
 // SS-014 fix pass (2026-07-27), manual-verification findings #3/#4:
 // - Added a header (handle + item title) so the sheet always identifies
@@ -161,17 +211,34 @@ function ActionTile({
 //   (finding #4) -- the heart icon's fill state alone carries the meaning;
 //   the label stays the neutral "Favourite" in both states (only the
 //   accessibilityLabel toggles, for screen readers).
+//
+// SS-015:
+// - "Mark Worn" now logs a dated wear row (useLogWardrobeItemWear) instead
+//   of a client-computed wear_count + 1 -- see BL-071. Shows an in-sheet
+//   toast with the trigger-recomputed cost per wear.
+// - The "Worn N× / Last worn: …" stats block is now a pressable row that
+//   opens the new 'wears' mode (WearHistorySection).
+// - Delete passes jwt through to useDeleteWardrobeItem (now routed via
+//   DELETE /wardrobe/items/{id}, not a direct Supabase delete).
+// - Favourite toggle gains a heart-bounce animation on press.
 export const ItemDetailSheet = forwardRef<
   AppBottomSheetRef,
   ItemDetailSheetProps
 >(({ item, jwt, onDismiss }, ref) => {
-  const [mode, setMode] = useState<'view' | 'edit'>('view');
+  const [mode, setMode] = useState<ItemDetailSheetMode>('view');
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const userId = useAuthStore((state) => state.session?.user.id);
 
   const imageUrlQuery = useWardrobeItemImageUrlQuery(item?.id, jwt);
   const toggleFavourite = useToggleWardrobeItemFavourite();
-  const markWorn = useMarkWardrobeItemWorn();
+  const logWear = useLogWardrobeItemWear();
   const deleteItem = useDeleteWardrobeItem();
+
+  const heartScale = useSharedValue(1);
+  const heartAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: heartScale.value }],
+  }));
 
   if (!item) {
     return (
@@ -182,6 +249,10 @@ export const ItemDetailSheet = forwardRef<
   }
 
   const handleToggleFavourite = () => {
+    heartScale.value = withSequence(
+      withTiming(1.35, { duration: 100 }),
+      withTiming(1, { duration: 120 }),
+    );
     toggleFavourite.mutate({
       itemId: item.id,
       isFavourite: !item.is_favourite,
@@ -189,19 +260,33 @@ export const ItemDetailSheet = forwardRef<
   };
 
   const handleMarkWorn = () => {
-    markWorn.mutate({
-      itemId: item.id,
-      nextWearCount: (item.wear_count ?? 0) + 1,
-    });
+    if (!userId) {
+      return;
+    }
+    logWear.mutate(
+      { itemId: item.id, userId, wornOn: istTodayIso() },
+      {
+        onSuccess: (result) => {
+          setToastMessage(
+            result.alreadyLogged
+              ? WEAR_LOGGED_TODAY_MESSAGE
+              : buildWearLoggedMessage(result.costPerWear, result.wornOn),
+          );
+        },
+      },
+    );
   };
 
   const handleDelete = () => {
+    if (!jwt) {
+      return;
+    }
     if (!deleteArmed) {
       setDeleteArmed(true);
       return;
     }
     deleteItem.mutate(
-      { itemId: item.id },
+      { itemId: item.id, jwt },
       {
         onSuccess: () => {
           setDeleteArmed(false);
@@ -227,6 +312,7 @@ export const ItemDetailSheet = forwardRef<
       onDismiss={() => {
         setMode('view');
         setDeleteArmed(false);
+        setToastMessage(null);
         onDismiss?.();
       }}
     >
@@ -238,12 +324,26 @@ export const ItemDetailSheet = forwardRef<
         <Text variant="heading">{categoryLabel(item)}</Text>
       </View>
 
+      {toastMessage ? (
+        <WearLoggedToast
+          message={toastMessage}
+          onDismiss={() => setToastMessage(null)}
+        />
+      ) : null}
+
       {mode === 'edit' ? (
         <EditItemTagsForm
           itemId={item.id}
           initialTags={toEditableDraft(item)}
+          initialDetails={toEditableDetailsDraft(item)}
           onSaved={handleSaved}
           onCancel={() => setMode('view')}
+        />
+      ) : mode === 'wears' ? (
+        <WearHistorySection
+          itemId={item.id}
+          purchaseDate={item.purchase_date}
+          onBack={() => setMode('view')}
         />
       ) : (
         <>
@@ -266,6 +366,9 @@ export const ItemDetailSheet = forwardRef<
             {item.subcategory ? (
               <Text variant="body">{item.subcategory}</Text>
             ) : null}
+            {item.brand ? (
+              <Text variant="caption">{`Brand: ${item.brand}`}</Text>
+            ) : null}
             {item.color_primary ? (
               <Text variant="caption">{`Colour: ${item.color_primary}${
                 item.color_secondary ? `, ${item.color_secondary}` : ''
@@ -276,6 +379,9 @@ export const ItemDetailSheet = forwardRef<
             ) : null}
             {item.fabric ? (
               <Text variant="caption">{`Fabric: ${item.fabric}`}</Text>
+            ) : null}
+            {item.user_notes ? (
+              <Text variant="caption">{item.user_notes}</Text>
             ) : null}
           </View>
 
@@ -297,7 +403,13 @@ export const ItemDetailSheet = forwardRef<
             ))}
           </View>
 
-          <View className="mb-md gap-xs">
+          <Pressable
+            testID="item-detail-wear-stats"
+            accessibilityRole="button"
+            accessibilityLabel="View wear history"
+            onPress={() => setMode('wears')}
+            className="mb-md gap-xs"
+          >
             <Text variant="caption">{`Worn ${item.wear_count ?? 0}×`}</Text>
             {lastWornDate ? (
               <Text variant="caption">{`Last worn: ${lastWornDate}`}</Text>
@@ -311,7 +423,7 @@ export const ItemDetailSheet = forwardRef<
                 }`}
               </Text>
             ) : null}
-          </View>
+          </Pressable>
 
           <View className="gap-sm">
             <View className="flex-row gap-sm">
@@ -328,6 +440,7 @@ export const ItemDetailSheet = forwardRef<
                 bgClassName="bg-rose"
                 textClassName="text-white"
                 iconColor="#FFFFFF"
+                animatedIconStyle={heartAnimatedStyle}
               />
               <ActionTile
                 icon="create-outline"
@@ -345,7 +458,7 @@ export const ItemDetailSheet = forwardRef<
                 label="Mark Worn"
                 accessibilityLabel="Mark Worn"
                 onPress={handleMarkWorn}
-                loading={markWorn.isPending}
+                loading={logWear.isPending}
                 bgClassName="bg-emerald"
                 textClassName="text-white"
                 iconColor="#FFFFFF"

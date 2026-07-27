@@ -50,6 +50,39 @@ def test_put_object_bytes_calls_put_object_with_exact_bucket_key_and_content_typ
     )
 
 
+def test_delete_objects_calls_delete_objects_with_the_correct_delete_shape_and_bucket() -> None:
+    fake_client = MagicMock()
+
+    storage = R2StorageClient(bucket="stylesense-media", client=fake_client)
+    storage.delete_objects(
+        [
+            "wardrobe/user-1/item-1/original.jpg",
+            "wardrobe/user-1/item-1/clean.png",
+            "wardrobe/user-1/item-1/thumbnail.jpg",
+        ]
+    )
+
+    fake_client.delete_objects.assert_called_once_with(
+        Bucket="stylesense-media",
+        Delete={
+            "Objects": [
+                {"Key": "wardrobe/user-1/item-1/original.jpg"},
+                {"Key": "wardrobe/user-1/item-1/clean.png"},
+                {"Key": "wardrobe/user-1/item-1/thumbnail.jpg"},
+            ]
+        },
+    )
+
+
+def test_delete_objects_is_a_noop_on_an_empty_list() -> None:
+    fake_client = MagicMock()
+
+    storage = R2StorageClient(bucket="stylesense-media", client=fake_client)
+    storage.delete_objects([])
+
+    fake_client.delete_objects.assert_not_called()
+
+
 def test_constructor_uses_injected_bucket_and_client_without_touching_env(
     monkeypatch: Any,
 ) -> None:

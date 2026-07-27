@@ -38,6 +38,9 @@ class _FakeQueryBuilder:
     def update(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
         return self._record("update", *args, **kwargs)
 
+    def delete(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
+        return self._record("delete", *args, **kwargs)
+
     def select(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
         return self._record("select", *args, **kwargs)
 
@@ -355,3 +358,67 @@ async def test_get_items_image_info_bulk_returns_empty_dict_when_no_rows_found(
         result = await repo.get_items_image_info_bulk(jwt="caller-jwt", item_ids=["item-1"])
 
     assert result == {}
+
+
+# --- SS-015: delete_item / get_item_image_info's thumbnail_url addition ----
+
+
+async def test_get_item_image_info_selects_thumbnail_url_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(
+        response_data=[
+            {
+                "image_url": "wardrobe/user-1/item-1/original.jpg",
+                "image_clean_url": "wardrobe/user-1/item-1/clean.png",
+                "thumbnail_url": "wardrobe/user-1/item-1/thumbnail.jpg",
+                "processing_status": "bg_removed",
+            }
+        ]
+    )
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        info = await repo.get_item_image_info(jwt="caller-jwt", item_id="item-1")
+
+    assert info is not None
+    assert info["thumbnail_url"] == "wardrobe/user-1/item-1/thumbnail.jpg"
+    select_call = next(c for c in fake_client.calls if c[0] == "select")
+    assert "thumbnail_url" in select_call[1][0]
+
+
+async def test_delete_item_issues_rls_scoped_delete_keyed_by_id_and_returns_true_when_a_row_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[{"id": "item-1"}])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        deleted = await repo.delete_item(jwt="caller-jwt", item_id="item-1")
+
+    assert deleted is True
+    assert fake_client.postgrest.auth_calls == ["caller-jwt"]
+    assert fake_client.table_names == ["wardrobe_items"]
+    eq_call = next(c for c in fake_client.calls if c[0] == "eq")
+    assert eq_call[1] == ("id", "item-1")
+
+
+async def test_delete_item_returns_false_when_no_row_matched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        deleted = await repo.delete_item(jwt="caller-jwt", item_id="item-1")
+
+    assert deleted is False

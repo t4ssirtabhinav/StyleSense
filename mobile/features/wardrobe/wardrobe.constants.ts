@@ -235,3 +235,24 @@ export const GRID_COLUMN_BREAKPOINTS: ReadonlyArray<{
   { minWidth: 480, columns: 3 },
 ];
 export const GRID_DEFAULT_COLUMNS = 2;
+
+// --- SS-015 (Wardrobe Item Edit, Delete & Mark Worn) ---
+// Per docs/tickets/SS-015-design.md's "Concrete values" section --
+// transcribed verbatim (copy strings) plus mechanical additions (limits).
+
+export const MAX_USER_NOTES_LENGTH = 500;
+export const WEAR_TOAST_DURATION_MS = 3000;
+
+export const WEAR_LOGGED_TODAY_MESSAGE = 'Already logged for today';
+export const WEAR_LOGGED_NO_PRICE_PREFIX = 'Wear logged for';
+export const WEAR_LOGGED_WITH_COST_PREFIX = 'Outfit logged! Cost per wear:';
+
+export const WEAR_DUPLICATE_DATE_MESSAGE =
+  'A wear is already logged for that date';
+export const WEAR_FUTURE_DATE_MESSAGE = "You can't log a wear in the future";
+export const WEAR_BEFORE_PURCHASE_DATE_MESSAGE =
+  "You can't log a wear before the item's purchase date";
+export const WEAR_INVALID_DATE_MESSAGE = 'Enter a valid date as DD/MM/YYYY';
+
+export const NO_WEARS_HEADING = 'Never worn';
+export const NO_WEARS_SUBTEXT = 'Log a wear to start tracking cost per wear.';
