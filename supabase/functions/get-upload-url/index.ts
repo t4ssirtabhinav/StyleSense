@@ -50,10 +50,36 @@ export const WARDROBE_LIMIT_MESSAGE =
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Bearer-token API (no cookies), so a wildcard origin doesn't expose ambient
+// credentials the way it would for a cookie-authenticated endpoint -- same
+// posture as Supabase's own documented CORS example. Required because the
+// platform-level `verify_jwt` gate (see config.toml) would otherwise reject
+// the browser's unauthenticated OPTIONS preflight before this code ever
+// runs -- [VERIFIED 2026-07-26, supabase.com/docs/guides/functions/cors +
+// github.com/orgs/supabase/discussions/38832] -- so `verify_jwt` was set to
+// `false` for this function and this file now does its own full CORS +
+// auth handling (auth.getUser() below was already the real security
+// boundary; the platform gate was redundant, not the only check).
+//
+// Allow-Headers matches the exact set the installed supabase-js SDK attaches
+// via `supabase.functions.invoke()` (the mobile client's real call path, not
+// a raw fetch) -- [VERIFIED 2026-07-26 against the installed
+// mobile/node_modules/@supabase/supabase-js/src/cors.ts's own
+// `SUPABASE_HEADERS`/`corsHeaders` export] -- copied verbatim rather than
+// hand-picking a subset, since a first attempt with only
+// authorization/content-type still 2nd-round-failed on a missing
+// `x-client-info` (the SDK also sends `apikey`/`x-retry-count`).
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-retry-count",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
   });
 }
 
@@ -66,6 +92,18 @@ function buildR2Client(): S3Client {
       accessKeyId: Deno.env.get("CLOUDFLARE_R2_ACCESS_KEY")!,
       secretAccessKey: Deno.env.get("CLOUDFLARE_R2_SECRET_KEY")!,
     },
+    // Disables the AWS SDK's default "flexible checksums" behaviour, which
+    // (since ~v3.729) auto-adds a CRC32 to every PutObject. For a *presigned*
+    // URL that is actively harmful: the checksum is computed at signing time,
+    // when there is no body yet, so the signed URL carries
+    // `x-amz-checksum-crc32=AAAAAA==` -- the CRC32 of zero bytes -- which then
+    // cannot match the real bytes the browser PUTs. Observed live in a real
+    // signed URL 2026-07-27; a known AWS SDK issue for presigned PUTs
+    // ([VERIFIED 2026-07-27, github.com/aws/aws-sdk-js-v3 issues #4849/#6810 --
+    // "integrity protections can be disabled by setting the config flag to
+    // WHEN_REQUIRED"]). R2 also lists checksum algorithms as an unimplemented
+    // PutBucketCors/PutObject feature, so nothing here relies on them.
+    requestChecksumCalculation: "WHEN_REQUIRED",
   });
 }
 
@@ -94,6 +132,12 @@ export async function handleRequest(
   req: Request,
   deps: HandleRequestDeps = defaultDeps,
 ): Promise<Response> {
+  // Preflight must be answered before any auth check -- browsers never send
+  // Authorization (or any app header) on the OPTIONS preflight itself.
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
