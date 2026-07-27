@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import {
   useOnboardingCompletedQuery,
+  usePlanTierQuery,
   useSendOtpMutation,
   useVerifyOtpMutation,
 } from '../../../features/auth/auth.queries';
@@ -12,6 +13,7 @@ jest.mock('../../../features/auth/auth.service', () => ({
   sendOtp: jest.fn(),
   verifyOtp: jest.fn(),
   checkOnboardingCompleted: jest.fn(),
+  fetchUserPlanTier: jest.fn(),
 }));
 
 function createWrapper() {
@@ -110,5 +112,31 @@ describe('useOnboardingCompletedQuery', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(authService.checkOnboardingCompleted).toHaveBeenCalledWith('user-1');
     expect(result.current.data).toBe(true);
+  });
+});
+
+describe('usePlanTierQuery', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls fetchUserPlanTier keyed by userId', async () => {
+    (authService.fetchUserPlanTier as jest.Mock).mockResolvedValue('free');
+    const { result } = await renderHook(() => usePlanTierQuery('user-1'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(authService.fetchUserPlanTier).toHaveBeenCalledWith('user-1');
+    expect(result.current.data).toBe('free');
+  });
+
+  it('does not fire the query when userId is undefined', async () => {
+    const { result } = await renderHook(() => usePlanTierQuery(undefined), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(authService.fetchUserPlanTier).not.toHaveBeenCalled();
   });
 });

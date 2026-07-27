@@ -5,10 +5,16 @@ import {
 import {
   compressImageForUpload,
   computeBatchDedupeHash,
+  deleteWardrobeItem,
+  fetchWardrobeItemCount,
+  fetchWardrobeItemImageUrls,
+  fetchWardrobeItems,
+  markWardrobeItemWorn,
   removeBackground,
   requestUploadUrl,
   subscribeToItemUpdates,
   tagItem,
+  toggleWardrobeItemFavourite,
   uploadToR2WithProgress,
 } from '../../../features/wardrobe/wardrobe.service';
 
@@ -29,11 +35,22 @@ const mockOn = jest.fn();
 const mockSubscribe = jest.fn();
 const mockChannel = jest.fn();
 const mockRemoveChannel = jest.fn();
+const mockOrder = jest.fn();
+const mockSelect = jest.fn();
+const mockEq = jest.fn();
+const mockUpdate = jest.fn((..._args: unknown[]) => ({ eq: mockEq }));
+const mockDelete = jest.fn((..._args: unknown[]) => ({ eq: mockEq }));
+const mockFrom = jest.fn((..._args: unknown[]) => ({
+  select: mockSelect,
+  update: mockUpdate,
+  delete: mockDelete,
+}));
 jest.mock('../../../lib/supabase', () => ({
   supabase: {
     functions: { invoke: (...args: unknown[]) => mockInvoke(...args) },
     channel: (...args: unknown[]) => mockChannel(...args),
     removeChannel: (...args: unknown[]) => mockRemoveChannel(...args),
+    from: (...args: unknown[]) => mockFrom(...args),
   },
 }));
 
@@ -361,5 +378,149 @@ describe('subscribeToItemUpdates', () => {
     unsubscribe();
 
     expect(mockRemoveChannel).toHaveBeenCalledWith('the-channel');
+  });
+});
+
+// --- SS-014 additions --------------------------------------------------
+
+describe('fetchWardrobeItems', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('selects * from wardrobe_items ordered by created_at descending', async () => {
+    const rows = [{ id: 'item-1' }, { id: 'item-2' }];
+    mockSelect.mockReturnValue({ order: mockOrder });
+    mockOrder.mockResolvedValue({ data: rows, error: null });
+
+    const result = await fetchWardrobeItems();
+
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockSelect).toHaveBeenCalledWith('*');
+    expect(mockOrder).toHaveBeenCalledWith('created_at', { ascending: false });
+    expect(result).toEqual(rows);
+  });
+
+  it('throws the raw Supabase error on failure', async () => {
+    mockSelect.mockReturnValue({ order: mockOrder });
+    mockOrder.mockResolvedValue({ data: null, error: new Error('boom') });
+
+    await expect(fetchWardrobeItems()).rejects.toThrow('boom');
+  });
+});
+
+describe('fetchWardrobeItemCount', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('selects id with count:exact, head:true from wardrobe_items', async () => {
+    mockSelect.mockResolvedValue({ count: 7, error: null });
+
+    const result = await fetchWardrobeItemCount();
+
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockSelect).toHaveBeenCalledWith('id', {
+      count: 'exact',
+      head: true,
+    });
+    expect(result).toBe(7);
+  });
+
+  it('returns 0 when count is null', async () => {
+    mockSelect.mockResolvedValue({ count: null, error: null });
+
+    const result = await fetchWardrobeItemCount();
+
+    expect(result).toBe(0);
+  });
+});
+
+describe('fetchWardrobeItemImageUrls', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // biome-ignore lint/suspicious/noExplicitAny: test-only global stub
+    (global as any).fetch = jest.fn();
+  });
+
+  it('POSTs to /wardrobe/items/image-urls with { item_ids } and returns the urls map', async () => {
+    const urls = {
+      'item-1': { url: 'https://signed/1', source: 'thumbnail' as const },
+    };
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ urls }),
+    });
+
+    const result = await fetchWardrobeItemImageUrls(['item-1'], 'jwt-token');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/wardrobe/items/image-urls'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer jwt-token' }),
+        body: JSON.stringify({ item_ids: ['item-1'] }),
+      }),
+    );
+    expect(result).toEqual(urls);
+  });
+
+  it('throws when the response is not ok', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false });
+
+    await expect(
+      fetchWardrobeItemImageUrls(['item-1'], 'jwt-token'),
+    ).rejects.toEqual(expect.objectContaining({ code: 'unknown' }));
+  });
+});
+
+describe('toggleWardrobeItemFavourite', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEq.mockResolvedValue({ error: null });
+  });
+
+  it('updates is_favourite for the given item id', async () => {
+    await toggleWardrobeItemFavourite('item-1', true);
+
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockUpdate).toHaveBeenCalledWith({ is_favourite: true });
+    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+  });
+});
+
+describe('markWardrobeItemWorn', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEq.mockResolvedValue({ error: null });
+  });
+
+  it('writes the caller-supplied wear_count and a fresh last_worn_at', async () => {
+    await markWardrobeItemWorn('item-1', 5);
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ wear_count: 5 }),
+    );
+    const payload = mockUpdate.mock.calls[0][0] as {
+      wear_count: number;
+      last_worn_at: string;
+    };
+    expect(typeof payload.last_worn_at).toBe('string');
+    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+  });
+});
+
+describe('deleteWardrobeItem', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEq.mockResolvedValue({ error: null });
+  });
+
+  it('deletes the row scoped to the given item id', async () => {
+    await deleteWardrobeItem('item-1');
+
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockDelete).toHaveBeenCalled();
+    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
   });
 });

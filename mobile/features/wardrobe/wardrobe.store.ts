@@ -3,7 +3,12 @@ import { STALE_UPLOAD_THRESHOLD_MS } from './wardrobe.constants';
 import type {
   BatchItemState,
   BatchItemStatus,
+  CategoryFilterValue,
   GarmentTagsDraft,
+  OccasionType,
+  SeasonTag,
+  WardrobeFilterState,
+  WardrobeSortOption,
   WardrobeUploadError,
   WardrobeUploadSource,
   WardrobeUploadStatus,
@@ -211,6 +216,44 @@ export const useWardrobeBatchStore = create<WardrobeBatchState>((set) => ({
 
   reset: () => set({ items: [], currentIndex: 0 }),
 }));
+
+// --- SS-014: useWardrobeFilterStore ---
+// Kept separate from useWardrobeUploadStore/useWardrobeBatchStore above (per
+// the design doc's "Files to create/modify" note): this store's state
+// persists across the whole grid-viewing session, not per-upload-task -- a
+// different lifecycle, not folded in.
+
+const DEFAULT_FILTER_STATE: WardrobeFilterState = {
+  categoryFilter: 'all',
+  occasionFilter: 'all',
+  seasonFilter: 'all',
+  colorFilter: 'all',
+  search: '',
+  sort: 'newest',
+};
+
+export interface WardrobeFilterStoreState extends WardrobeFilterState {
+  setCategoryFilter: (value: CategoryFilterValue) => void;
+  setOccasionFilter: (value: OccasionType | 'all') => void;
+  setSeasonFilter: (value: SeasonTag | 'all') => void;
+  setColorFilter: (value: string | 'all') => void;
+  setSearch: (value: string) => void;
+  setSort: (value: WardrobeSortOption) => void;
+  reset: () => void;
+}
+
+export const useWardrobeFilterStore = create<WardrobeFilterStoreState>(
+  (set) => ({
+    ...DEFAULT_FILTER_STATE,
+    setCategoryFilter: (categoryFilter) => set({ categoryFilter }),
+    setOccasionFilter: (occasionFilter) => set({ occasionFilter }),
+    setSeasonFilter: (seasonFilter) => set({ seasonFilter }),
+    setColorFilter: (colorFilter) => set({ colorFilter }),
+    setSearch: (search) => set({ search }),
+    setSort: (sort) => set({ sort }),
+    reset: () => set({ ...DEFAULT_FILTER_STATE }),
+  }),
+);
 
 // Derived "stale" check (Edge Cases: app backgrounded/closed mid-upload) --
 // exposed as a standalone helper rather than store state since it depends on

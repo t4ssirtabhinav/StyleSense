@@ -128,3 +128,17 @@ class IWardrobeRepository(ABC):
         to a flat 404, never distinguishing "not yours" from "doesn't
         exist" (avoids turning this endpoint into an ownership oracle)."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_items_image_info_bulk(
+        self, *, jwt: str, item_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """SELECT id, image_url, image_clean_url, thumbnail_url,
+        processing_status ... .in_('id', item_ids), scoped to the caller's
+        own JWT (SS-014). RLS's ``user_owns_wardrobe`` policy already filters
+        out ids the caller doesn't own -- those ids are simply absent from
+        the returned dict, same "not an ownership oracle" posture as
+        ``get_item_image_info`` above, not a per-id error. Keyed by ``id``
+        (stringified) so the router can build ``BulkImageUrlsResponse.urls``
+        directly from this dict."""
+        raise NotImplementedError

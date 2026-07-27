@@ -56,10 +56,12 @@ class _FakeRepository(IWardrobeRepository):
         *,
         exists: bool = True,
         image_info: dict[str, Any] | None = None,
+        bulk_image_info: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.plan_tier = plan_tier
         self.exists = exists
         self.image_info = image_info
+        self.bulk_image_info = bulk_image_info
         self.upserts: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
         self.tagging_updates: list[dict[str, Any]] = []
@@ -105,6 +107,12 @@ class _FakeRepository(IWardrobeRepository):
     # SS-013
     async def get_item_image_info(self, *, jwt: str, item_id: str) -> dict[str, Any] | None:
         return self.image_info
+
+    # SS-014
+    async def get_items_image_info_bulk(
+        self, *, jwt: str, item_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        return self.bulk_image_info or {}
 
 
 class _FakeRateLimiter:
@@ -504,3 +512,104 @@ def test_image_url_no_image_at_all_returns_404() -> None:
     )
 
     assert response.status_code == 404
+
+
+# --- SS-014: POST /wardrobe/items/image-urls -------------------------------
+
+VALID_ITEM_ID_2 = "22222222-2222-2222-2222-222222222222"
+VALID_ITEM_ID_3 = "33333333-3333-3333-3333-333333333333"
+
+
+def _override_bulk_image_urls_infra(repository: _FakeRepository) -> None:
+    app.dependency_overrides[get_wardrobe_repository] = lambda: repository
+    app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
+
+
+def test_bulk_image_urls_missing_authorization_header_returns_401() -> None:
+    response = client.post("/wardrobe/items/image-urls", json={"item_ids": [VALID_ITEM_ID]})
+
+    assert response.status_code == 401
+
+
+def test_bulk_image_urls_rejects_more_than_200_ids_with_422() -> None:
+    repository = _FakeRepository()
+    _override_bulk_image_urls_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    too_many_ids = [f"11111111-1111-1111-1111-{i:012d}" for i in range(201)]
+    response = client.post(
+        "/wardrobe/items/image-urls",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_ids": too_many_ids},
+    )
+
+    assert response.status_code == 422
+
+
+def test_bulk_image_urls_rejects_empty_list_with_422() -> None:
+    repository = _FakeRepository()
+    _override_bulk_image_urls_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.post(
+        "/wardrobe/items/image-urls",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_ids": []},
+    )
+
+    assert response.status_code == 422
+
+
+def test_bulk_image_urls_rejects_malformed_uuid_with_422() -> None:
+    repository = _FakeRepository()
+    _override_bulk_image_urls_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.post(
+        "/wardrobe/items/image-urls",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_ids": ["not-a-uuid"]},
+    )
+
+    assert response.status_code == 422
+
+
+def test_bulk_image_urls_returns_urls_only_for_owned_or_found_ids() -> None:
+    # VALID_ITEM_ID_3 is requested but absent from the repository's bulk
+    # response (not owned / not found) -- must be silently omitted, not a
+    # per-id error (mirrors the single-item endpoint's "not an ownership
+    # oracle" precedent).
+    repository = _FakeRepository(
+        bulk_image_info={
+            VALID_ITEM_ID: {
+                "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+                "image_clean_url": None,
+                "thumbnail_url": f"wardrobe/user-1/{VALID_ITEM_ID}/thumbnail.jpg",
+                "processing_status": "bg_removed",
+            },
+            VALID_ITEM_ID_2: {
+                "image_url": f"wardrobe/user-1/{VALID_ITEM_ID_2}/original.jpg",
+                "image_clean_url": None,
+                "thumbnail_url": None,
+                "processing_status": "bg_pending",
+            },
+        }
+    )
+    _override_bulk_image_urls_infra(repository)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.post(
+        "/wardrobe/items/image-urls",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_ids": [VALID_ITEM_ID, VALID_ITEM_ID_2, VALID_ITEM_ID_3]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    urls = body["urls"]
+    assert set(urls.keys()) == {VALID_ITEM_ID, VALID_ITEM_ID_2}
+    assert urls[VALID_ITEM_ID]["source"] == "thumbnail"
+    assert "thumbnail.jpg" in urls[VALID_ITEM_ID]["url"]
+    assert urls[VALID_ITEM_ID_2]["source"] == "original"
+    assert "original.jpg" in urls[VALID_ITEM_ID_2]["url"]
+    assert VALID_ITEM_ID_3 not in urls

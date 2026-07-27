@@ -198,6 +198,26 @@ describe('CustomTabBar', () => {
     }
   });
 
+  // SS-014 fix pass (2026-07-27) -- manual-verification finding #6: the
+  // focus dot rendered to the *right* of the icon instead of *below* it.
+  // Root cause (confirmed by reading expo-router/ui's TabTrigger.js +
+  // @radix-ui/react-slot's mergeProps): TabTrigger's `asChild` Slot injects
+  // its own `style: { flexDirection: 'row', justifyContent: 'space-between'
+  // }` onto this element, which wins outright whenever the child doesn't
+  // declare its own `style` prop. This test pins the fixed layout so a
+  // regression (dropping TabBarItem's own explicit `style` override) is
+  // caught.
+  it("renders each tab's Pressable with an explicit column flexDirection, overriding TabTrigger's injected row layout", async () => {
+    await renderTabBar();
+
+    for (const tab of TAB_CONFIG) {
+      expect(screen.getByTestId(`tab-${tab.name}`)).toHaveProp(
+        'style',
+        expect.objectContaining({ flexDirection: 'column' }),
+      );
+    }
+  });
+
   it('the initially-focused tab renders its activeIcon + dot indicator; a non-focused tab renders no dot', async () => {
     await renderTabBar();
 

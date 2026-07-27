@@ -1,6 +1,7 @@
 import {
   isUploadTaskStale,
   useWardrobeBatchStore,
+  useWardrobeFilterStore,
   useWardrobeUploadStore,
 } from '../../../features/wardrobe/wardrobe.store';
 
@@ -218,5 +219,72 @@ describe('useWardrobeBatchStore', () => {
     const state = useWardrobeBatchStore.getState();
     expect(state.items).toEqual([]);
     expect(state.currentIndex).toBe(0);
+  });
+});
+
+describe('useWardrobeFilterStore', () => {
+  beforeEach(() => {
+    useWardrobeFilterStore.getState().reset();
+  });
+
+  it('defaults to all/all/all/all, empty search, newest sort', () => {
+    const state = useWardrobeFilterStore.getState();
+    expect(state.categoryFilter).toBe('all');
+    expect(state.occasionFilter).toBe('all');
+    expect(state.seasonFilter).toBe('all');
+    expect(state.colorFilter).toBe('all');
+    expect(state.search).toBe('');
+    expect(state.sort).toBe('newest');
+  });
+
+  it('setCategoryFilter updates categoryFilter only', () => {
+    useWardrobeFilterStore.getState().setCategoryFilter('ethnic');
+    expect(useWardrobeFilterStore.getState().categoryFilter).toBe('ethnic');
+    expect(useWardrobeFilterStore.getState().occasionFilter).toBe('all');
+  });
+
+  it('setOccasionFilter updates occasionFilter only', () => {
+    useWardrobeFilterStore.getState().setOccasionFilter('festival');
+    expect(useWardrobeFilterStore.getState().occasionFilter).toBe('festival');
+  });
+
+  it('setSeasonFilter updates seasonFilter only', () => {
+    useWardrobeFilterStore.getState().setSeasonFilter('winter');
+    expect(useWardrobeFilterStore.getState().seasonFilter).toBe('winter');
+  });
+
+  it('setColorFilter updates colorFilter only', () => {
+    useWardrobeFilterStore.getState().setColorFilter('blue');
+    expect(useWardrobeFilterStore.getState().colorFilter).toBe('blue');
+  });
+
+  it('setSearch updates search only', () => {
+    useWardrobeFilterStore.getState().setSearch('kurta');
+    expect(useWardrobeFilterStore.getState().search).toBe('kurta');
+  });
+
+  it('setSort updates sort only', () => {
+    useWardrobeFilterStore.getState().setSort('most_worn');
+    expect(useWardrobeFilterStore.getState().sort).toBe('most_worn');
+  });
+
+  it('reset restores every field back to its default', () => {
+    const store = useWardrobeFilterStore.getState();
+    store.setCategoryFilter('western');
+    store.setOccasionFilter('office');
+    store.setSeasonFilter('summer');
+    store.setColorFilter('red');
+    store.setSearch('shirt');
+    store.setSort('cost_per_wear');
+
+    useWardrobeFilterStore.getState().reset();
+
+    const state = useWardrobeFilterStore.getState();
+    expect(state.categoryFilter).toBe('all');
+    expect(state.occasionFilter).toBe('all');
+    expect(state.seasonFilter).toBe('all');
+    expect(state.colorFilter).toBe('all');
+    expect(state.search).toBe('');
+    expect(state.sort).toBe('newest');
   });
 });

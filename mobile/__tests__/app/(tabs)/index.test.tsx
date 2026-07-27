@@ -21,6 +21,23 @@ jest.mock('../../../features/home/home.queries', () => ({
   }),
 }));
 
+// SS-014: WardrobeNudgeCard now calls useWardrobeItemCountQuery, which pulls
+// in the whole wardrobe.queries.ts module graph (including
+// @sentry/react-native, via useUploadWardrobeItem's captureException call)
+// -- unmocked, that real import fails to parse under this test's Jest
+// transform (an unrelated @sentry/core ESM-only sub-dependency, not covered
+// by jest.config.js's transformIgnorePatterns allow-list). Mocked here for
+// the same "composition smoke test, not a re-test of the child's own
+// behaviour" reason as home.queries above -- WardrobeNudgeCard.test.tsx
+// covers the real hook's behaviour.
+jest.mock('../../../features/wardrobe/wardrobe.queries', () => ({
+  useWardrobeItemCountQuery: () => ({
+    data: 0,
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 describe('HomeScreen (app/(tabs)/index.tsx)', () => {
   it('renders GreetingHeader, OccasionPillRow, WardrobeNudgeCard, and TrendingPicksPlaceholder', async () => {
     const { getByTestId } = await render(<HomeScreen />);

@@ -54,9 +54,12 @@ export const UNKNOWN_UPLOAD_ERROR_MESSAGE =
 // transcribed from supabase/migrations/001_initial.sql).
 
 import type {
+  CategoryFilterValue,
+  CategoryGroup,
   OccasionType,
   SeasonTag,
   WardrobeCategory,
+  WardrobeSortOption,
 } from './wardrobe.types';
 
 export interface CategoryOption {
@@ -137,3 +140,98 @@ export const OCCASION_BADGE_COLOR_MAP: Partial<
   festival: 'festival',
   casual: 'casual',
 };
+
+// --- SS-014 (Wardrobe Grid & Catalogue View) ---
+// Per docs/tickets/SS-014-design.md's "Concrete values" section --
+// transcribed verbatim, not re-derived.
+
+// Prefix-derived from the 21-value WardrobeCategory union. `indo_western` ->
+// 'ethnic' is the Architect's call (design doc's Open questions #3, stands
+// unopposed) -- it never appears under the 'western' pill, only 'ethnic'.
+export const CATEGORY_GROUPS: Record<WardrobeCategory, CategoryGroup> = {
+  western_top: 'western',
+  western_bottom: 'western',
+  western_dress: 'western',
+  western_outerwear: 'western',
+  ethnic_kurta: 'ethnic',
+  ethnic_saree: 'ethnic',
+  ethnic_lehenga: 'ethnic',
+  ethnic_anarkali: 'ethnic',
+  ethnic_salwar_kameez: 'ethnic',
+  ethnic_dupatta: 'ethnic',
+  ethnic_sherwani: 'ethnic',
+  indo_western: 'ethnic',
+  footwear_formal: 'footwear',
+  footwear_casual: 'footwear',
+  footwear_ethnic: 'footwear',
+  footwear_sports: 'footwear',
+  accessory_bag: 'accessories',
+  accessory_jewellery: 'accessories',
+  accessory_watch: 'accessories',
+  accessory_belt: 'accessories',
+  accessory_scarf: 'accessories',
+};
+
+export interface CategoryFilterPill {
+  value: CategoryFilterValue;
+  label: string;
+}
+
+export const CATEGORY_FILTER_PILLS: CategoryFilterPill[] = [
+  { value: 'all', label: 'All' },
+  { value: 'ethnic', label: 'Ethnic' },
+  { value: 'western', label: 'Western' },
+  { value: 'footwear', label: 'Footwear' },
+  { value: 'accessories', label: 'Accessories' },
+  { value: 'favourites', label: 'Favourites' },
+];
+
+export interface SortOptionDescriptor {
+  value: WardrobeSortOption;
+  label: string;
+}
+
+export const SORT_OPTIONS: SortOptionDescriptor[] = [
+  { value: 'newest', label: 'Newest first' },
+  { value: 'most_worn', label: 'Most worn' },
+  { value: 'least_worn', label: 'Least worn' },
+  { value: 'cost_per_wear', label: 'Cost per wear' },
+];
+
+export const FREE_TIER_WARNING_THRESHOLD = 45;
+
+// Just under the 300s presign expiry (_IMAGE_URL_EXPIRY_SECONDS, backend) --
+// so the bulk-signed-URL cache refetches before the signature itself would
+// have expired.
+export const GRID_IMAGE_URLS_STALE_TIME_MS = 4 * 60 * 1000;
+
+// Technical Note's literal value (docs/tickets/SS-014-design.md's Scope
+// restatement).
+export const WARDROBE_ITEMS_STALE_TIME_MS = 5 * 60 * 1000;
+
+export const SEARCH_DEBOUNCE_MS = 300;
+
+export const NO_ITEMS_IN_CATEGORY_HEADING = 'No items in this category';
+export const NO_ITEMS_IN_CATEGORY_SUBTEXT =
+  'Try a different filter, or add a new item.';
+
+export const IMAGE_LOAD_FAILURE_MESSAGE = "Couldn't load this photo";
+
+export const OFFLINE_UPLOAD_DISABLED_MESSAGE = 'No connection';
+
+// --- SS-014 fix pass (2026-07-27) — manual-verification finding #1 ---
+// The grid's column count was a fixed `numColumns={2}`, which looks sparse
+// on wide/desktop viewports. Breakpoints below are ordered widest-first so
+// `columnsForWidth` (wardrobe.selectors.ts) can just take the first match;
+// a common mobile/tablet/desktop convention, not a value pinned by any
+// design doc. Default (< 480px, plain phone portrait) stays 2 columns,
+// unchanged from the original ticket.
+export const GRID_COLUMN_BREAKPOINTS: ReadonlyArray<{
+  minWidth: number;
+  columns: number;
+}> = [
+  { minWidth: 1024, columns: 5 },
+  { minWidth: 768, columns: 4 },
+  { minWidth: 480, columns: 3 },
+];
+export const GRID_DEFAULT_COLUMNS = 2;

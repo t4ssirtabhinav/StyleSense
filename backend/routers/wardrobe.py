@@ -137,6 +137,43 @@ class ImageUrlResponse(BaseModel):
     source: Literal["clean", "original"]
 
 
+# SS-014: POST /wardrobe/items/image-urls -- bulk resolution for the grid
+# (see docs/tickets/SS-014-design.md's "Bulk image-URL endpoint contract").
+# 1-200 ids per call: the free tier caps a wardrobe at 50 items and even a
+# generous premium wardrobe fits comfortably under 200 (flagged, not fixed,
+# as a real-if-unlikely-pre-launch gap in the design doc's Edge Cases).
+_BULK_IMAGE_URLS_MIN_ITEMS = 1
+_BULK_IMAGE_URLS_MAX_ITEMS = 200
+
+
+class BulkImageUrlsRequest(BaseModel):
+    item_ids: list[str]
+
+    @field_validator("item_ids")
+    @classmethod
+    def _item_ids_must_be_valid(cls, value: list[str]) -> list[str]:
+        if not (_BULK_IMAGE_URLS_MIN_ITEMS <= len(value) <= _BULK_IMAGE_URLS_MAX_ITEMS):
+            raise ValueError(
+                f"item_ids must contain between {_BULK_IMAGE_URLS_MIN_ITEMS} and "
+                f"{_BULK_IMAGE_URLS_MAX_ITEMS} items"
+            )
+        for item_id in value:
+            try:
+                uuid.UUID(item_id)
+            except ValueError as exc:
+                raise ValueError(f"{item_id} is not a valid UUID") from exc
+        return value
+
+
+class ImageUrlInfo(BaseModel):
+    url: str
+    source: Literal["thumbnail", "original"]
+
+
+class BulkImageUrlsResponse(BaseModel):
+    urls: dict[str, ImageUrlInfo]
+
+
 class TagRequest(BaseModel):
     item_id: str
 
@@ -277,3 +314,48 @@ async def get_item_image_url(
     except Exception as exc:  # pragma: no cover - defensive catch-all
         logger.exception("wardrobe_image_url_failed", extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail="Failed to generate image URL") from exc
+
+
+@router.post("/items/image-urls", response_model=BulkImageUrlsResponse)
+async def get_bulk_item_image_urls(
+    request: BulkImageUrlsRequest,
+    authorization: str | None = Header(default=None),
+    user_id: str = Depends(get_current_user_id),
+    repository: IWardrobeRepository = Depends(get_wardrobe_repository),
+    storage: R2StorageClient = Depends(get_r2_storage_client),
+) -> BulkImageUrlsResponse:
+    """SS-014 (grid-scale thumbnail resolution -- see
+    docs/tickets/SS-014-design.md's "Bulk image-URL endpoint contract").
+    Per id: thumbnail_url present -> source='thumbnail'; else image_url
+    present -> source='original'; else the id is silently omitted from the
+    response map (not a per-id error -- RLS already filters out ids the
+    caller doesn't own, mirroring the single-item endpoint's "not an
+    ownership oracle" precedent)."""
+    jwt = _extract_bearer_token(authorization)
+
+    try:
+        info_map = await repository.get_items_image_info_bulk(jwt=jwt, item_ids=request.item_ids)
+
+        urls: dict[str, ImageUrlInfo] = {}
+        for item_id, info in info_map.items():
+            thumbnail_url = info.get("thumbnail_url")
+            image_url = info.get("image_url")
+            if thumbnail_url:
+                key = thumbnail_url
+                source: Literal["thumbnail", "original"] = "thumbnail"
+            elif image_url:
+                key = image_url
+                source = "original"
+            else:
+                continue
+            urls[item_id] = ImageUrlInfo(
+                url=storage.generate_presigned_get_url(key, _IMAGE_URL_EXPIRY_SECONDS),
+                source=source,
+            )
+
+        return BulkImageUrlsResponse(urls=urls)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        logger.exception("wardrobe_bulk_image_urls_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to generate image URLs") from exc

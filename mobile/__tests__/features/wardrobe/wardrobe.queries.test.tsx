@@ -1,10 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import { useAuthStore } from '../../../features/auth/auth.store';
 import {
+  useDeleteWardrobeItem,
+  useMarkWardrobeItemWorn,
   useProcessWardrobeItem,
   useSaveWardrobeItemTags,
+  useToggleWardrobeItemFavourite,
   useUploadWardrobeItem,
+  useWardrobeItemCountQuery,
+  useWardrobeItemImageUrlsQuery,
+  useWardrobeItemsQuery,
+  wardrobeItemCountQueryKey,
+  wardrobeItemsQueryKey,
 } from '../../../features/wardrobe/wardrobe.queries';
 import * as wardrobeService from '../../../features/wardrobe/wardrobe.service';
 import { useWardrobeUploadStore } from '../../../features/wardrobe/wardrobe.store';
@@ -25,6 +34,13 @@ jest.mock('../../../features/wardrobe/wardrobe.service', () => ({
   uploadToR2WithProgress: jest.fn(),
   removeBackground: jest.fn(),
   tagItem: jest.fn(),
+  fetchWardrobeItems: jest.fn(),
+  fetchWardrobeItemCount: jest.fn(),
+  fetchWardrobeItemImageUrls: jest.fn(),
+  fetchWardrobeItemImageUrl: jest.fn(),
+  toggleWardrobeItemFavourite: jest.fn(),
+  markWardrobeItemWorn: jest.fn(),
+  deleteWardrobeItem: jest.fn(),
 }));
 
 const mockEq = jest.fn();
@@ -33,6 +49,15 @@ const mockFrom = jest.fn((..._args: unknown[]) => ({ update: mockUpdate }));
 jest.mock('../../../lib/supabase', () => ({
   supabase: { from: (...args: unknown[]) => mockFrom(...args) },
 }));
+
+const FAKE_USER_ID = 'user-1';
+function setFakeSession() {
+  useAuthStore.setState({
+    // biome-ignore lint/suspicious/noExplicitAny: minimal fake Session for tests
+    session: { user: { id: FAKE_USER_ID } } as any,
+    isSessionLoading: false,
+  });
+}
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -43,6 +68,18 @@ function createWrapper() {
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     );
   };
+}
+
+// Same as createWrapper, but also hands back the QueryClient instance so
+// tests can spy on invalidateQueries.
+function createWrapperWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return { Wrapper, queryClient };
 }
 
 const baseUploadUrlResponse = {
@@ -359,6 +396,40 @@ describe('useSaveWardrobeItemTags', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockEq.mockResolvedValue({ error: null });
+    setFakeSession();
+  });
+
+  it('invalidates wardrobeItemsQueryKey/wardrobeItemCountQueryKey on success (SS-014 retrofit)', async () => {
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(() => useSaveWardrobeItemTags(), {
+      wrapper: Wrapper,
+    });
+    result.current.mutate({
+      itemId: 'item-1',
+      tags: {
+        category: 'ethnic_kurta',
+        subcategory: null,
+        colorPrimary: null,
+        colorSecondary: null,
+        pattern: null,
+        fabric: null,
+        occasionTags: [],
+        seasonTags: [],
+        confidence: 0.9,
+        contentFlag: 'ok',
+        containsPerson: false,
+      },
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemsQueryKey(FAKE_USER_ID),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemCountQueryKey(FAKE_USER_ID),
+    });
   });
 
   it('issues a scoped .update() against wardrobe_items for the given itemId with exactly the edited fields', async () => {
@@ -394,5 +465,170 @@ describe('useSaveWardrobeItemTags', () => {
       season_tags: ['summer'],
     });
     expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+  });
+});
+
+// --- SS-014 additions ---------------------------------------------------
+
+describe('useWardrobeItemsQuery / useWardrobeItemCountQuery', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('useWardrobeItemsQuery calls fetchWardrobeItems, keyed by userId', async () => {
+    (wardrobeService.fetchWardrobeItems as jest.Mock).mockResolvedValue([
+      { id: 'item-1' },
+    ]);
+
+    const { result } = await renderHook(() => useWardrobeItemsQuery('user-1'), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.fetchWardrobeItems).toHaveBeenCalled();
+    expect(result.current.data).toEqual([{ id: 'item-1' }]);
+  });
+
+  it('useWardrobeItemsQuery does not fire when userId is undefined', async () => {
+    const { result } = await renderHook(
+      () => useWardrobeItemsQuery(undefined),
+      { wrapper: createWrapper() },
+    );
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(wardrobeService.fetchWardrobeItems).not.toHaveBeenCalled();
+  });
+
+  it('useWardrobeItemCountQuery calls fetchWardrobeItemCount, keyed by userId', async () => {
+    (wardrobeService.fetchWardrobeItemCount as jest.Mock).mockResolvedValue(3);
+
+    const { result } = await renderHook(
+      () => useWardrobeItemCountQuery('user-1'),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.fetchWardrobeItemCount).toHaveBeenCalled();
+    expect(result.current.data).toBe(3);
+  });
+});
+
+describe('useWardrobeItemImageUrlsQuery', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('calls the bulk service function with all provided ids', async () => {
+    const urls = {
+      'item-1': { url: 'https://signed/1', source: 'thumbnail' as const },
+    };
+    (wardrobeService.fetchWardrobeItemImageUrls as jest.Mock).mockResolvedValue(
+      urls,
+    );
+
+    const { result } = await renderHook(
+      () =>
+        useWardrobeItemImageUrlsQuery('user-1', ['item-1', 'item-2'], 'jwt'),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.fetchWardrobeItemImageUrls).toHaveBeenCalledWith(
+      ['item-1', 'item-2'],
+      'jwt',
+    );
+    expect(result.current.data).toEqual(urls);
+  });
+
+  it('is disabled when itemIds is empty', async () => {
+    const { result } = await renderHook(
+      () => useWardrobeItemImageUrlsQuery('user-1', [], 'jwt'),
+      { wrapper: createWrapper() },
+    );
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(wardrobeService.fetchWardrobeItemImageUrls).not.toHaveBeenCalled();
+  });
+});
+
+describe('useToggleWardrobeItemFavourite / useMarkWardrobeItemWorn / useDeleteWardrobeItem', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setFakeSession();
+  });
+
+  it('useToggleWardrobeItemFavourite calls through and invalidates the grid queries on success', async () => {
+    (
+      wardrobeService.toggleWardrobeItemFavourite as jest.Mock
+    ).mockResolvedValue(undefined);
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(
+      () => useToggleWardrobeItemFavourite(),
+      {
+        wrapper: Wrapper,
+      },
+    );
+    result.current.mutate({ itemId: 'item-1', isFavourite: true });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.toggleWardrobeItemFavourite).toHaveBeenCalledWith(
+      'item-1',
+      true,
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemsQueryKey(FAKE_USER_ID),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemCountQueryKey(FAKE_USER_ID),
+    });
+  });
+
+  it('useMarkWardrobeItemWorn calls through and invalidates the grid queries on success', async () => {
+    (wardrobeService.markWardrobeItemWorn as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(() => useMarkWardrobeItemWorn(), {
+      wrapper: Wrapper,
+    });
+    result.current.mutate({ itemId: 'item-1', nextWearCount: 4 });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.markWardrobeItemWorn).toHaveBeenCalledWith(
+      'item-1',
+      4,
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemsQueryKey(FAKE_USER_ID),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemCountQueryKey(FAKE_USER_ID),
+    });
+  });
+
+  it('useDeleteWardrobeItem calls through and invalidates the grid queries on success', async () => {
+    (wardrobeService.deleteWardrobeItem as jest.Mock).mockResolvedValue(
+      undefined,
+    );
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = await renderHook(() => useDeleteWardrobeItem(), {
+      wrapper: Wrapper,
+    });
+    result.current.mutate({ itemId: 'item-1' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(wardrobeService.deleteWardrobeItem).toHaveBeenCalledWith('item-1');
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemsQueryKey(FAKE_USER_ID),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: wardrobeItemCountQueryKey(FAKE_USER_ID),
+    });
   });
 });

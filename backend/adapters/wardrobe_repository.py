@@ -157,3 +157,16 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
         if not response.data:
             return None
         return cast(dict[str, Any], response.data[0])
+
+    async def get_items_image_info_bulk(
+        self, *, jwt: str, item_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        client = await _client_for(jwt)
+        response = (
+            await client.table("wardrobe_items")
+            .select("id, image_url, image_clean_url, thumbnail_url, processing_status")
+            .in_("id", item_ids)
+            .execute()
+        )
+        rows = cast(list[dict[str, Any]], response.data or [])
+        return {str(row["id"]): row for row in rows}

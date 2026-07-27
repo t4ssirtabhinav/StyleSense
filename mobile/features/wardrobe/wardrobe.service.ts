@@ -17,7 +17,9 @@ import {
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
+  WardrobeItemImageUrlsMap,
   WardrobeItemRealtimeRow,
+  WardrobeItemRow,
   WardrobeUploadError,
   WardrobeUploadErrorCode,
 } from './wardrobe.types';
@@ -282,4 +284,98 @@ export async function computeBatchDedupeHash(
     Crypto.CryptoDigestAlgorithm.SHA256,
     base64Data,
   );
+}
+
+// --- SS-014 additions: list/count/bulk-image-urls reads plus
+// favourite/worn/delete direct-writes. Same established shape as this
+// file's existing Edge Function/Realtime calls above -- this file (not just
+// wardrobe.queries.ts's useSaveWardrobeItemTags) is where this domain's raw
+// Supabase calls live; queries.ts wraps these in React Query hooks, never
+// calls Supabase directly itself for these.
+
+export async function fetchWardrobeItems(): Promise<WardrobeItemRow[]> {
+  const { data, error } = await supabase
+    .from('wardrobe_items')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    throw error;
+  }
+  return data ?? [];
+}
+
+export async function fetchWardrobeItemCount(): Promise<number> {
+  const { count, error } = await supabase
+    .from('wardrobe_items')
+    .select('id', { count: 'exact', head: true });
+  if (error) {
+    throw error;
+  }
+  return count ?? 0;
+}
+
+export async function fetchWardrobeItemImageUrls(
+  itemIds: string[],
+  jwt: string,
+): Promise<WardrobeItemImageUrlsMap> {
+  const response = await fetch(
+    `${EXPO_PUBLIC_BACKEND_URL}/wardrobe/items/image-urls`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${jwt}`,
+      },
+      body: JSON.stringify({ item_ids: itemIds }),
+    },
+  );
+  if (!response.ok) {
+    throw buildWardrobeUploadError('unknown', UNKNOWN_UPLOAD_ERROR_MESSAGE);
+  }
+  const body = (await response.json()) as { urls: WardrobeItemImageUrlsMap };
+  return body.urls;
+}
+
+export async function toggleWardrobeItemFavourite(
+  itemId: string,
+  isFavourite: boolean,
+): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_items')
+    .update({ is_favourite: isFavourite })
+    .eq('id', itemId);
+  if (error) {
+    throw error;
+  }
+}
+
+// Caller supplies the already-incremented count (read from the already-cached
+// useWardrobeItemsQuery data) -- not an atomic server-side increment (design
+// doc's Concrete values: BL-036/BL-066's read-then-write race class, a third
+// instance, accepted for the same reason: low real-world concurrent-write
+// likelihood for a single user's own wardrobe).
+export async function markWardrobeItemWorn(
+  itemId: string,
+  nextWearCount: number,
+): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_items')
+    .update({
+      wear_count: nextWearCount,
+      last_worn_at: new Date().toISOString(),
+    })
+    .eq('id', itemId);
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deleteWardrobeItem(itemId: string): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_items')
+    .delete()
+    .eq('id', itemId);
+  if (error) {
+    throw error;
+  }
 }
