@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ScrollView } from 'react-native';
 import { type AppBottomSheetRef, IconButton } from '../../components/ui';
 import { useAuthStore } from '../../features/auth/auth.store';
 import { BatchSummaryToast } from '../../features/wardrobe/components/BatchSummaryToast';
@@ -14,12 +15,16 @@ import {
   useProcessWardrobeItem,
   useUploadWardrobeItem,
 } from '../../features/wardrobe/wardrobe.queries';
-import { subscribeToItemUpdates } from '../../features/wardrobe/wardrobe.service';
+import {
+  mapRealtimeRowToTagsDraft,
+  subscribeToItemUpdates,
+} from '../../features/wardrobe/wardrobe.service';
 import { useWardrobeBatchStore } from '../../features/wardrobe/wardrobe.store';
-import type {
-  GarmentTagsDraft,
-  WardrobeCategory,
-  WardrobeItemRealtimeRow,
+import {
+  type GarmentTagsDraft,
+  type WardrobeCategory,
+  type WardrobeItemRealtimeRow,
+  isWardrobeUploadError,
 } from '../../features/wardrobe/wardrobe.types';
 
 const DEFAULT_TAGS_DRAFT: GarmentTagsDraft = {
@@ -50,10 +55,18 @@ export default function WardrobeUploadScreen() {
   const updateItemStatus = useWardrobeBatchStore(
     (state) => state.updateItemStatus,
   );
+  const updateItemTags = useWardrobeBatchStore((state) => state.updateItemTags);
   const advanceToNext = useWardrobeBatchStore((state) => state.advanceToNext);
   const resetBatch = useWardrobeBatchStore((state) => state.reset);
 
   const [screenStep, setScreenStep] = useState<ScreenStep>('capture');
+  // SS-019: surfaces the free-tier-cap message when a batch stops early due
+  // to wardrobe_limit_reached (see processItem's catch block below). Only
+  // ever set from the upload step's error -- see design doc's "Concrete
+  // values".
+  const [limitReachedMessage, setLimitReachedMessage] = useState<string | null>(
+    null,
+  );
   const uploadMutation = useUploadWardrobeItem();
   const processMutation = useProcessWardrobeItem();
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -91,6 +104,24 @@ export default function WardrobeUploadScreen() {
               row.processing_status === 'bg_removed' &&
               (taggingStatus === 'tagged' || taggingStatus === 'flagged')
             ) {
+              // SS-019 headline fix: the Realtime row's tag columns now
+              // actually reach the Review form's draft state, instead of
+              // always falling back to DEFAULT_TAGS_DRAFT.
+              updateItemTags(taskId, mapRealtimeRowToTagsDraft(row));
+              updateItemStatus(taskId, 'review', {
+                itemId: uploadResult.itemId,
+              });
+              setScreenStep('review');
+            }
+            // SS-019: previously no handler at all for 'failed' -- the user
+            // was stuck on Processing indefinitely. Falls back to the blank
+            // DEFAULT_TAGS_DRAFT by deliberately NOT calling updateItemTags
+            // here (the backend never writes tag_columns on failure -- see
+            // wardrobe.types.ts's WardrobeItemRealtimeRow doc comment).
+            if (
+              row.processing_status === 'bg_removed' &&
+              taggingStatus === 'failed'
+            ) {
               updateItemStatus(taskId, 'review', {
                 itemId: uploadResult.itemId,
               });
@@ -100,7 +131,28 @@ export default function WardrobeUploadScreen() {
         );
 
         await processMutation.mutateAsync({ itemId: uploadResult.itemId, jwt });
-      } catch {
+      } catch (rawError) {
+        // SS-019: a wardrobe_limit_reached 403 (free-tier cap, only possible
+        // from uploadMutation.mutateAsync -- bg-removal has no cap check) is
+        // detected once and stops the whole batch with a clear message,
+        // instead of every remaining queued item independently retrying and
+        // failing identically (see design doc's Edge Cases).
+        const uploadError = isWardrobeUploadError(rawError) ? rawError : null;
+        if (uploadError?.code === 'wardrobe_limit_reached') {
+          updateItemStatus(taskId, 'failed', { error: uploadError.message });
+          const store = useWardrobeBatchStore.getState();
+          for (const item of store.items) {
+            if (item.status === 'queued') {
+              updateItemStatus(item.taskId, 'failed', {
+                error: uploadError.message,
+              });
+            }
+          }
+          setLimitReachedMessage(uploadError.message);
+          setScreenStep('summary');
+          return;
+        }
+
         // Batch with one failure: mark it and move on regardless -- the
         // batch loop never blocks on one failure (design doc Edge Cases).
         // Reads live store state via getState() (not the render-closured
@@ -124,6 +176,7 @@ export default function WardrobeUploadScreen() {
       uploadMutation,
       processMutation,
       updateItemStatus,
+      updateItemTags,
       advanceToNext,
     ],
   );
@@ -181,6 +234,7 @@ export default function WardrobeUploadScreen() {
   const handleCancel = () => {
     unsubscribeRef.current?.();
     resetBatch();
+    setLimitReachedMessage(null);
     // router.back() throws an unhandled-GO_BACK dev warning (and silently
     // does nothing) when this screen was entered with no prior history in
     // the stack -- e.g. a direct URL load / page refresh while already on
@@ -198,6 +252,7 @@ export default function WardrobeUploadScreen() {
 
   const handleAddAnother = () => {
     resetBatch();
+    setLimitReachedMessage(null);
     setScreenStep('capture');
   };
 
@@ -218,38 +273,55 @@ export default function WardrobeUploadScreen() {
         <CaptureStep onImagesSelected={handleImagesSelected} />
       ) : null}
 
-      {screenStep === 'processing' && currentItem ? (
-        <ProcessingStep
-          status={currentItem.status}
-          currentIndex={currentIndex}
-          totalItems={items.length}
-          onRetry={handleRetryProcessing}
-          onSkip={handleSkipProcessing}
-        />
-      ) : null}
+      {/* SS-019: the Capture step's CameraView needs full-bleed flex: 1
+          layout, not a scrolling ancestor -- the ScrollView wrap is scoped
+          to the other 3 steps only. Follows this repo's one existing
+          precedent for this exact pattern (edit-preferences.tsx: plain
+          react-native ScrollView, no KeyboardAvoidingView) -- confirmed
+          against the currently-installed Expo SDK's docs, which offer
+          react-native-keyboard-controller as an opt-in third-party library
+          this repo doesn't depend on, not a requirement for plain
+          scroll-to-reveal-inputs behaviour. */}
+      {screenStep !== 'capture' ? (
+        <ScrollView testID="upload-scroll-view" className="flex-1">
+          {screenStep === 'processing' && currentItem ? (
+            <ProcessingStep
+              status={currentItem.status}
+              currentIndex={currentIndex}
+              totalItems={items.length}
+              onRetry={handleRetryProcessing}
+              onSkip={handleSkipProcessing}
+            />
+          ) : null}
 
-      {screenStep === 'review' && currentItem && jwt ? (
-        <>
-          <ReviewStep
-            itemId={currentItem.itemId ?? ''}
-            jwt={jwt}
-            processingStatus="bg_removed"
-            initialTags={currentItem.tags ?? DEFAULT_TAGS_DRAFT}
-            onOpenCategoryPicker={() => {
-              categoryPickerRef.current?.present();
-            }}
-            selectedCategoryOverride={pendingCategory}
-            onSaved={advanceAfterSave}
-          />
-          <CategoryPicker
-            ref={categoryPickerRef}
-            onSelect={setPendingCategory}
-          />
-        </>
-      ) : null}
+          {screenStep === 'review' && currentItem && jwt ? (
+            <>
+              <ReviewStep
+                itemId={currentItem.itemId ?? ''}
+                jwt={jwt}
+                processingStatus="bg_removed"
+                initialTags={currentItem.tags ?? DEFAULT_TAGS_DRAFT}
+                onOpenCategoryPicker={() => {
+                  categoryPickerRef.current?.present();
+                }}
+                selectedCategoryOverride={pendingCategory}
+                onSaved={advanceAfterSave}
+              />
+              <CategoryPicker
+                ref={categoryPickerRef}
+                onSelect={setPendingCategory}
+              />
+            </>
+          ) : null}
 
-      {screenStep === 'summary' ? (
-        <BatchSummaryToast items={items} onAddAnother={handleAddAnother} />
+          {screenStep === 'summary' ? (
+            <BatchSummaryToast
+              items={items}
+              onAddAnother={handleAddAnother}
+              limitReachedMessage={limitReachedMessage}
+            />
+          ) : null}
+        </ScrollView>
       ) : null}
     </>
   );

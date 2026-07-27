@@ -29,11 +29,12 @@ import {
   uploadToR2WithProgress,
 } from './wardrobe.service';
 import { useWardrobeUploadStore } from './wardrobe.store';
-import type {
-  GarmentTagsDraft,
-  UploadWardrobeItemInput,
-  UploadWardrobeItemResult,
-  WardrobeUploadError,
+import {
+  type GarmentTagsDraft,
+  type UploadWardrobeItemInput,
+  type UploadWardrobeItemResult,
+  type WardrobeUploadError,
+  isWardrobeUploadError,
 } from './wardrobe.types';
 
 // The only place this React Query hook is called from is components (per
@@ -46,15 +47,6 @@ import type {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isWardrobeUploadError(error: unknown): error is WardrobeUploadError {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    'retryable' in error
-  );
 }
 
 function toWardrobeUploadError(error: unknown): WardrobeUploadError {

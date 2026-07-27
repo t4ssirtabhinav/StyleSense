@@ -15,6 +15,7 @@ import {
   WARDROBE_LIMIT_MESSAGE,
 } from './wardrobe.constants';
 import type {
+  GarmentTagsDraft,
   UploadUrlRequest,
   UploadUrlResponse,
   WardrobeItemImageUrlsMap,
@@ -269,6 +270,33 @@ export function subscribeToItemUpdates(
 
   return () => {
     supabase.removeChannel(channel);
+  };
+}
+
+// SS-019 -- pure decode of a WardrobeItemRealtimeRow into the Review form's
+// editable draft shape. Co-located with subscribeToItemUpdates (the thing
+// whose payload it decodes), per the design doc. Deliberately NOT called on
+// a 'failed' tagging status by this file's callers -- see
+// docs/tickets/SS-019-design.md's Edge Cases: the backend never writes
+// tag_columns on failure, so this function's output would be a real-looking
+// but entirely empty prefill rather than an honest "fill manually" state.
+export function mapRealtimeRowToTagsDraft(
+  row: WardrobeItemRealtimeRow,
+): GarmentTagsDraft {
+  const tagging = row.ai_tags?.tagging;
+  return {
+    category: row.category,
+    subcategory: row.subcategory,
+    colorPrimary: row.color_primary,
+    colorSecondary: row.color_secondary,
+    pattern: row.pattern,
+    fabric: row.fabric,
+    occasionTags: row.occasion_tags ?? [],
+    seasonTags: row.season_tags ?? [],
+    confidence: tagging?.confidence ?? 1,
+    alternatives: tagging?.alternatives,
+    contentFlag: tagging?.moderation?.content_flag ?? 'ok',
+    containsPerson: tagging?.moderation?.contains_person ?? false,
   };
 }
 

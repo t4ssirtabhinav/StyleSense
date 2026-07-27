@@ -1,5 +1,6 @@
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
+import { View } from 'react-native';
 import { Badge, Button, Card, Input, Text } from '../../../components/ui';
 import {
   LOW_CONFIDENCE_THRESHOLD,
@@ -125,13 +126,18 @@ export function ReviewStep({
   return (
     <Card testID="review-step">
       {imageUrl ? (
-        <Image
-          testID="review-image"
-          source={{ uri: imageUrl }}
-          style={{ width: '100%', height: 300 }}
-          contentFit="contain"
-          accessibilityLabel="Item photo"
-        />
+        <View
+          testID="review-image-frame"
+          className="mb-md overflow-hidden rounded-lg border border-textMuted"
+        >
+          <Image
+            testID="review-image"
+            source={{ uri: imageUrl }}
+            style={{ width: '100%', height: 300 }}
+            contentFit="contain"
+            accessibilityLabel="Item photo"
+          />
+        </View>
       ) : null}
       {showFallbackNote ? (
         <Text variant="caption" testID="bg-fallback-note">
@@ -204,26 +210,30 @@ export function ReviewStep({
         }
       />
 
-      {OCCASION_TYPES.map((occasion) => (
-        <Badge
-          key={occasion}
-          testID={`occasion-badge-${occasion}`}
-          label={occasion}
-          occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
-          selected={draft.occasionTags.includes(occasion)}
-          onPress={() => toggleOccasion(occasion)}
-        />
-      ))}
+      <View testID="occasion-badges-row" className="flex-row flex-wrap gap-xs">
+        {OCCASION_TYPES.map((occasion) => (
+          <Badge
+            key={occasion}
+            testID={`occasion-badge-${occasion}`}
+            label={occasion}
+            occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
+            selected={draft.occasionTags.includes(occasion)}
+            onPress={() => toggleOccasion(occasion)}
+          />
+        ))}
+      </View>
 
-      {SEASON_TAGS.map((season) => (
-        <Badge
-          key={season}
-          testID={`season-badge-${season}`}
-          label={season}
-          selected={draft.seasonTags.includes(season)}
-          onPress={() => toggleSeason(season)}
-        />
-      ))}
+      <View testID="season-badges-row" className="flex-row flex-wrap gap-xs">
+        {SEASON_TAGS.map((season) => (
+          <Badge
+            key={season}
+            testID={`season-badge-${season}`}
+            label={season}
+            selected={draft.seasonTags.includes(season)}
+            onPress={() => toggleSeason(season)}
+          />
+        ))}
+      </View>
 
       {draft.alternatives && draft.alternatives.length > 0 ? (
         <>

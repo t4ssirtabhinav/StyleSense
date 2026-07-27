@@ -9,6 +9,7 @@ import {
   fetchWardrobeItemCount,
   fetchWardrobeItemImageUrls,
   fetchWardrobeItems,
+  mapRealtimeRowToTagsDraft,
   markWardrobeItemWorn,
   removeBackground,
   requestUploadUrl,
@@ -17,6 +18,7 @@ import {
   toggleWardrobeItemFavourite,
   uploadToR2WithProgress,
 } from '../../../features/wardrobe/wardrobe.service';
+import type { WardrobeItemRealtimeRow } from '../../../features/wardrobe/wardrobe.types';
 
 const mockManipulateAsync = jest.fn();
 jest.mock('expo-image-manipulator', () => ({
@@ -378,6 +380,77 @@ describe('subscribeToItemUpdates', () => {
     unsubscribe();
 
     expect(mockRemoveChannel).toHaveBeenCalledWith('the-channel');
+  });
+});
+
+describe('mapRealtimeRowToTagsDraft', () => {
+  it('maps every tag column plus confidence/alternatives/contentFlag/containsPerson from a fully-populated row', () => {
+    const row: WardrobeItemRealtimeRow = {
+      id: 'item-1',
+      processing_status: 'bg_removed',
+      category: 'ethnic_saree',
+      subcategory: 'silk saree',
+      color_primary: 'red',
+      color_secondary: 'gold',
+      pattern: 'floral',
+      fabric: 'silk',
+      occasion_tags: ['festival', 'wedding_guest'],
+      season_tags: ['winter'],
+      ai_tags: {
+        tagging: {
+          status: 'tagged',
+          confidence: 0.92,
+          alternatives: ['ethnic_lehenga'],
+          moderation: { content_flag: 'ok', contains_person: true },
+        },
+      },
+    };
+
+    expect(mapRealtimeRowToTagsDraft(row)).toEqual({
+      category: 'ethnic_saree',
+      subcategory: 'silk saree',
+      colorPrimary: 'red',
+      colorSecondary: 'gold',
+      pattern: 'floral',
+      fabric: 'silk',
+      occasionTags: ['festival', 'wedding_guest'],
+      seasonTags: ['winter'],
+      confidence: 0.92,
+      alternatives: ['ethnic_lehenga'],
+      contentFlag: 'ok',
+      containsPerson: true,
+    });
+  });
+
+  it('defaults occasionTags/seasonTags to [] and confidence/contentFlag/containsPerson to DEFAULT_TAGS_DRAFT-equivalent values when ai_tags.tagging is absent', () => {
+    const row: WardrobeItemRealtimeRow = {
+      id: 'item-1',
+      processing_status: 'bg_removed',
+      category: null,
+      subcategory: null,
+      color_primary: null,
+      color_secondary: null,
+      pattern: null,
+      fabric: null,
+      occasion_tags: null,
+      season_tags: null,
+      ai_tags: null,
+    };
+
+    expect(mapRealtimeRowToTagsDraft(row)).toEqual({
+      category: null,
+      subcategory: null,
+      colorPrimary: null,
+      colorSecondary: null,
+      pattern: null,
+      fabric: null,
+      occasionTags: [],
+      seasonTags: [],
+      confidence: 1,
+      alternatives: undefined,
+      contentFlag: 'ok',
+      containsPerson: false,
+    });
   });
 });
 

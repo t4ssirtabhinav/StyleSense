@@ -58,6 +58,22 @@ export interface WardrobeUploadError {
   retryable: boolean;
 }
 
+// SS-019 (Fix SS-013 upload-flow regressions) -- moved here from
+// wardrobe.queries.ts (was a private local helper) so upload.tsx's
+// processItem catch block can reuse the same guard for the
+// wardrobe_limit_reached batch-stop fix, per the design doc's "Files to
+// create/modify".
+export function isWardrobeUploadError(
+  error: unknown,
+): error is WardrobeUploadError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    'retryable' in error
+  );
+}
+
 export type WardrobeUploadStatus =
   | 'idle'
   | 'compressing'
@@ -182,14 +198,34 @@ export interface BatchItemState {
   error?: string;
 }
 
-// Minimal shape of the Realtime `postgres_changes` UPDATE payload's `.new`
-// this domain actually reads (not the full generated Row -- only the
-// columns SS-013's readiness signal and Review step need).
+// Shape of the Realtime `postgres_changes` UPDATE payload's `.new` this
+// domain reads. Widened by SS-019 (was missing the 8 tag columns +
+// ai_tags.tagging's confidence/alternatives/moderation sub-fields, which is
+// why the Review form never actually saw Gemini's tagging output -- see
+// docs/tickets/SS-019-design.md's "Concrete values", transcribed verbatim
+// from supabase/migrations/001_initial.sql and
+// backend/services/wardrobe_tagging_service.py's tag_columns/_tagging_payload).
 export interface WardrobeItemRealtimeRow {
   id: string;
   processing_status: WardrobeItemProcessingStatus;
+  category: WardrobeCategory | null;
+  subcategory: string | null;
+  color_primary: string | null;
+  color_secondary: string | null;
+  pattern: string | null;
+  fabric: string | null;
+  occasion_tags: OccasionType[] | null;
+  season_tags: SeasonTag[] | null;
   ai_tags: {
-    tagging?: { status?: 'tagging' | 'tagged' | 'flagged' | 'failed' };
+    tagging?: {
+      status?: 'tagging' | 'tagged' | 'flagged' | 'failed';
+      confidence?: number;
+      alternatives?: WardrobeCategory[];
+      moderation?: {
+        content_flag?: WardrobeContentFlag;
+        contains_person?: boolean;
+      };
+    };
     bg_removal?: { status?: string };
   } | null;
 }

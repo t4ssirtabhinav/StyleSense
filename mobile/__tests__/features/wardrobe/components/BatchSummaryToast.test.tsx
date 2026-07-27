@@ -54,4 +54,24 @@ describe('BatchSummaryToast', () => {
 
     expect(mockPush).toHaveBeenCalledWith('/(tabs)/wardrobe');
   });
+
+  // --- SS-019 addition -------------------------------------------------
+
+  it('renders limitReachedMessage text when the prop is present; renders nothing extra when absent', async () => {
+    const withMessage = await render(
+      <BatchSummaryToast
+        items={[]}
+        onAddAnother={jest.fn()}
+        limitReachedMessage="You've reached the free plan's 50-item wardrobe limit."
+      />,
+    );
+    expect(
+      await withMessage.findByTestId('limit-reached-message'),
+    ).toBeTruthy();
+
+    const without = await render(
+      <BatchSummaryToast items={[]} onAddAnother={jest.fn()} />,
+    );
+    expect(without.queryByTestId('limit-reached-message')).toBeNull();
+  });
 });

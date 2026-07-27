@@ -5,6 +5,12 @@ import * as wardrobeQueries from '../../../features/wardrobe/wardrobe.queries';
 import * as wardrobeService from '../../../features/wardrobe/wardrobe.service';
 import { useWardrobeBatchStore } from '../../../features/wardrobe/wardrobe.store';
 
+// SS-019: wardrobe.service.ts is partially requireActual'd below (for a real
+// mapRealtimeRowToTagsDraft) which pulls in its `lib/supabase` import
+// transitively -- stubbed here so that side effect doesn't try to build a
+// real Supabase client from missing env vars in this test environment.
+jest.mock('../../../lib/supabase', () => ({ supabase: {} }));
+
 const mockPush = jest.fn();
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
@@ -84,14 +90,25 @@ jest.mock('../../../features/wardrobe/wardrobe.queries', () => ({
 }));
 
 const mockSubscribeToItemUpdates = jest.fn();
-jest.mock('../../../features/wardrobe/wardrobe.service', () => ({
-  subscribeToItemUpdates: (...args: unknown[]) =>
-    mockSubscribeToItemUpdates(...args),
-  fetchWardrobeItemImageUrl: jest.fn().mockResolvedValue({
-    url: 'https://r2.example.com/clean.png',
-    source: 'clean',
-  }),
-}));
+jest.mock('../../../features/wardrobe/wardrobe.service', () => {
+  const actual = jest.requireActual(
+    '../../../features/wardrobe/wardrobe.service',
+  );
+  return {
+    // mapRealtimeRowToTagsDraft is kept real (not mocked) -- this file's
+    // integration tests assert on ReviewStep's actually-rendered fields, not
+    // on a call-was-made assertion (see docs/tickets/SS-019-design.md's
+    // Test plan note on why the latter is exactly the shallow coverage that
+    // let this ship).
+    mapRealtimeRowToTagsDraft: actual.mapRealtimeRowToTagsDraft,
+    subscribeToItemUpdates: (...args: unknown[]) =>
+      mockSubscribeToItemUpdates(...args),
+    fetchWardrobeItemImageUrl: jest.fn().mockResolvedValue({
+      url: 'https://r2.example.com/clean.png',
+      source: 'clean',
+    }),
+  };
+});
 
 describe('WardrobeUploadScreen', () => {
   beforeEach(() => {
@@ -276,5 +293,181 @@ describe('WardrobeUploadScreen', () => {
     expect((await findByTestId('batch-summary-counts')).props.children).toBe(
       '2 added, 1 failed',
     );
+  });
+
+  // --- SS-019 additions ---------------------------------------------------
+
+  it('a Realtime tagged update prefills ReviewStep with the row values, not blank defaults', async () => {
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file://a.jpg' }],
+    });
+    mockUploadMutateAsync.mockResolvedValue({ itemId: 'item-1', key: 'k' });
+    mockProcessMutateAsync.mockResolvedValue(undefined);
+
+    const {
+      getByLabelText,
+      findByTestId,
+      getByText,
+      getByDisplayValue,
+      getByTestId,
+    } = await render(<WardrobeUploadScreen />);
+
+    await fireEvent.press(getByLabelText('Gallery'));
+
+    await waitFor(() =>
+      expect(mockSubscribeToItemUpdates).toHaveBeenCalledWith(
+        'item-1',
+        expect.any(Function),
+      ),
+    );
+    const onUpdate = mockSubscribeToItemUpdates.mock.calls[0][1];
+    await waitFor(() =>
+      onUpdate({
+        id: 'item-1',
+        processing_status: 'bg_removed',
+        category: 'ethnic_saree',
+        subcategory: 'silk saree',
+        color_primary: 'red',
+        color_secondary: 'gold',
+        pattern: 'floral',
+        fabric: 'silk',
+        occasion_tags: ['festival'],
+        season_tags: ['winter'],
+        ai_tags: {
+          tagging: {
+            status: 'tagged',
+            confidence: 0.95,
+            moderation: { content_flag: 'ok', contains_person: false },
+          },
+        },
+      }),
+    );
+
+    await findByTestId('review-step');
+
+    expect(getByText('ethnic_saree')).toBeTruthy();
+    expect(getByDisplayValue('silk saree')).toBeTruthy();
+    expect(getByDisplayValue('red')).toBeTruthy();
+    expect(getByDisplayValue('gold')).toBeTruthy();
+    expect(getByDisplayValue('floral')).toBeTruthy();
+    expect(getByDisplayValue('silk')).toBeTruthy();
+    // Badge itself doesn't expose a `selected` prop on its rendered
+    // Pressable -- selection is styling-only (border-2 border-textPrimary on
+    // the inner View, see components/ui/Badge.tsx). Asserting on the
+    // rendered className tree, not a mocked call, per the design doc's "real
+    // rendered output" instruction.
+    expect(
+      JSON.stringify(getByTestId('occasion-badge-festival').toJSON()),
+    ).toContain('border-2 border-textPrimary');
+    expect(
+      JSON.stringify(getByTestId('season-badge-winter').toJSON()),
+    ).toContain('border-2 border-textPrimary');
+  });
+
+  it('a Realtime flagged update with low confidence still prefills tag fields and shows the low-confidence banner', async () => {
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file://a.jpg' }],
+    });
+    mockUploadMutateAsync.mockResolvedValue({ itemId: 'item-1', key: 'k' });
+    mockProcessMutateAsync.mockResolvedValue(undefined);
+
+    const { getByLabelText, findByTestId, getByDisplayValue } = await render(
+      <WardrobeUploadScreen />,
+    );
+
+    await fireEvent.press(getByLabelText('Gallery'));
+    await waitFor(() =>
+      expect(mockSubscribeToItemUpdates).toHaveBeenCalledTimes(1),
+    );
+    const onUpdate = mockSubscribeToItemUpdates.mock.calls[0][1];
+    await waitFor(() =>
+      onUpdate({
+        id: 'item-1',
+        processing_status: 'bg_removed',
+        category: 'western_top',
+        subcategory: 'blouse',
+        color_primary: 'blue',
+        color_secondary: null,
+        pattern: null,
+        fabric: null,
+        occasion_tags: [],
+        season_tags: [],
+        ai_tags: { tagging: { status: 'flagged', confidence: 0.4 } },
+      }),
+    );
+
+    await findByTestId('review-step');
+    expect(getByDisplayValue('blouse')).toBeTruthy();
+    expect(await findByTestId('low-confidence-banner')).toBeTruthy();
+  });
+
+  it('a Realtime failed tagging update transitions to Review (not stuck on Processing) with blank defaults, no crash', async () => {
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file://a.jpg' }],
+    });
+    mockUploadMutateAsync.mockResolvedValue({ itemId: 'item-1', key: 'k' });
+    mockProcessMutateAsync.mockResolvedValue(undefined);
+
+    const { getByLabelText, findByTestId, getByText } = await render(
+      <WardrobeUploadScreen />,
+    );
+
+    await fireEvent.press(getByLabelText('Gallery'));
+    await waitFor(() =>
+      expect(mockSubscribeToItemUpdates).toHaveBeenCalledTimes(1),
+    );
+    const onUpdate = mockSubscribeToItemUpdates.mock.calls[0][1];
+    await waitFor(() =>
+      onUpdate({
+        id: 'item-1',
+        processing_status: 'bg_removed',
+        category: null,
+        subcategory: null,
+        color_primary: null,
+        color_secondary: null,
+        pattern: null,
+        fabric: null,
+        occasion_tags: null,
+        season_tags: null,
+        ai_tags: { tagging: { status: 'failed' } },
+      }),
+    );
+
+    expect(await findByTestId('review-step')).toBeTruthy();
+    expect(getByText('Choose category')).toBeTruthy();
+  });
+
+  it('a wardrobe_limit_reached upload rejection stops the batch after the first item, marks every item failed, shows the limit message, and calls uploadMutation exactly once', async () => {
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [
+        { uri: 'file://a.jpg' },
+        { uri: 'file://b.jpg' },
+        { uri: 'file://c.jpg' },
+      ],
+    });
+    const limitMessage =
+      "You've reached the free plan's 50-item wardrobe limit. Upgrade to premium for unlimited items.";
+    mockUploadMutateAsync.mockRejectedValue({
+      code: 'wardrobe_limit_reached',
+      message: limitMessage,
+      retryable: false,
+    });
+
+    const { getByLabelText, findByTestId } = await render(
+      <WardrobeUploadScreen />,
+    );
+
+    await fireEvent.press(getByLabelText('Gallery'));
+
+    expect(await findByTestId('batch-summary-toast')).toBeTruthy();
+    expect((await findByTestId('batch-summary-counts')).props.children).toBe(
+      '0 added, 3 failed',
+    );
+    expect(await findByTestId('limit-reached-message')).toBeTruthy();
+    expect(mockUploadMutateAsync).toHaveBeenCalledTimes(1);
   });
 });
