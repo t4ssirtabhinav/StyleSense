@@ -7,6 +7,7 @@ import {
 } from '../../../../features/wardrobe/components/CaptureStep';
 import { MAX_BATCH_SIZE } from '../../../../features/wardrobe/wardrobe.constants';
 
+const mockTakePictureAsync = jest.fn();
 const mockUseCameraPermissions = jest.fn();
 jest.mock('expo-camera', () => {
   const React = require('react');
@@ -18,7 +19,7 @@ jest.mock('expo-camera', () => {
       ) => {
         const { View } = require('react-native');
         React.useImperativeHandle(ref, () => ({
-          takePictureAsync: jest.fn(),
+          takePictureAsync: mockTakePictureAsync,
         }));
         return <View testID={props.testID} />;
       },
@@ -184,5 +185,57 @@ describe('CaptureStep', () => {
 
     expect(getByTestId('camera-permission-request')).toBeTruthy();
     expect(getByLabelText('Gallery')).toBeTruthy();
+  });
+
+  // --- SS-019 additions ----------------------------------------------------
+
+  it('permission-denied/request Cards render with centering classes present', async () => {
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: false, canAskAgain: false },
+      jest.fn(),
+    ]);
+    const denied = await render(<CaptureStep onImagesSelected={jest.fn()} />);
+    expect(
+      denied.getByTestId('camera-permission-denied').props.className,
+    ).toContain('items-center justify-center');
+
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: false, canAskAgain: true },
+      jest.fn(),
+    ]);
+    const request = await render(<CaptureStep onImagesSelected={jest.fn()} />);
+    expect(
+      request.getByTestId('camera-permission-request').props.className,
+    ).toContain('items-center justify-center');
+  });
+
+  it('pressing Capture sets a visible loading state until takePictureAsync resolves; a second press while capturing does not call takePictureAsync twice', async () => {
+    let resolveCapture: (value: { uri: string }) => void = () => {};
+    mockTakePictureAsync.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+    const onImagesSelected = jest.fn();
+    const { getByLabelText, findByTestId, queryByTestId } = await render(
+      <CaptureStep onImagesSelected={onImagesSelected} />,
+    );
+
+    fireEvent.press(getByLabelText('Capture photo'));
+    expect(await findByTestId('capture-loading-overlay')).toBeTruthy();
+
+    // Second press while still capturing -- guarded, no second call.
+    fireEvent.press(getByLabelText('Capture photo'));
+    expect(mockTakePictureAsync).toHaveBeenCalledTimes(1);
+
+    resolveCapture({ uri: 'file://captured.jpg' });
+    await waitFor(() =>
+      expect(onImagesSelected).toHaveBeenCalledWith([
+        { localUri: 'file://captured.jpg', source: 'camera' },
+      ]),
+    );
+    await waitFor(() =>
+      expect(queryByTestId('capture-loading-overlay')).toBeNull(),
+    );
   });
 });

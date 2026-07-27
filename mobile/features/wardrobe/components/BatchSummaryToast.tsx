@@ -5,6 +5,11 @@ import type { BatchItemState } from '../wardrobe.types';
 export interface BatchSummaryToastProps {
   items: BatchItemState[];
   onAddAnother: () => void;
+  /** SS-019: set by the parent screen when the batch stopped early because
+   * of a wardrobe_limit_reached 403 -- surfaces the free-tier-cap
+   * explanation instead of the generic counts-only summary. Absent/null
+   * leaves existing counts-only behavior unchanged. */
+  limitReachedMessage?: string | null;
 }
 
 // End-of-batch summary (success/failure counts) with "Add another"/"View
@@ -13,6 +18,7 @@ export interface BatchSummaryToastProps {
 export function BatchSummaryToast({
   items,
   onAddAnother,
+  limitReachedMessage,
 }: BatchSummaryToastProps) {
   const router = useRouter();
   const successCount = items.filter((item) => item.status === 'saved').length;
@@ -27,6 +33,11 @@ export function BatchSummaryToast({
       <Text variant="body" testID="batch-summary-counts">
         {`${successCount} added, ${failureCount} failed`}
       </Text>
+      {limitReachedMessage ? (
+        <Text variant="caption" testID="limit-reached-message">
+          {limitReachedMessage}
+        </Text>
+      ) : null}
       <Button
         variant="primary"
         accessibilityLabel="Add another"

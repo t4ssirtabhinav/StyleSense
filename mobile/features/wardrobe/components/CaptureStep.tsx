@@ -1,8 +1,14 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { type ReactNode, useRef, useState } from 'react';
-import { Linking } from 'react-native';
-import { Button, Card, IconButton, Text } from '../../../components/ui';
+import { Linking, View } from 'react-native';
+import {
+  Button,
+  Card,
+  IconButton,
+  Skeleton,
+  Text,
+} from '../../../components/ui';
 import { MAX_BATCH_SIZE, ONE_ITEM_AT_A_TIME_TIP } from '../wardrobe.constants';
 import type { WardrobeUploadSource } from '../wardrobe.types';
 
@@ -26,6 +32,12 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
     ImagePicker.useMediaLibraryPermissions();
   const [facing, setFacing] = useState<'front' | 'back'>('back');
   const [clampMessage, setClampMessage] = useState<string | null>(null);
+  // SS-019: local capture-in-flight indicator -- handleCapture's async gap
+  // (takePictureAsync) previously had no visible feedback, and a second tap
+  // during that gap could re-trigger the capture. Scoped to handleCapture
+  // only; Gallery's own async gap is already covered by the OS's native
+  // picker UI taking over the screen (design doc's Edge Cases).
+  const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef<CameraView | null>(null);
 
   const handleFlip = () => {
@@ -33,7 +45,8 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
   };
 
   const handleCapture = async () => {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current || isCapturing) return;
+    setIsCapturing(true);
     try {
       const photo = await cameraRef.current.takePictureAsync();
       if (photo?.uri) {
@@ -43,6 +56,8 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
       // Camera capture failures are transient/device-specific; the user can
       // simply try again from the same screen (no separate error banner
       // pinned by the design doc for this specific failure).
+    } finally {
+      setIsCapturing(false);
     }
   };
 
@@ -88,8 +103,11 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
   let cameraArea: ReactNode;
   if (cameraPermission && !cameraPermission.granted) {
     cameraArea = !cameraPermission.canAskAgain ? (
-      <Card testID="camera-permission-denied" className="m-md">
-        <Text variant="body" className="mb-sm">
+      <Card
+        testID="camera-permission-denied"
+        className="m-md flex-1 items-center justify-center"
+      >
+        <Text variant="body" className="mb-sm text-center">
           Camera access is needed to photograph your wardrobe items.
         </Text>
         <Button
@@ -101,8 +119,11 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
         </Button>
       </Card>
     ) : (
-      <Card testID="camera-permission-request" className="m-md">
-        <Text variant="body" className="mb-sm">
+      <Card
+        testID="camera-permission-request"
+        className="m-md flex-1 items-center justify-center"
+      >
+        <Text variant="body" className="mb-sm text-center">
           StyleSense needs camera access to photograph your wardrobe items.
         </Text>
         <Button
@@ -117,12 +138,22 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
   } else {
     cameraArea = (
       <>
-        <CameraView
-          testID="camera-view"
-          ref={cameraRef}
-          style={{ flex: 1 }}
-          facing={facing}
-        />
+        <View className="relative flex-1">
+          <CameraView
+            testID="camera-view"
+            ref={cameraRef}
+            style={{ flex: 1 }}
+            facing={facing}
+          />
+          {isCapturing ? (
+            <View
+              testID="capture-loading-overlay"
+              className="absolute inset-0 items-center justify-center"
+            >
+              <Skeleton variant="card" />
+            </View>
+          ) : null}
+        </View>
         <IconButton
           icon="camera-reverse-outline"
           accessibilityLabel="Flip camera"
@@ -131,6 +162,7 @@ export function CaptureStep({ onImagesSelected }: CaptureStepProps) {
         <Button
           variant="primary"
           accessibilityLabel="Capture photo"
+          disabled={isCapturing}
           onPress={handleCapture}
         >
           Capture

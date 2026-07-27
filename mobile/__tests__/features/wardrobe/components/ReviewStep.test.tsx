@@ -254,4 +254,59 @@ describe('ReviewStep', () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(baseTags()));
   });
+
+  // --- SS-019 additions (layout/UX ACs) -----------------------------------
+
+  it("occasion/season badge rows carry flex-row flex-wrap classes (renders all 12 + 4 badges, doesn't assert pixel layout)", async () => {
+    (wardrobeService.fetchWardrobeItemImageUrl as jest.Mock).mockResolvedValue({
+      url: 'https://r2.example.com/clean.png',
+      source: 'clean',
+    });
+
+    const { findByTestId, getByTestId } = await render(
+      <ReviewStep
+        itemId="item-1"
+        jwt="jwt"
+        processingStatus="bg_removed"
+        initialTags={baseTags()}
+        onOpenCategoryPicker={jest.fn()}
+        onSaved={jest.fn()}
+      />,
+    );
+
+    await findByTestId('review-image');
+
+    expect(getByTestId('occasion-badges-row').props.className).toContain(
+      'flex-row flex-wrap',
+    );
+    expect(getByTestId('season-badges-row').props.className).toContain(
+      'flex-row flex-wrap',
+    );
+    expect(getByTestId('occasion-badge-college')).toBeTruthy();
+    expect(getByTestId('season-badge-all')).toBeTruthy();
+  });
+
+  it("review-image's wrapping View carries the new frame classes", async () => {
+    (wardrobeService.fetchWardrobeItemImageUrl as jest.Mock).mockResolvedValue({
+      url: 'https://r2.example.com/clean.png',
+      source: 'clean',
+    });
+
+    const { findByTestId } = await render(
+      <ReviewStep
+        itemId="item-1"
+        jwt="jwt"
+        processingStatus="bg_removed"
+        initialTags={baseTags()}
+        onOpenCategoryPicker={jest.fn()}
+        onSaved={jest.fn()}
+      />,
+    );
+
+    const frame = await findByTestId('review-image-frame');
+    expect(frame.props.className).toContain('mb-md');
+    expect(frame.props.className).toContain('overflow-hidden');
+    expect(frame.props.className).toContain('rounded-lg');
+    expect(frame.props.className).toContain('border border-textMuted');
+  });
 });
