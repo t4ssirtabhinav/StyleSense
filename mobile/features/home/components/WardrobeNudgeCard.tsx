@@ -1,19 +1,31 @@
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { Button, Card, Text } from '../../../components/ui';
+import { useAuthStore } from '../../auth/auth.store';
+import { useWardrobeItemCountQuery } from '../../wardrobe/wardrobe.queries';
 
-// Always rendered (not conditional on an actual wardrobe_items count) — no
-// Wardrobe-domain query exists yet to check against (Epic 2, unscheduled).
-// Logged as BL-031 (docs/BACKLOG.md): the eventual Wardrobe epic ticket must
-// close this by hiding the nudge once a user has >=1 item.
+// SS-014 closes BL-031's remaining half: gated on a real, cheap item-count
+// query instead of always rendering. Fail-safe: renders null while loading
+// and on error (never show "add your first item" to a user whose real
+// count is simply unknown), and once count is known to be > 0.
 export function WardrobeNudgeCard() {
   const router = useRouter();
+  const userId = useAuthStore((state) => state.session?.user.id);
+  const countQuery = useWardrobeItemCountQuery(userId);
 
   const handleAddItem = () => {
-    // No dedicated upload/add-item screen exists yet — routes to the
-    // Wardrobe tab's own empty state (also logged under BL-031).
-    router.push('/wardrobe');
+    // Bonus fix bundled in (SS-014): routes directly to /wardrobe/upload
+    // now that the destination exists, skipping the redundant Wardrobe-tab
+    // hop -- only reachable when count is already known to be 0.
+    router.push('/wardrobe/upload');
   };
+
+  if (countQuery.isLoading || countQuery.isError) {
+    return null;
+  }
+  if ((countQuery.data ?? 0) > 0) {
+    return null;
+  }
 
   return (
     <Card
