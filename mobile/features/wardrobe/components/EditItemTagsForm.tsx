@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react';
+import { View } from 'react-native';
 import {
   type AppBottomSheetRef,
   Badge,
   Button,
   Input,
+  Text,
 } from '../../../components/ui';
 import {
   OCCASION_BADGE_COLOR_MAP,
@@ -84,59 +86,91 @@ export function EditItemTagsForm({
           setDraft((current) => ({ ...current, subcategory: text }))
         }
       />
-      <Input
-        variant="text"
-        label="Primary colour"
-        value={draft.colorPrimary ?? ''}
-        onChangeText={(text) =>
-          setDraft((current) => ({ ...current, colorPrimary: text }))
-        }
-      />
-      <Input
-        variant="text"
-        label="Secondary colour"
-        value={draft.colorSecondary ?? ''}
-        onChangeText={(text) =>
-          setDraft((current) => ({ ...current, colorSecondary: text }))
-        }
-      />
-      <Input
-        variant="text"
-        label="Pattern"
-        value={draft.pattern ?? ''}
-        onChangeText={(text) =>
-          setDraft((current) => ({ ...current, pattern: text }))
-        }
-      />
-      <Input
-        variant="text"
-        label="Fabric"
-        value={draft.fabric ?? ''}
-        onChangeText={(text) =>
-          setDraft((current) => ({ ...current, fabric: text }))
-        }
-      />
+      <View className="flex-row gap-sm">
+        <View className="flex-1">
+          <Input
+            variant="text"
+            label="Primary colour"
+            value={draft.colorPrimary ?? ''}
+            onChangeText={(text) =>
+              setDraft((current) => ({ ...current, colorPrimary: text }))
+            }
+          />
+        </View>
+        <View className="flex-1">
+          <Input
+            variant="text"
+            label="Secondary colour"
+            value={draft.colorSecondary ?? ''}
+            onChangeText={(text) =>
+              setDraft((current) => ({ ...current, colorSecondary: text }))
+            }
+          />
+        </View>
+      </View>
+      <View className="flex-row gap-sm">
+        <View className="flex-1">
+          <Input
+            variant="text"
+            label="Pattern"
+            value={draft.pattern ?? ''}
+            onChangeText={(text) =>
+              setDraft((current) => ({ ...current, pattern: text }))
+            }
+          />
+        </View>
+        <View className="flex-1">
+          <Input
+            variant="text"
+            label="Fabric"
+            value={draft.fabric ?? ''}
+            onChangeText={(text) =>
+              setDraft((current) => ({ ...current, fabric: text }))
+            }
+          />
+        </View>
+      </View>
 
-      {OCCASION_TYPES.map((occasion) => (
-        <Badge
-          key={occasion}
-          testID={`edit-occasion-badge-${occasion}`}
-          label={occasion}
-          occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
-          selected={draft.occasionTags.includes(occasion)}
-          onPress={() => toggleOccasion(occasion)}
-        />
-      ))}
+      <View className="mt-sm gap-xs">
+        <Text variant="caption" color="secondary">
+          Occasion
+        </Text>
+        <View
+          testID="edit-occasion-badges-row"
+          className="flex-row flex-wrap gap-xs"
+        >
+          {OCCASION_TYPES.map((occasion) => (
+            <Badge
+              key={occasion}
+              testID={`edit-occasion-badge-${occasion}`}
+              label={occasion}
+              occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
+              selected={draft.occasionTags.includes(occasion)}
+              onPress={() => toggleOccasion(occasion)}
+            />
+          ))}
+        </View>
+      </View>
 
-      {SEASON_TAGS.map((season) => (
-        <Badge
-          key={season}
-          testID={`edit-season-badge-${season}`}
-          label={season}
-          selected={draft.seasonTags.includes(season)}
-          onPress={() => toggleSeason(season)}
-        />
-      ))}
+      <View className="mt-sm gap-xs">
+        <Text variant="caption" color="secondary">
+          Season
+        </Text>
+        <View
+          testID="edit-season-badges-row"
+          className="flex-row flex-wrap gap-xs"
+        >
+          {SEASON_TAGS.map((season) => (
+            <Badge
+              key={season}
+              testID={`edit-season-badge-${season}`}
+              label={season}
+              selected={draft.seasonTags.includes(season)}
+              onPress={() => toggleSeason(season)}
+            />
+          ))}
+        </View>
+      </View>
 
       <Button
         variant="primary"

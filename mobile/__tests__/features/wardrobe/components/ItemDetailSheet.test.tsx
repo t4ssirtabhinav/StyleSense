@@ -31,6 +31,13 @@ jest.mock('@gorhom/bottom-sheet', () => {
     ...actual,
     BottomSheetModal: MockBottomSheetModal,
     BottomSheetView: reactNative.View,
+    // ItemDetailSheet now opens with `scrollable` (BottomSheet.tsx fix,
+    // 2026-07-27) -- the real BottomSheetScrollView (left in via `...actual`
+    // otherwise) calls gorhom's internal `useBottomSheetInternal()` hook,
+    // which throws outside a real BottomSheetModal's context. The mocked
+    // modal above doesn't provide that context, so this needs its own plain
+    // stand-in too, same as BottomSheetView above.
+    BottomSheetScrollView: reactNative.ScrollView,
   };
 });
 

@@ -1,4 +1,8 @@
-import { BottomSheetModal, BottomSheetView } from '@gorhom/bottom-sheet';
+import {
+  BottomSheetModal,
+  BottomSheetScrollView,
+  BottomSheetView,
+} from '@gorhom/bottom-sheet';
 import {
   type ReactNode,
   forwardRef,
@@ -6,6 +10,7 @@ import {
   useMemo,
   useRef,
 } from 'react';
+import { spacing } from './tokens';
 
 export interface AppBottomSheetProps {
   /** Default `['30%', '60%', '90%']` per AC. */
@@ -26,6 +31,18 @@ export interface AppBottomSheetProps {
    * index").
    */
   initialIndex?: number;
+  /**
+   * Default false (unchanged `BottomSheetView` behaviour — a plain,
+   * non-scrolling container). Opt in for sheets whose content can exceed
+   * the visible snap-point height (e.g. `ItemDetailSheet`,
+   * `WardrobeFilterSheet` — found 2026-07-27: their 2x2 action grid / Apply
+   * button were unreachable with no way to scroll to them). Left opt-in
+   * rather than made the default because `CityPicker.tsx` already nests its
+   * own plain `ScrollView` inside this component — switching every
+   * consumer to `BottomSheetScrollView` would create a nested-scrollable
+   * conflict there.
+   */
+  scrollable?: boolean;
 }
 
 export interface AppBottomSheetRef {
@@ -50,6 +67,7 @@ export const AppBottomSheet = forwardRef<
       onDismiss,
       enablePanDownToClose = true,
       initialIndex = 0,
+      scrollable = false,
     },
     ref,
   ) => {
@@ -69,7 +87,23 @@ export const AppBottomSheet = forwardRef<
         onDismiss={onDismiss}
         enablePanDownToClose={enablePanDownToClose}
       >
-        <BottomSheetView className="flex-1 p-md">{children}</BottomSheetView>
+        {scrollable ? (
+          // `contentContainerClassName` isn't registered for this
+          // component (verified against the installed
+          // react-native-css-interop's runtime — only plain RN `ScrollView`
+          // has that prop remapped) so padding is applied via the real,
+          // confirmed-supported `contentContainerStyle` prop instead,
+          // using the same `spacing.md` value `p-md` resolves to
+          // (tokens.ts), not a guessed pixel number.
+          <BottomSheetScrollView
+            className="flex-1"
+            contentContainerStyle={{ padding: spacing.md }}
+          >
+            {children}
+          </BottomSheetScrollView>
+        ) : (
+          <BottomSheetView className="flex-1 p-md">{children}</BottomSheetView>
+        )}
       </BottomSheetModal>
     );
   },

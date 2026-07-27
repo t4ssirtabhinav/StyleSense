@@ -186,8 +186,11 @@ export const WardrobeFilterSheet = forwardRef<
         )}
       </View>
 
-      <View className="flex-1 flex-row gap-sm">
-        <View testID="filter-section-rail" className="w-2/5 gap-xs">
+      <View className="flex-1 flex-row overflow-hidden rounded-md border border-textMuted">
+        <View
+          testID="filter-section-rail"
+          className="w-2/5 gap-xs border-r border-textMuted bg-surfaceSecondary p-sm"
+        >
           {FILTER_SECTIONS.map((section) => {
             const isActive = activeSection === section.key;
             return (
@@ -199,7 +202,7 @@ export const WardrobeFilterSheet = forwardRef<
                 accessibilityState={{ selected: isActive }}
                 onPress={() => setActiveSection(section.key)}
                 className={`rounded-md p-sm ${
-                  isActive ? 'bg-surfaceSecondary' : 'bg-transparent'
+                  isActive ? 'bg-surfacePrimary' : 'bg-transparent'
                 }`}
               >
                 <Text
@@ -219,7 +222,7 @@ export const WardrobeFilterSheet = forwardRef<
 
         <View
           testID="filter-section-panel"
-          className="flex-1 flex-row flex-wrap content-start gap-xs"
+          className="flex-1 flex-row flex-wrap content-start gap-sm bg-surfacePrimary p-sm"
         >
           {activeSection === 'occasion'
             ? OCCASION_TYPES.map((occasion) => (

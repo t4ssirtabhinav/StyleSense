@@ -101,8 +101,18 @@ export default function WardrobeScreen() {
     ],
   );
 
-  const [selectedItem, setSelectedItem] = useState<WardrobeItemRow | null>(
-    null,
+  // Holds only the id, not a snapshot of the row itself -- found 2026-07-27:
+  // a captured-at-tap-time WardrobeItemRow object never picks up a later
+  // cache update (e.g. tagging finishing asynchronously after the grid's
+  // list was first fetched, or `staleTime: 5min` simply not having elapsed
+  // yet), so a still-open sheet kept showing stale/blank tag fields even
+  // after the DB row had real data. Deriving the item live from
+  // `itemsQuery.data` below means the sheet always reflects whatever the
+  // query cache currently holds for that id.
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const selectedItem = useMemo(
+    () => items.find((item) => item.id === selectedItemId) ?? null,
+    [items, selectedItemId],
   );
   const filterSheetRef = useRef<AppBottomSheetRef>(null);
   const detailSheetRef = useRef<AppBottomSheetRef>(null);
@@ -118,8 +128,13 @@ export default function WardrobeScreen() {
   };
 
   const handleItemPress = (item: WardrobeItemRow) => {
-    setSelectedItem(item);
+    setSelectedItemId(item.id);
     detailSheetRef.current?.present();
+    // Forces a fresh pull the moment the sheet opens, rather than trusting
+    // whatever the cache happened to hold (see the state comment above) --
+    // cheap (one query, RLS-scoped to the user's own rows) and removes any
+    // dependency on staleTime timing for correctness here.
+    void itemsQuery.refetch();
   };
 
   if (itemsQuery.isLoading) {

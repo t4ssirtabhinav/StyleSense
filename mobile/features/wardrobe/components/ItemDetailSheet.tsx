@@ -223,6 +223,7 @@ export const ItemDetailSheet = forwardRef<
     <AppBottomSheet
       ref={ref}
       initialIndex={1}
+      scrollable
       onDismiss={() => {
         setMode('view');
         setDeleteArmed(false);
