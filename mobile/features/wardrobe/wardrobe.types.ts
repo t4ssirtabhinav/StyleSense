@@ -1,5 +1,7 @@
 // Domain types for SS-010 (Cloudflare R2 Presigned Upload Infrastructure).
 // Per docs/tickets/SS-010-design.md's "Files to create/modify".
+
+import type { Tables } from '../../types/supabase';
 //
 // NOTE (post-review amendment, see design doc's "Concrete values" ->
 // "Server-side Content-Type/size enforcement"): the design's amended plan
@@ -190,4 +192,38 @@ export interface WardrobeItemRealtimeRow {
     tagging?: { status?: 'tagging' | 'tagged' | 'flagged' | 'failed' };
     bg_removal?: { status?: string };
   } | null;
+}
+
+// --- SS-014 (Wardrobe Grid & Catalogue View) ---
+// Per docs/tickets/SS-014-design.md's "Concrete values" / "Files to
+// create/modify" -- transcribed verbatim, not re-derived.
+
+// Generated type only (CLAUDE.md: "Supabase types from auto-generated
+// types/supabase.ts ONLY") -- never hand-duplicate its columns.
+export type WardrobeItemRow = Tables<'wardrobe_items'>;
+
+export type CategoryGroup = 'ethnic' | 'western' | 'footwear' | 'accessories';
+
+export type CategoryFilterValue = 'all' | CategoryGroup | 'favourites';
+
+export type WardrobeSortOption =
+  | 'newest'
+  | 'most_worn'
+  | 'least_worn'
+  | 'cost_per_wear';
+
+export interface WardrobeItemImageUrlInfo {
+  url: string;
+  source: 'thumbnail' | 'original';
+}
+
+export type WardrobeItemImageUrlsMap = Record<string, WardrobeItemImageUrlInfo>;
+
+export interface WardrobeFilterState {
+  categoryFilter: CategoryFilterValue;
+  occasionFilter: OccasionType | 'all';
+  seasonFilter: SeasonTag | 'all';
+  colorFilter: string | 'all';
+  search: string;
+  sort: WardrobeSortOption;
 }

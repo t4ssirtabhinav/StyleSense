@@ -44,6 +44,9 @@ class _FakeQueryBuilder:
     def eq(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
         return self._record("eq", *args, **kwargs)
 
+    def in_(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
+        return self._record("in_", *args, **kwargs)
+
     def limit(self, *args: Any, **kwargs: Any) -> _FakeQueryBuilder:
         return self._record("limit", *args, **kwargs)
 
@@ -293,3 +296,62 @@ async def test_get_plan_tier_scopes_select_to_callers_own_jwt(
     assert fake_client.table_names == ["users"]
     select_call = next(c for c in fake_client.calls if c[0] == "select")
     assert select_call[1][0] == "plan_tier"
+
+
+# --- SS-014: get_items_image_info_bulk --------------------------------------
+
+
+async def test_get_items_image_info_bulk_returns_dict_keyed_by_id_rls_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(
+        response_data=[
+            {
+                "id": "item-1",
+                "image_url": "wardrobe/user-1/item-1/original.jpg",
+                "image_clean_url": None,
+                "thumbnail_url": "wardrobe/user-1/item-1/thumbnail.jpg",
+                "processing_status": "bg_removed",
+            },
+            {
+                "id": "item-2",
+                "image_url": "wardrobe/user-1/item-2/original.jpg",
+                "image_clean_url": None,
+                "thumbnail_url": None,
+                "processing_status": "bg_pending",
+            },
+        ]
+    )
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        result = await repo.get_items_image_info_bulk(
+            jwt="caller-jwt", item_ids=["item-1", "item-2", "item-3"]
+        )
+
+    assert fake_client.postgrest.auth_calls == ["caller-jwt"]
+    assert fake_client.table_names == ["wardrobe_items"]
+    in_call = next(c for c in fake_client.calls if c[0] == "in_")
+    assert in_call[1] == ("id", ["item-1", "item-2", "item-3"])
+
+    assert set(result.keys()) == {"item-1", "item-2"}
+    assert result["item-1"]["thumbnail_url"] == "wardrobe/user-1/item-1/thumbnail.jpg"
+    assert result["item-2"]["processing_status"] == "bg_pending"
+
+
+async def test_get_items_image_info_bulk_returns_empty_dict_when_no_rows_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        result = await repo.get_items_image_info_bulk(jwt="caller-jwt", item_ids=["item-1"])
+
+    assert result == {}

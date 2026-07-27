@@ -148,4 +148,41 @@ describe('CaptureStep', () => {
     expect(getByTestId('camera-permission-request')).toBeTruthy();
     expect(queryByLabelText('Open Settings')).toBeNull();
   });
+
+  it('Gallery remains reachable when camera permission is denied (canAskAgain=false) -- camera and gallery are independent capabilities', async () => {
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: false, canAskAgain: false },
+      jest.fn(),
+    ]);
+    mockLaunchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: 'file://a.jpg' }],
+    });
+    const onImagesSelected = jest.fn();
+    const { getByTestId, getByLabelText } = await render(
+      <CaptureStep onImagesSelected={onImagesSelected} />,
+    );
+
+    expect(getByTestId('camera-permission-denied')).toBeTruthy();
+    fireEvent.press(getByLabelText('Gallery'));
+
+    await waitFor(() =>
+      expect(onImagesSelected).toHaveBeenCalledWith([
+        { localUri: 'file://a.jpg', source: 'gallery' },
+      ]),
+    );
+  });
+
+  it('Gallery remains reachable when camera permission is undetermined/re-requestable (canAskAgain=true)', async () => {
+    mockUseCameraPermissions.mockReturnValue([
+      { granted: false, canAskAgain: true },
+      jest.fn(),
+    ]);
+    const { getByTestId, getByLabelText } = await render(
+      <CaptureStep onImagesSelected={jest.fn()} />,
+    );
+
+    expect(getByTestId('camera-permission-request')).toBeTruthy();
+    expect(getByLabelText('Gallery')).toBeTruthy();
+  });
 });

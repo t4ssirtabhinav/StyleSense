@@ -14,6 +14,18 @@ export interface AppBottomSheetProps {
   onDismiss?: () => void;
   /** Default true. */
   enablePanDownToClose?: boolean;
+  /**
+   * Which `snapPoints` entry `.present()` opens to. Default `0` (the
+   * smallest snap point), matching the original behaviour. SS-014 fix pass
+   * (2026-07-27, manual-verification findings #3/#5): sheets with real
+   * content (ItemDetailSheet/WardrobeFilterSheet) need to open to a usable
+   * height without requiring the user to drag first -- passed straight
+   * through to `BottomSheetModal`'s own `index` prop (confirmed via the
+   * installed `@gorhom/bottom-sheet@5.2.14` source,
+   * `lib/typescript/components/bottomSheet/types.d.ts`: "Initial snap point
+   * index").
+   */
+  initialIndex?: number;
 }
 
 export interface AppBottomSheetRef {
@@ -37,6 +49,7 @@ export const AppBottomSheet = forwardRef<
       children,
       onDismiss,
       enablePanDownToClose = true,
+      initialIndex = 0,
     },
     ref,
   ) => {
@@ -52,6 +65,7 @@ export const AppBottomSheet = forwardRef<
       <BottomSheetModal
         ref={modalRef}
         snapPoints={resolvedSnapPoints}
+        index={initialIndex}
         onDismiss={onDismiss}
         enablePanDownToClose={enablePanDownToClose}
       >

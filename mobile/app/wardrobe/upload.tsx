@@ -181,7 +181,19 @@ export default function WardrobeUploadScreen() {
   const handleCancel = () => {
     unsubscribeRef.current?.();
     resetBatch();
-    router.back();
+    // router.back() throws an unhandled-GO_BACK dev warning (and silently
+    // does nothing) when this screen was entered with no prior history in
+    // the stack -- e.g. a direct URL load / page refresh while already on
+    // /wardrobe/upload, which is a normal way to land here during
+    // web/tunnel testing, not just via an in-app push. Falls back to an
+    // explicit replace to the wardrobe grid so Cancel always returns
+    // somewhere, per this ticket's own AC ("Cancel at any step discards and
+    // returns to the wardrobe screen").
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/wardrobe');
+    }
   };
 
   const handleAddAnother = () => {

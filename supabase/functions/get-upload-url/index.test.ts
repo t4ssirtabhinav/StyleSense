@@ -119,6 +119,70 @@ function requestWithAuth(body?: Record<string, unknown>): Request {
   });
 }
 
+Deno.test(
+  "OPTIONS preflight returns 204 with CORS headers, without touching auth/deps",
+  async () => {
+    const req = new Request("https://edge.local/get-upload-url", {
+      method: "OPTIONS",
+    });
+    // No Authorization header and deliberately-throwing deps -- if the
+    // preflight branch didn't short-circuit before the auth check, this
+    // would blow up instead of returning 204.
+    const throwingDeps: HandleRequestDeps = {
+      createSupabaseClient: () => {
+        throw new Error("should not be called for OPTIONS");
+      },
+      createR2Client: () => {
+        throw new Error("should not be called for OPTIONS");
+      },
+      getSignedUrl: () => {
+        throw new Error("should not be called for OPTIONS");
+      },
+    };
+    const res = await handleRequest(req, throwingDeps);
+    assertEquals(res.status, 204);
+    assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
+    assertExists(res.headers.get("Access-Control-Allow-Methods"));
+    // Must cover every header the installed supabase-js SDK actually
+    // attaches via functions.invoke() -- verified against
+    // @supabase/supabase-js/src/cors.ts's own SUPABASE_HEADERS list, not
+    // just the two most obvious ones (a first pass missed x-client-info).
+    const allowHeaders = res.headers.get("Access-Control-Allow-Headers") ?? "";
+    for (
+      const required of [
+        "authorization",
+        "x-client-info",
+        "apikey",
+        "content-type",
+        "x-retry-count",
+      ]
+    ) {
+      assertEquals(
+        allowHeaders.toLowerCase().includes(required),
+        true,
+        `Access-Control-Allow-Headers missing "${required}"`,
+      );
+    }
+  },
+);
+
+Deno.test("real POST responses (success and error) also carry CORS headers", async () => {
+  const req = requestWithAuth();
+  const res = await handleRequest(
+    req,
+    fakeDeps({ planTier: "free", wardrobeCount: 0 }),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("Access-Control-Allow-Origin"), "*");
+
+  const unauthedReq = new Request("https://edge.local/get-upload-url", {
+    method: "POST",
+  });
+  const unauthedRes = await handleRequest(unauthedReq, fakeDeps());
+  assertEquals(unauthedRes.status, 401);
+  assertEquals(unauthedRes.headers.get("Access-Control-Allow-Origin"), "*");
+});
+
 Deno.test("returns 401 when no Authorization header is present", async () => {
   const req = new Request("https://edge.local/get-upload-url", {
     method: "POST",

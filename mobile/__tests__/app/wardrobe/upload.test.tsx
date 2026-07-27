@@ -7,8 +7,15 @@ import { useWardrobeBatchStore } from '../../../features/wardrobe/wardrobe.store
 
 const mockPush = jest.fn();
 const mockBack = jest.fn();
+const mockReplace = jest.fn();
+const mockCanGoBack = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: mockPush, back: mockBack }),
+  useRouter: () => ({
+    push: mockPush,
+    back: mockBack,
+    replace: mockReplace,
+    canGoBack: mockCanGoBack,
+  }),
 }));
 
 jest.mock('expo-camera', () => {
@@ -89,6 +96,7 @@ jest.mock('../../../features/wardrobe/wardrobe.service', () => ({
 describe('WardrobeUploadScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCanGoBack.mockReturnValue(true);
     useWardrobeBatchStore.setState({ items: [], currentIndex: 0 });
     useAuthStore.setState({
       session: { access_token: 'jwt-token', user: { id: 'user-1' } } as never,
@@ -191,11 +199,24 @@ describe('WardrobeUploadScreen', () => {
   });
 
   it('Cancel calls reset() and navigates back on the Capture step', async () => {
+    mockCanGoBack.mockReturnValue(true);
     const { getByLabelText } = await render(<WardrobeUploadScreen />);
 
     await fireEvent.press(getByLabelText('Cancel'));
 
     expect(mockBack).toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(useWardrobeBatchStore.getState().items).toEqual([]);
+  });
+
+  it('Cancel falls back to replacing with the wardrobe grid when there is no back history (e.g. a direct/refreshed load on this route)', async () => {
+    mockCanGoBack.mockReturnValue(false);
+    const { getByLabelText } = await render(<WardrobeUploadScreen />);
+
+    await fireEvent.press(getByLabelText('Cancel'));
+
+    expect(mockBack).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)/wardrobe');
     expect(useWardrobeBatchStore.getState().items).toEqual([]);
   });
 

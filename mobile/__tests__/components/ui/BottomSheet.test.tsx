@@ -62,6 +62,24 @@ describe('AppBottomSheet', () => {
     expect(mockCapturedProps.snapPoints).toEqual(['50%']);
   });
 
+  it('defaults initialIndex to 0 (SS-014 fix pass, findings #3/#5)', async () => {
+    await render(
+      <AppBottomSheet>
+        <View />
+      </AppBottomSheet>,
+    );
+    expect(mockCapturedProps.index).toBe(0);
+  });
+
+  it("forwards a custom initialIndex through to BottomSheetModal's index prop", async () => {
+    await render(
+      <AppBottomSheet initialIndex={1}>
+        <View />
+      </AppBottomSheet>,
+    );
+    expect(mockCapturedProps.index).toBe(1);
+  });
+
   it('calling ref.current.present() / .dismiss() does not throw', async () => {
     const ref = createRef<AppBottomSheetRef>();
     await render(

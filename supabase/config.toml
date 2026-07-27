@@ -372,12 +372,22 @@ authorization_url_path = "/oauth/consent"
 allow_dynamic_registration = false
 
 [functions.get-upload-url]
-# Explicit rather than relying on the platform default (unverified this
-# session -- see docs/tickets/SS-010-design.md's Concrete values §E-flagged
-# note) so the security boundary is self-documenting regardless of what the
-# default actually turns out to be. The function also calls
-# supabase.auth.getUser() itself (defense in depth).
-verify_jwt = true
+# Was `true` (see SS-010's original comment below, preserved for history) --
+# flipped to `false` 2026-07-26 after a live CORS failure: the platform-level
+# gate rejects the browser's unauthenticated OPTIONS preflight before this
+# function's own code runs, which breaks every cross-origin browser call
+# (confirmed via a real console error + Supabase's own docs/community
+# reports, [VERIFIED 2026-07-26]). The function still fully verifies the
+# caller's JWT itself via supabase.auth.getUser() (index.ts) -- that was
+# always the real security boundary, this gate was redundant defense in
+# depth that happened to be incompatible with CORS. See
+# docs/worklog/SS-014.md's "Manual verification" section for the full
+# incident writeup.
+#
+# Original SS-010 rationale (2026-07-24): explicit rather than relying on
+# the platform default, so the security boundary was self-documenting
+# regardless of what the default actually turned out to be.
+verify_jwt = false
 
 [edge_runtime]
 enabled = true

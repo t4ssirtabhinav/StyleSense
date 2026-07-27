@@ -1,6 +1,11 @@
 import type { Session } from '@supabase/supabase-js';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { checkOnboardingCompleted, sendOtp, verifyOtp } from './auth.service';
+import {
+  checkOnboardingCompleted,
+  fetchUserPlanTier,
+  sendOtp,
+  verifyOtp,
+} from './auth.service';
 import type { AuthError } from './auth.types';
 
 // The only place these React Query hooks are called from is components (per
@@ -34,6 +39,22 @@ export function useOnboardingCompletedQuery(userId: string | undefined) {
   return useQuery({
     queryKey: onboardingCompletedQueryKey(userId),
     queryFn: () => checkOnboardingCompleted(userId as string),
+    enabled: Boolean(userId),
+  });
+}
+
+// SS-014: feeds the free-tier banner and the floating add-button's gating
+// logic (design doc's Files section) -- same file-layering precedent as
+// useOnboardingCompletedQuery above, wrapping the existing (SS-009)
+// fetchUserPlanTier service function in a useQuery for the first time.
+export function planTierQueryKey(userId: string | undefined) {
+  return ['auth', 'plan-tier', userId] as const;
+}
+
+export function usePlanTierQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: planTierQueryKey(userId),
+    queryFn: () => fetchUserPlanTier(userId as string),
     enabled: Boolean(userId),
   });
 }
