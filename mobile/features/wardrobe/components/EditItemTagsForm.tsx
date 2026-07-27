@@ -4,6 +4,7 @@ import {
   type AppBottomSheetRef,
   Badge,
   Button,
+  IconButton,
   Input,
   Text,
 } from '../../../components/ui';
@@ -24,6 +25,7 @@ export interface EditItemTagsFormProps {
   itemId: string;
   initialTags: GarmentTagsDraft;
   onSaved: () => void;
+  onCancel: () => void;
 }
 
 function toggleInArray<T>(list: T[], value: T): T[] {
@@ -39,6 +41,7 @@ export function EditItemTagsForm({
   itemId,
   initialTags,
   onSaved,
+  onCancel,
 }: EditItemTagsFormProps) {
   const [draft, setDraft] = useState<GarmentTagsDraft>(initialTags);
   const categoryPickerRef = useRef<AppBottomSheetRef>(null);
@@ -64,6 +67,17 @@ export function EditItemTagsForm({
 
   return (
     <>
+      <View className="mb-sm flex-row items-center gap-xs">
+        <IconButton
+          icon="arrow-back"
+          accessibilityLabel="Back to item details"
+          onPress={onCancel}
+        />
+        <Text variant="body" weight="bold">
+          Edit item
+        </Text>
+      </View>
+
       <Button
         variant="secondary"
         accessibilityLabel="Choose category"

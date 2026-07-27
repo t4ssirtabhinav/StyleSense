@@ -60,6 +60,7 @@ describe('EditItemTagsForm', () => {
         itemId="item-1"
         initialTags={BASE_TAGS}
         onSaved={jest.fn()}
+        onCancel={jest.fn()}
       />,
     );
 
@@ -84,6 +85,7 @@ describe('EditItemTagsForm', () => {
         itemId="item-1"
         initialTags={BASE_TAGS}
         onSaved={jest.fn()}
+        onCancel={jest.fn()}
       />,
     );
 
@@ -97,5 +99,22 @@ describe('EditItemTagsForm', () => {
       },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
+  });
+
+  it('the back button calls onCancel without saving', async () => {
+    const onCancel = jest.fn();
+    const { getByLabelText } = await render(
+      <EditItemTagsForm
+        itemId="item-1"
+        initialTags={BASE_TAGS}
+        onSaved={jest.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    await fireEvent.press(getByLabelText('Back to item details'));
+
+    expect(onCancel).toHaveBeenCalled();
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 });

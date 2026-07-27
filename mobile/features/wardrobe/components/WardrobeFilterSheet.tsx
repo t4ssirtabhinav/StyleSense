@@ -189,7 +189,7 @@ export const WardrobeFilterSheet = forwardRef<
       <View className="flex-1 flex-row overflow-hidden rounded-md border border-textMuted">
         <View
           testID="filter-section-rail"
-          className="w-2/5 gap-xs border-r border-textMuted bg-surfaceSecondary p-sm"
+          className="w-2/5 gap-xs border-r border-textMuted bg-surfaceSecondary p-md"
         >
           {FILTER_SECTIONS.map((section) => {
             const isActive = activeSection === section.key;

@@ -243,6 +243,7 @@ export const ItemDetailSheet = forwardRef<
           itemId={item.id}
           initialTags={toEditableDraft(item)}
           onSaved={handleSaved}
+          onCancel={() => setMode('view')}
         />
       ) : (
         <>

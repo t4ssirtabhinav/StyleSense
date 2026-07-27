@@ -44,7 +44,7 @@ export function CategoryFilterBar({ items }: CategoryFilterBarProps) {
       testID="category-filter-bar"
       horizontal
       showsHorizontalScrollIndicator={false}
-      className="flex-none border-b border-textMuted/20 py-sm"
+      className="flex-none border-b border-textMuted/40 bg-surfacePrimary py-sm"
       contentContainerClassName="items-center gap-sm px-md"
     >
       {CATEGORY_FILTER_PILLS.map((pill) => (
