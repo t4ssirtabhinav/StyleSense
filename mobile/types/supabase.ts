@@ -386,6 +386,38 @@ export type Database = {
         }
         Relationships: []
       }
+      wardrobe_item_wears: {
+        Row: {
+          created_at: string
+          id: string
+          item_id: string
+          user_id: string
+          worn_on: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          item_id: string
+          user_id: string
+          worn_on: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          item_id?: string
+          user_id?: string
+          worn_on?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wardrobe_item_wears_item_fk"
+            columns: ["item_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "wardrobe_items"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       wardrobe_items: {
         Row: {
           ai_tags: Json | null
@@ -480,7 +512,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      sync_wardrobe_item_wear_stats: {
+        Args: { target_item_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       occasion_type:

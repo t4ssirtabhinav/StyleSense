@@ -57,6 +57,19 @@ class R2StorageClient:
     def put_object_bytes(self, key: str, data: bytes, content_type: str) -> None:
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data, ContentType=content_type)
 
+    def delete_objects(self, keys: list[str]) -> None:
+        """SS-015 -- batch delete for item-delete's R2 cleanup. Synchronous
+        like every other method on this class; the caller
+        (WardrobeDeletionService) offloads via ``asyncio.to_thread``. A
+        no-op on an empty list (boto3's ``delete_objects`` requires at
+        least one key)."""
+        if not keys:
+            return
+        self._client.delete_objects(
+            Bucket=self._bucket,
+            Delete={"Objects": [{"Key": key} for key in keys]},
+        )
+
     def generate_presigned_get_url(self, key: str, expiry_seconds: int) -> str:
         """SS-013's read-path (`GET /wardrobe/items/{id}/image-url`) --
         boto3's `generate_presigned_url` is a local signature computation,

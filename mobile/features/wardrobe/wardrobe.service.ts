@@ -18,9 +18,11 @@ import type {
   GarmentTagsDraft,
   UploadUrlRequest,
   UploadUrlResponse,
+  WardrobeItemDetailsDraft,
   WardrobeItemImageUrlsMap,
   WardrobeItemRealtimeRow,
   WardrobeItemRow,
+  WardrobeItemWearRow,
   WardrobeUploadError,
   WardrobeUploadErrorCode,
 } from './wardrobe.types';
@@ -377,20 +379,108 @@ export async function toggleWardrobeItemFavourite(
   }
 }
 
-// Caller supplies the already-incremented count (read from the already-cached
-// useWardrobeItemsQuery data) -- not an atomic server-side increment (design
-// doc's Concrete values: BL-036/BL-066's read-then-write race class, a third
-// instance, accepted for the same reason: low real-world concurrent-write
-// likelihood for a single user's own wardrobe).
-export async function markWardrobeItemWorn(
+// --- SS-015 additions: dated wear-history log, item-details save, and the
+// delete path moved onto DELETE /wardrobe/items/{id} (resolves BL-068).
+// markWardrobeItemWorn (the client-computed wear_count + 1 write) is
+// REMOVED, not adapted -- wear_count/last_worn_at are now trigger-
+// maintained caches (see supabase/migrations/006_wardrobe_item_wears.sql);
+// a client writing them directly would fight the trigger.
+
+export async function fetchWardrobeItemWears(
   itemId: string,
-  nextWearCount: number,
+): Promise<WardrobeItemWearRow[]> {
+  const { data, error } = await supabase
+    .from('wardrobe_item_wears')
+    .select('*')
+    .eq('item_id', itemId)
+    .order('worn_on', { ascending: false });
+  if (error) {
+    throw error;
+  }
+  return data ?? [];
+}
+
+// One row per item per day (DB UNIQUE (item_id, worn_on), see the
+// migration) -- ON CONFLICT DO NOTHING makes a repeat "Mark Worn" tap for
+// today idempotent rather than erroring. `.select()` after the upsert makes
+// PostgREST return only the rows it actually inserted (empty when the
+// conflict was ignored), so the caller can tell "logged" from
+// "already logged today" (design doc's Edge Cases) without a second query.
+export async function logWardrobeItemWear(
+  itemId: string,
+  userId: string,
+  wornOn: string,
+): Promise<{ alreadyLogged: boolean }> {
+  const { data, error } = await supabase
+    .from('wardrobe_item_wears')
+    .upsert(
+      { item_id: itemId, user_id: userId, worn_on: wornOn },
+      { onConflict: 'item_id,worn_on', ignoreDuplicates: true },
+    )
+    .select();
+  if (error) {
+    throw error;
+  }
+  return { alreadyLogged: (data ?? []).length === 0 };
+}
+
+export async function updateWardrobeItemWear(
+  wearId: string,
+  wornOn: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_item_wears')
+    .update({ worn_on: wornOn })
+    .eq('id', wearId);
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deleteWardrobeItemWear(wearId: string): Promise<void> {
+  const { error } = await supabase
+    .from('wardrobe_item_wears')
+    .delete()
+    .eq('id', wearId);
+  if (error) {
+    throw error;
+  }
+}
+
+// Reads back the trigger-recomputed wear_count/cost_per_wear for the
+// wear-logged toast -- never recomputed client-side (cost_per_wear is a
+// GENERATED column, BL-004).
+export async function fetchWardrobeItemWearStats(
+  itemId: string,
+): Promise<{ wearCount: number; costPerWear: number | null }> {
+  const { data, error } = await supabase
+    .from('wardrobe_items')
+    .select('wear_count, cost_per_wear')
+    .eq('id', itemId)
+    .single();
+  if (error) {
+    throw error;
+  }
+  return {
+    wearCount: data.wear_count ?? 0,
+    costPerWear: data.cost_per_wear,
+  };
+}
+
+// UPDATE of brand/purchase_price/purchase_date/user_notes only -- never
+// wear_count/last_worn_at/cost_per_wear (those are trigger-maintained, see
+// above).
+export async function saveWardrobeItemDetails(
+  itemId: string,
+  details: WardrobeItemDetailsDraft,
 ): Promise<void> {
   const { error } = await supabase
     .from('wardrobe_items')
     .update({
-      wear_count: nextWearCount,
-      last_worn_at: new Date().toISOString(),
+      brand: details.brand,
+      purchase_price: details.purchasePrice,
+      purchase_date: details.purchaseDate,
+      user_notes: details.userNotes,
     })
     .eq('id', itemId);
   if (error) {
@@ -398,12 +488,23 @@ export async function markWardrobeItemWorn(
   }
 }
 
-export async function deleteWardrobeItem(itemId: string): Promise<void> {
-  const { error } = await supabase
-    .from('wardrobe_items')
-    .delete()
-    .eq('id', itemId);
-  if (error) {
-    throw error;
+// SS-015: routed through DELETE /wardrobe/items/{id} (not a direct Supabase
+// delete) -- the backend captures the item's R2 keys before removing the
+// row and cleans them up async (resolves BL-068). This means delete now
+// fails when the backend isn't reachable/running locally (BL-037), where
+// SS-014's direct-table delete would have succeeded.
+export async function deleteWardrobeItem(
+  itemId: string,
+  jwt: string,
+): Promise<void> {
+  const response = await fetch(
+    `${EXPO_PUBLIC_BACKEND_URL}/wardrobe/items/${itemId}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${jwt}` },
+    },
+  );
+  if (!response.ok) {
+    throw buildWardrobeUploadError('unknown', UNKNOWN_UPLOAD_ERROR_MESSAGE);
   }
 }

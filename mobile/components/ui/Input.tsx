@@ -31,6 +31,9 @@ export interface InputProps {
   onComplete?: (code: string) => void;
   // search variant only
   onClear?: () => void;
+  // text variant only (SS-015: user_notes multiline field with a hard cap)
+  multiline?: boolean;
+  maxLength?: number;
 }
 
 const DEFAULT_OTP_LENGTH = 6;
@@ -262,6 +265,8 @@ function TextVariantInput({
   error,
   disabled,
   autoFocus,
+  multiline = false,
+  maxLength,
 }: InputProps) {
   return (
     <View>
@@ -271,8 +276,13 @@ function TextVariantInput({
         placeholder={placeholder}
         editable={!disabled}
         autoFocus={autoFocus}
+        multiline={multiline}
+        maxLength={maxLength}
         className={baseFieldClassName(Boolean(disabled), Boolean(error))}
-        style={{ borderColor: error ? ERROR_COLOR : undefined }}
+        style={{
+          borderColor: error ? ERROR_COLOR : undefined,
+          ...(multiline ? { minHeight: 80, textAlignVertical: 'top' } : null),
+        }}
         accessibilityLabel={placeholder ?? 'Text input'}
       />
       <ErrorText error={error} />

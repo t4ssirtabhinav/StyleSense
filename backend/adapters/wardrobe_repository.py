@@ -149,7 +149,7 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
         client = await _client_for(jwt)
         response = (
             await client.table("wardrobe_items")
-            .select("image_url, image_clean_url, processing_status")
+            .select("image_url, image_clean_url, thumbnail_url, processing_status")
             .eq("id", item_id)
             .limit(1)
             .execute()
@@ -170,3 +170,8 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
         )
         rows = cast(list[dict[str, Any]], response.data or [])
         return {str(row["id"]): row for row in rows}
+
+    async def delete_item(self, *, jwt: str, item_id: str) -> bool:
+        client = await _client_for(jwt)
+        response = await client.table("wardrobe_items").delete().eq("id", item_id).execute()
+        return bool(response.data)

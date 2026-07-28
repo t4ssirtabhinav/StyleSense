@@ -32,10 +32,12 @@ from routers.wardrobe import (
     get_background_removal_provider,
     get_circuit_breaker,
     get_daily_rate_limiter,
+    get_deletion_service,
     get_r2_storage_client,
     get_vision_provider,
     get_wardrobe_repository,
 )
+from services.wardrobe_deletion_service import WardrobeDeletionService
 
 client = TestClient(app)
 
@@ -57,14 +59,17 @@ class _FakeRepository(IWardrobeRepository):
         exists: bool = True,
         image_info: dict[str, Any] | None = None,
         bulk_image_info: dict[str, dict[str, Any]] | None = None,
+        delete_returns: bool = True,
     ) -> None:
         self.plan_tier = plan_tier
         self.exists = exists
         self.image_info = image_info
         self.bulk_image_info = bulk_image_info
+        self.delete_returns = delete_returns
         self.upserts: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
         self.tagging_updates: list[dict[str, Any]] = []
+        self.deleted_item_ids: list[str] = []
 
     async def upsert_uploaded_row(
         self, *, jwt: str, item_id: str, user_id: str, image_key: str
@@ -113,6 +118,12 @@ class _FakeRepository(IWardrobeRepository):
         self, *, jwt: str, item_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
         return self.bulk_image_info or {}
+
+    # SS-015
+    async def delete_item(self, *, jwt: str, item_id: str) -> bool:
+        if self.delete_returns:
+            self.deleted_item_ids.append(item_id)
+        return self.delete_returns
 
 
 class _FakeRateLimiter:
@@ -613,3 +624,142 @@ def test_bulk_image_urls_returns_urls_only_for_owned_or_found_ids() -> None:
     assert urls[VALID_ITEM_ID_2]["source"] == "original"
     assert "original.jpg" in urls[VALID_ITEM_ID_2]["url"]
     assert VALID_ITEM_ID_3 not in urls
+
+
+# --- SS-015: DELETE /wardrobe/items/{item_id} -------------------------------
+
+
+class _FakeDeletionService(WardrobeDeletionService):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def cleanup_storage(self, *, user_id: str, item_id: str, keys: list[str]) -> None:
+        self.calls.append({"user_id": user_id, "item_id": item_id, "keys": keys})
+
+
+def _override_delete_infra(
+    repository: _FakeRepository, deletion_service: _FakeDeletionService
+) -> None:
+    app.dependency_overrides[get_wardrobe_repository] = lambda: repository
+    app.dependency_overrides[get_deletion_service] = lambda: deletion_service
+
+
+def test_delete_missing_authorization_header_returns_401() -> None:
+    response = client.delete(f"/wardrobe/items/{VALID_ITEM_ID}")
+
+    assert response.status_code == 401
+
+
+def test_delete_malformed_item_id_returns_422_not_500() -> None:
+    repository = _FakeRepository()
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.delete(
+        "/wardrobe/items/not-a-uuid",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_delete_nonexistent_or_unowned_item_returns_404_before_any_delete() -> None:
+    repository = _FakeRepository(image_info=None)
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.delete(
+            f"/wardrobe/items/{VALID_ITEM_ID}",
+            headers={"Authorization": "Bearer valid-token"},
+        )
+
+    assert response.status_code == 404
+    mock_add_task.assert_not_called()
+    assert repository.deleted_item_ids == []
+
+
+def test_delete_row_disappears_between_info_read_and_delete_returns_404() -> None:
+    # A defensive edge case: get_item_image_info found the row, but
+    # delete_item then reports 0 rows removed (e.g. a concurrent delete of
+    # the same item). Must not schedule a cleanup task for keys it never
+    # confirmed were actually deleted alongside the row.
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": None,
+            "thumbnail_url": None,
+            "processing_status": "uploaded",
+        },
+        delete_returns=False,
+    )
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.delete(
+            f"/wardrobe/items/{VALID_ITEM_ID}",
+            headers={"Authorization": "Bearer valid-token"},
+        )
+
+    assert response.status_code == 404
+    mock_add_task.assert_not_called()
+
+
+def test_delete_success_returns_200_and_schedules_cleanup_with_the_rows_three_keys() -> None:
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": f"wardrobe/user-1/{VALID_ITEM_ID}/clean.png",
+            "thumbnail_url": f"wardrobe/user-1/{VALID_ITEM_ID}/thumbnail.jpg",
+            "processing_status": "bg_removed",
+        }
+    )
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.delete(
+        f"/wardrobe/items/{VALID_ITEM_ID}",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted", "item_id": VALID_ITEM_ID}
+    assert repository.deleted_item_ids == [VALID_ITEM_ID]
+    # Background task runs synchronously within TestClient's request call
+    # (see module docstring).
+    assert len(deletion_service.calls) == 1
+    assert deletion_service.calls[0]["item_id"] == VALID_ITEM_ID
+    assert set(deletion_service.calls[0]["keys"]) == {
+        f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+        f"wardrobe/user-1/{VALID_ITEM_ID}/clean.png",
+        f"wardrobe/user-1/{VALID_ITEM_ID}/thumbnail.jpg",
+    }
+
+
+def test_delete_omits_null_keys_from_the_cleanup_call() -> None:
+    # image_clean_url/thumbnail_url are null (item never finished bg
+    # removal) -- only the non-null original.jpg key is passed through.
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": None,
+            "thumbnail_url": None,
+            "processing_status": "uploaded",
+        }
+    )
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+
+    response = client.delete(
+        f"/wardrobe/items/{VALID_ITEM_ID}",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 200
+    assert deletion_service.calls[0]["keys"] == [f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg"]

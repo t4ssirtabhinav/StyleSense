@@ -17,22 +17,30 @@ import {
 import {
   compressImageForUpload,
   deleteWardrobeItem,
+  deleteWardrobeItemWear,
   fetchWardrobeItemCount,
   fetchWardrobeItemImageUrl,
   fetchWardrobeItemImageUrls,
+  fetchWardrobeItemWearStats,
+  fetchWardrobeItemWears,
   fetchWardrobeItems,
-  markWardrobeItemWorn,
+  logWardrobeItemWear,
   removeBackground,
   requestUploadUrl,
+  saveWardrobeItemDetails,
   tagItem,
   toggleWardrobeItemFavourite,
+  updateWardrobeItemWear,
   uploadToR2WithProgress,
 } from './wardrobe.service';
 import { useWardrobeUploadStore } from './wardrobe.store';
 import {
   type GarmentTagsDraft,
+  type LogWearResult,
   type UploadWardrobeItemInput,
   type UploadWardrobeItemResult,
+  type WardrobeItemDetailsDraft,
+  type WardrobeItemRow,
   type WardrobeUploadError,
   isWardrobeUploadError,
 } from './wardrobe.types';
@@ -328,40 +336,210 @@ export interface ToggleWardrobeItemFavouriteInput {
   isFavourite: boolean;
 }
 
+interface WardrobeGridMutationContext {
+  previousItems: WardrobeItemRow[] | undefined;
+}
+
+// SS-015: real optimistic behaviour (SS-014 shipped invalidate-only, which
+// isn't what the AC's "instant" means) -- onMutate patches the cached items
+// array directly, onError rolls back to the pre-mutation snapshot,
+// onSettled always reconciles with the server.
 export function useToggleWardrobeItemFavourite() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.session?.user.id);
   const invalidateGridQueries = useInvalidateWardrobeGridQueries();
 
-  return useMutation<void, Error, ToggleWardrobeItemFavouriteInput>({
+  return useMutation<
+    void,
+    Error,
+    ToggleWardrobeItemFavouriteInput,
+    WardrobeGridMutationContext
+  >({
     mutationFn: ({ itemId, isFavourite }) =>
       toggleWardrobeItemFavourite(itemId, isFavourite),
-    onSuccess: invalidateGridQueries,
-  });
-}
-
-export interface MarkWardrobeItemWornInput {
-  itemId: string;
-  nextWearCount: number;
-}
-
-export function useMarkWardrobeItemWorn() {
-  const invalidateGridQueries = useInvalidateWardrobeGridQueries();
-
-  return useMutation<void, Error, MarkWardrobeItemWornInput>({
-    mutationFn: ({ itemId, nextWearCount }) =>
-      markWardrobeItemWorn(itemId, nextWearCount),
-    onSuccess: invalidateGridQueries,
+    onMutate: async ({ itemId, isFavourite }) => {
+      await queryClient.cancelQueries({
+        queryKey: wardrobeItemsQueryKey(userId),
+      });
+      const previousItems = queryClient.getQueryData<WardrobeItemRow[]>(
+        wardrobeItemsQueryKey(userId),
+      );
+      queryClient.setQueryData<WardrobeItemRow[]>(
+        wardrobeItemsQueryKey(userId),
+        (current) =>
+          current?.map((item) =>
+            item.id === itemId ? { ...item, is_favourite: isFavourite } : item,
+          ),
+      );
+      return { previousItems };
+    },
+    onError: (_error, _variables, context) => {
+      if (context) {
+        queryClient.setQueryData(
+          wardrobeItemsQueryKey(userId),
+          context.previousItems,
+        );
+      }
+    },
+    onSettled: invalidateGridQueries,
   });
 }
 
 export interface DeleteWardrobeItemInput {
   itemId: string;
+  jwt: string;
 }
 
+// SS-015: delete now goes through DELETE /wardrobe/items/{id} (jwt
+// required) rather than a direct Supabase delete -- see
+// wardrobe.service.ts's deleteWardrobeItem. onMutate removes the item from
+// the cached array immediately (AC: "removes the item from the grid
+// immediately"); onError restores it (e.g. the backend isn't reachable,
+// BL-037 -- delete is the first destructive action to inherit that
+// constraint).
 export function useDeleteWardrobeItem() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.session?.user.id);
   const invalidateGridQueries = useInvalidateWardrobeGridQueries();
 
-  return useMutation<void, Error, DeleteWardrobeItemInput>({
-    mutationFn: ({ itemId }) => deleteWardrobeItem(itemId),
+  return useMutation<
+    void,
+    Error,
+    DeleteWardrobeItemInput,
+    WardrobeGridMutationContext
+  >({
+    mutationFn: ({ itemId, jwt }) => deleteWardrobeItem(itemId, jwt),
+    onMutate: async ({ itemId }) => {
+      await queryClient.cancelQueries({
+        queryKey: wardrobeItemsQueryKey(userId),
+      });
+      const previousItems = queryClient.getQueryData<WardrobeItemRow[]>(
+        wardrobeItemsQueryKey(userId),
+      );
+      queryClient.setQueryData<WardrobeItemRow[]>(
+        wardrobeItemsQueryKey(userId),
+        (current) => current?.filter((item) => item.id !== itemId),
+      );
+      return { previousItems };
+    },
+    onError: (_error, _variables, context) => {
+      if (context) {
+        queryClient.setQueryData(
+          wardrobeItemsQueryKey(userId),
+          context.previousItems,
+        );
+      }
+    },
+    onSettled: invalidateGridQueries,
+  });
+}
+
+// --- SS-015 additions: dated wear-history log + item-details save --------
+
+export function wardrobeItemWearsQueryKey(itemId: string | undefined) {
+  // Keyed by itemId only (globally unique UUID, RLS scopes reads) -- unlike
+  // the grid's user-keyed keys, an account switch on the same device is
+  // still safe here (design doc's Edge Cases).
+  return ['wardrobe', 'item-wears', itemId] as const;
+}
+
+export function useWardrobeItemWearsQuery(itemId: string | undefined) {
+  return useQuery({
+    queryKey: wardrobeItemWearsQueryKey(itemId),
+    queryFn: () => fetchWardrobeItemWears(itemId as string),
+    enabled: Boolean(itemId),
+  });
+}
+
+export interface LogWardrobeItemWearInput {
+  itemId: string;
+  userId: string;
+  wornOn: string;
+}
+
+// Inserts the wear, then reads back the trigger-recomputed wear_count/
+// cost_per_wear for the toast -- never computes cost_per_wear client-side
+// (it's a GENERATED column, BL-004).
+export function useLogWardrobeItemWear() {
+  const queryClient = useQueryClient();
+  const invalidateGridQueries = useInvalidateWardrobeGridQueries();
+
+  return useMutation<LogWearResult, Error, LogWardrobeItemWearInput>({
+    mutationFn: async ({ itemId, userId, wornOn }) => {
+      const { alreadyLogged } = await logWardrobeItemWear(
+        itemId,
+        userId,
+        wornOn,
+      );
+      const stats = await fetchWardrobeItemWearStats(itemId);
+      return {
+        wearCount: stats.wearCount,
+        costPerWear: stats.costPerWear,
+        wornOn,
+        alreadyLogged,
+      };
+    },
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: wardrobeItemWearsQueryKey(variables.itemId),
+      });
+      invalidateGridQueries();
+    },
+  });
+}
+
+export interface UpdateWardrobeItemWearInput {
+  wearId: string;
+  itemId: string;
+  wornOn: string;
+}
+
+export function useUpdateWardrobeItemWear() {
+  const queryClient = useQueryClient();
+  const invalidateGridQueries = useInvalidateWardrobeGridQueries();
+
+  return useMutation<void, Error, UpdateWardrobeItemWearInput>({
+    mutationFn: ({ wearId, wornOn }) => updateWardrobeItemWear(wearId, wornOn),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: wardrobeItemWearsQueryKey(variables.itemId),
+      });
+      invalidateGridQueries();
+    },
+  });
+}
+
+export interface DeleteWardrobeItemWearInput {
+  wearId: string;
+  itemId: string;
+}
+
+export function useDeleteWardrobeItemWear() {
+  const queryClient = useQueryClient();
+  const invalidateGridQueries = useInvalidateWardrobeGridQueries();
+
+  return useMutation<void, Error, DeleteWardrobeItemWearInput>({
+    mutationFn: ({ wearId }) => deleteWardrobeItemWear(wearId),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: wardrobeItemWearsQueryKey(variables.itemId),
+      });
+      invalidateGridQueries();
+    },
+  });
+}
+
+export interface SaveWardrobeItemDetailsInput {
+  itemId: string;
+  details: WardrobeItemDetailsDraft;
+}
+
+export function useSaveWardrobeItemDetails() {
+  const invalidateGridQueries = useInvalidateWardrobeGridQueries();
+
+  return useMutation<void, Error, SaveWardrobeItemDetailsInput>({
+    mutationFn: ({ itemId, details }) =>
+      saveWardrobeItemDetails(itemId, details),
     onSuccess: invalidateGridQueries,
   });
 }

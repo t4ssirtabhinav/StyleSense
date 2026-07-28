@@ -263,3 +263,23 @@ export interface WardrobeFilterState {
   search: string;
   sort: WardrobeSortOption;
 }
+
+// --- SS-015 (Wardrobe Item Edit, Delete & Mark Worn) ---
+// Per docs/tickets/SS-015-design.md's "Files to create/modify" -- generated
+// type only (CLAUDE.md), transcribed verbatim.
+
+export type WardrobeItemWearRow = Tables<'wardrobe_item_wears'>;
+
+export interface WardrobeItemDetailsDraft {
+  brand: string | null;
+  purchasePrice: number | null;
+  purchaseDate: string | null;
+  userNotes: string | null;
+}
+
+export interface LogWearResult {
+  wearCount: number;
+  costPerWear: number | null;
+  wornOn: string;
+  alreadyLogged: boolean;
+}
