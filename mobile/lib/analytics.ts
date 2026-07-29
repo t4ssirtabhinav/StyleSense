@@ -127,3 +127,12 @@ export function resetAnalyticsUser(): void {
     // Analytics must never crash the app.
   }
 }
+
+// SS-026 — the ONE shared client. A second `new PostHog(...)` instance
+// would diverge distinct_id/session state from the one already
+// `.identify()`-ing users via initAnalytics() above. `null` before
+// initAnalytics() has run or when the API key was absent — callers must
+// handle that (see lib/featureFlags.ts).
+export function getAnalyticsClient(): PostHog | null {
+  return client;
+}

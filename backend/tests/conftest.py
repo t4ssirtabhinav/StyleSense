@@ -30,6 +30,10 @@ import pytest
 def _baseline_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "test-anon-key")
+    # (SS-026) AppConfigRepository is the first adapter needing this var --
+    # its absence would KeyError in CI exactly per this file's own
+    # documented gap.
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
     monkeypatch.setenv("CLOUDFLARE_R2_ACCOUNT_ID", "test-account-id")
     monkeypatch.setenv("CLOUDFLARE_R2_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("CLOUDFLARE_R2_SECRET_KEY", "test-secret-key")

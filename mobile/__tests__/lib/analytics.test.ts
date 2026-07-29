@@ -148,4 +148,55 @@ describe('lib/analytics', () => {
       expect(mockReset).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('getAnalyticsClient', () => {
+    it('returns the same constructed instance initAnalytics() built', () => {
+      process.env.EXPO_PUBLIC_POSTHOG_API_KEY = 'test-key';
+
+      jest.isolateModules(() => {
+        const {
+          initAnalytics,
+          getAnalyticsClient,
+          capture,
+        } = require('../../lib/analytics');
+        initAnalytics();
+        const client = getAnalyticsClient();
+        expect(client).not.toBeNull();
+
+        // Identity check via the mocked constructor: calling a method on
+        // the object returned by getAnalyticsClient() should reach the
+        // same mock capture() that initAnalytics()'s own internal client
+        // would call.
+        (global as { __DEV__?: boolean }).__DEV__ = false;
+        capture('app_opened');
+        expect(mockCapture).toHaveBeenCalledTimes(1);
+
+        client?.capture('app_opened', {});
+        expect(mockCapture).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('returns null before initAnalytics() has been called', () => {
+      process.env.EXPO_PUBLIC_POSTHOG_API_KEY = 'test-key';
+
+      jest.isolateModules(() => {
+        const { getAnalyticsClient } = require('../../lib/analytics');
+        expect(getAnalyticsClient()).toBeNull();
+      });
+    });
+
+    it('returns null when the API key was absent', () => {
+      // biome-ignore lint/performance/noDelete: see comment above initAnalytics tests
+      delete process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
+
+      jest.isolateModules(() => {
+        const {
+          initAnalytics,
+          getAnalyticsClient,
+        } = require('../../lib/analytics');
+        initAnalytics();
+        expect(getAnalyticsClient()).toBeNull();
+      });
+    });
+  });
 });
