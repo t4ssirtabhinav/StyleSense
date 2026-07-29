@@ -65,6 +65,19 @@ class IOccasionRepository(ABC):
         raise NotImplementedError
 
 
+class IAppConfigRepository(ABC):
+    """(SS-026) ALWAYS uses service_role -- see design §3.4 for why this port
+    deliberately breaks the "never service_role" pattern every other
+    adapters/ repository in this file follows. Raises on transport failure;
+    AppConfigService owns the fallback/caching/typed-validation policy."""
+
+    @abstractmethod
+    async def fetch_all(self) -> dict[str, Any]:
+        """Return {key: raw JSONB value} for every row. No filtering, no
+        parsing -- AppConfigService validates per-key, lazily, on read()."""
+        raise NotImplementedError
+
+
 class IWardrobeRepository(ABC):
     """Never modify this signature to fit a new caller -- add a new method
     or a new adapter instead (Open/Closed, per CLAUDE.md)."""
