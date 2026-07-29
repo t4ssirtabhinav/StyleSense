@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       colour_palette: {
@@ -38,26 +63,120 @@ export type Database = {
         }
         Relationships: []
       }
-      occasion_types: {
+      occasion_aliases: {
         Row: {
-          active: boolean
-          key: string
-          label: string
-          sort_order: number
+          alias: string
+          created_at: string
+          occasion_key: string
         }
         Insert: {
-          active?: boolean
-          key: string
-          label: string
-          sort_order: number
+          alias: string
+          created_at?: string
+          occasion_key: string
         }
         Update: {
-          active?: boolean
-          key?: string
-          label?: string
-          sort_order?: number
+          alias?: string
+          created_at?: string
+          occasion_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "occasion_aliases_occasion_key_fkey"
+            columns: ["occasion_key"]
+            isOneToOne: false
+            referencedRelation: "occasions"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      occasion_unknown_tags: {
+        Row: {
+          first_seen_at: string
+          last_seen_at: string
+          occurrences: number
+          sample_source: string | null
+          sample_user_id: string | null
+          slug: string
+        }
+        Insert: {
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug: string
+        }
+        Update: {
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug?: string
         }
         Relationships: []
+      }
+      occasions: {
+        Row: {
+          badge_color: string
+          created_at: string
+          culture_scope: string[] | null
+          date_rule: Json | null
+          formality: number
+          is_active: boolean
+          key: string
+          kind: string
+          label: string
+          labels_i18n: Json
+          parent_key: string | null
+          region_scope: string[] | null
+          sort_order: number
+          styling_rules: Json
+          tier_gate: string
+        }
+        Insert: {
+          badge_color: string
+          created_at?: string
+          culture_scope?: string[] | null
+          date_rule?: Json | null
+          formality: number
+          is_active?: boolean
+          key: string
+          kind: string
+          label: string
+          labels_i18n?: Json
+          parent_key?: string | null
+          region_scope?: string[] | null
+          sort_order?: number
+          styling_rules?: Json
+          tier_gate?: string
+        }
+        Update: {
+          badge_color?: string
+          created_at?: string
+          culture_scope?: string[] | null
+          date_rule?: Json | null
+          formality?: number
+          is_active?: boolean
+          key?: string
+          kind?: string
+          label?: string
+          labels_i18n?: Json
+          parent_key?: string | null
+          region_scope?: string[] | null
+          sort_order?: number
+          styling_rules?: Json
+          tier_gate?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "occasions_parent_key_fkey"
+            columns: ["parent_key"]
+            isOneToOne: false
+            referencedRelation: "occasions"
+            referencedColumns: ["key"]
+          },
+        ]
       }
       outfits: {
         Row: {
@@ -69,7 +188,7 @@ export type Database = {
           item_ids: string[] | null
           last_worn_at: string | null
           name: string | null
-          occasion: Database["public"]["Enums"]["occasion_type"] | null
+          occasion: string | null
           season: string | null
           user_id: string | null
           user_rating: number | null
@@ -84,7 +203,7 @@ export type Database = {
           item_ids?: string[] | null
           last_worn_at?: string | null
           name?: string | null
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           season?: string | null
           user_id?: string | null
           user_rating?: number | null
@@ -99,7 +218,7 @@ export type Database = {
           item_ids?: string[] | null
           last_worn_at?: string | null
           name?: string | null
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           season?: string | null
           user_id?: string | null
           user_rating?: number | null
@@ -174,7 +293,7 @@ export type Database = {
           image_url: string
           is_public: boolean | null
           likes_count: number | null
-          occasion: Database["public"]["Enums"]["occasion_type"] | null
+          occasion: string | null
           outfit_id: string | null
           saves_count: number | null
           user_id: string | null
@@ -187,7 +306,7 @@ export type Database = {
           image_url: string
           is_public?: boolean | null
           likes_count?: number | null
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           outfit_id?: string | null
           saves_count?: number | null
           user_id?: string | null
@@ -200,7 +319,7 @@ export type Database = {
           image_url?: string
           is_public?: boolean | null
           likes_count?: number | null
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           outfit_id?: string | null
           saves_count?: number | null
           user_id?: string | null
@@ -249,7 +368,7 @@ export type Database = {
           cache_key: string | null
           created_at: string | null
           id: string
-          occasion: Database["public"]["Enums"]["occasion_type"] | null
+          occasion: string | null
           suggestions: Json | null
           user_id: string | null
           weather_data: Json | null
@@ -259,7 +378,7 @@ export type Database = {
           cache_key?: string | null
           created_at?: string | null
           id?: string
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           suggestions?: Json | null
           user_id?: string | null
           weather_data?: Json | null
@@ -269,7 +388,7 @@ export type Database = {
           cache_key?: string | null
           created_at?: string | null
           id?: string
-          occasion?: Database["public"]["Enums"]["occasion_type"] | null
+          occasion?: string | null
           suggestions?: Json | null
           user_id?: string | null
           weather_data?: Json | null
@@ -433,7 +552,7 @@ export type Database = {
           image_url: string
           is_favourite: boolean | null
           last_worn_at: string | null
-          occasion_tags: Database["public"]["Enums"]["occasion_type"][] | null
+          occasion_tags: string[] | null
           pattern: string | null
           processing_status: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date: string | null
@@ -459,7 +578,7 @@ export type Database = {
           image_url: string
           is_favourite?: boolean | null
           last_worn_at?: string | null
-          occasion_tags?: Database["public"]["Enums"]["occasion_type"][] | null
+          occasion_tags?: string[] | null
           pattern?: string | null
           processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
@@ -485,7 +604,7 @@ export type Database = {
           image_url?: string
           is_favourite?: boolean | null
           last_worn_at?: string | null
-          occasion_tags?: Database["public"]["Enums"]["occasion_type"][] | null
+          occasion_tags?: string[] | null
           pattern?: string | null
           processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
@@ -512,25 +631,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      occasion_is_known: { Args: { p_slug: string }; Returns: boolean }
+      occasion_log_unknown: {
+        Args: { p_slug: string; p_src: string; p_uid: string }
+        Returns: undefined
+      }
+      occasion_normalize_array: {
+        Args: { p_raw: string[]; p_src: string; p_uid: string }
+        Returns: string[]
+      }
+      occasion_normalize_one: { Args: { p_raw: string }; Returns: string }
+      occasion_normalize_shape: { Args: { p_raw: string }; Returns: string }
       sync_wardrobe_item_wear_stats: {
         Args: { target_item_id: string }
         Returns: undefined
       }
     }
     Enums: {
-      occasion_type:
-        | "office"
-        | "casual"
-        | "date_night"
-        | "wedding_guest"
-        | "festival"
-        | "puja"
-        | "party"
-        | "travel"
-        | "workout"
-        | "beach"
-        | "formal_event"
-        | "college"
       plan_tier: "free" | "premium" | "premium_annual"
       wardrobe_category:
         | "western_top"
@@ -684,22 +801,11 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
-      occasion_type: [
-        "office",
-        "casual",
-        "date_night",
-        "wedding_guest",
-        "festival",
-        "puja",
-        "party",
-        "travel",
-        "workout",
-        "beach",
-        "formal_event",
-        "college",
-      ],
       plan_tier: ["free", "premium", "premium_annual"],
       wardrobe_category: [
         "western_top",

@@ -63,6 +63,7 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from ai.ports.interfaces import GarmentTags, IVisionProvider, VisionTaggingResult
+from services.occasion_normalizer import OccasionNormalizer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,20 @@ logger = logging.getLogger(__name__)
 # the shut-down `gemini-1.5-flash`.
 MODEL = "gemini-3.5-flash-lite"
 
-_TAXONOMY_PROMPT = """You are a fashion-cataloguing AI for an India-first wardrobe app.
+# (SS-025) A TEMPLATE, not a finished string. `{occasion_vocabulary}` is
+# rendered at call time from the live `occasions` registry snapshot (active
+# keys, comma-joined, in `sort_order`) instead of the hardcoded 12-value
+# enum list this used to carry. THIS is what makes the ticket's headline AC
+# — "insert `ganesh_chaturthi`, see it in the app with no rebuild" — actually
+# reach the AI, not just the pickers.
+#
+# Substituted with a plain `str.replace`, deliberately NOT `str.format`:
+# the JSON shape below is full of literal `{`/`}` that `format` would try to
+# interpret, and doubling every brace in a prompt is exactly the kind of
+# invisible edit that silently corrupts it later.
+_OCCASION_VOCABULARY_PLACEHOLDER = "{occasion_vocabulary}"
+
+_TAXONOMY_PROMPT_TEMPLATE = """You are a fashion-cataloguing AI for an India-first wardrobe app.
 Look at the single garment photo provided and return ONLY a JSON object (no
 markdown, no prose) matching this shape:
 
@@ -93,9 +107,8 @@ markdown, no prose) matching this shape:
   "fabric": one of [cotton, silk, linen, denim, wool, rayon, polyester,
     georgette, chiffon, khadi, chikankari] or another short free-text label
     if none fit,
-  "occasion_tags": a list of zero or more of [office, casual, date_night,
-    wedding_guest, festival, puja, party, travel, workout, beach,
-    formal_event, college],
+  "occasion_tags": a list of zero or more of [{occasion_vocabulary}], or
+    another short lowercase_underscore occasion label if none of those fit,
   "season_tags": a list of zero or more of [summer, winter, monsoon, all],
   "confidence": your confidence in this classification, 0.0 to 1.0,
   "content_flag": "ok" (normal clothing photo), "nsfw" (explicit content),
@@ -117,6 +130,12 @@ Rules:
   to 0.0, and set content_flag to "not_clothing".
 - Output strict JSON only, matching the shape above exactly."""
 
+# Used only when the registry snapshot is empty (a first-ever call whose
+# registry read failed). Not a second source of truth for the vocabulary --
+# the model is explicitly told it may return another label anyway, and
+# whatever it returns is normalised and captured downstream regardless.
+_EMPTY_VOCABULARY_HINT = "any short lowercase_underscore occasion label"
+
 
 class GeminiVisionAdapter(IVisionProvider):
     """Calls Gemini's ``gemini-3.5-flash-lite`` via the ``google-genai``
@@ -132,11 +151,19 @@ class GeminiVisionAdapter(IVisionProvider):
         timeout_seconds: float = 30.0,
         max_attempts: int = 3,
         retry_backoff_base_seconds: float = 0.5,
+        occasion_normalizer: OccasionNormalizer | None = None,
+        registry_jwt: str | None = None,
     ) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._max_attempts = max_attempts
         self._retry_backoff_base_seconds = retry_backoff_base_seconds
+        # (SS-025) Constructor injection, so IVisionProvider.tag_garment's
+        # signature does NOT change (Open/Closed, per CLAUDE.md). Both are
+        # optional so an adapter constructed without them (tests, ad-hoc
+        # scripts) still works -- it just renders the empty-vocabulary hint.
+        self._occasion_normalizer = occasion_normalizer
+        self._registry_jwt = registry_jwt
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -144,9 +171,23 @@ class GeminiVisionAdapter(IVisionProvider):
         api_key = os.environ["GEMINI_API_KEY"]
         return genai.Client(api_key=api_key)
 
+    async def _build_prompt(self) -> str:
+        """Renders the occasion vocabulary from the live registry snapshot,
+        in ``sort_order``. Never raises -- ``OccasionNormalizer.get_registry``
+        owns the failure/fallback policy, and an empty vocabulary degrades to
+        a free-form hint rather than blocking the tagging call."""
+        vocabulary = ""
+        if self._occasion_normalizer is not None and self._registry_jwt is not None:
+            snapshot = await self._occasion_normalizer.get_registry(jwt=self._registry_jwt)
+            vocabulary = ", ".join(snapshot.keys)
+        return _TAXONOMY_PROMPT_TEMPLATE.replace(
+            _OCCASION_VOCABULARY_PLACEHOLDER, vocabulary or _EMPTY_VOCABULARY_HINT
+        )
+
     async def tag_garment(self, image_bytes: bytes) -> VisionTaggingResult:
         start = time.perf_counter()
         attempt = 0
+        prompt = await self._build_prompt()
 
         while True:
             attempt += 1
@@ -156,7 +197,7 @@ class GeminiVisionAdapter(IVisionProvider):
                     client.aio.models.generate_content(
                         model=MODEL,
                         contents=[
-                            _TAXONOMY_PROMPT,
+                            prompt,
                             types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
                         ],
                         config=types.GenerateContentConfig(

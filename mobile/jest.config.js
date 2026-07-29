@@ -29,6 +29,10 @@ module.exports = {
   setupFiles: [
     'react-native-gesture-handler/jestSetup.js',
     '@shopify/flash-list/jestSetup.js',
+    // SS-025 — AsyncStorage's own official jest mock (see jest.setup.js).
+    // Without it, every suite that transitively imports lib/storage.ts fails
+    // at import time with "NativeModule: AsyncStorage is null".
+    '<rootDir>/jest.setup.js',
   ],
   // jest-expo's own default transformIgnorePatterns (jest-preset.js) doesn't
   // include @shopify/flash-list, whose dist/index.js ships untranspiled ESM

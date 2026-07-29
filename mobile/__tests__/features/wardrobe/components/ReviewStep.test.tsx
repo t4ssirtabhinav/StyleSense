@@ -9,9 +9,63 @@ jest.mock('../../../../features/wardrobe/wardrobe.service', () => ({
 }));
 
 const mockMutate = jest.fn();
+const mockUseOccasionOptions = jest.fn();
 jest.mock('../../../../features/wardrobe/wardrobe.queries', () => ({
   useSaveWardrobeItemTags: jest.fn(),
+  useOccasionOptions: () => mockUseOccasionOptions(),
 }));
+
+// (SS-025) Occasion chips come from the `occasions` registry at runtime.
+// `optionsIncluding` implements the UNION rule: active registry PLUS any slug
+// already on the draft/item, so an unknown AI slug or a since-deactivated
+// occasion stays visible and selected instead of being silently dropped on
+// the next save.
+const REGISTRY_OCCASIONS = [
+  { key: 'office', label: 'Office', badgeColor: 'office' as const },
+  { key: 'casual', label: 'Casual', badgeColor: 'casual' as const },
+  {
+    key: 'wedding_guest',
+    label: 'Wedding Guest',
+    badgeColor: 'wedding' as const,
+  },
+  { key: 'festival', label: 'Festival', badgeColor: 'festival' as const },
+  { key: 'college', label: 'College', badgeColor: 'casual' as const },
+];
+
+function humanize(slug: string): string {
+  return slug
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function occasionTaxonomy(registry = REGISTRY_OCCASIONS) {
+  const byKey = Object.fromEntries(registry.map((o) => [o.key, o]));
+  return {
+    occasions: registry,
+    label: (slug: string) => byKey[slug]?.label ?? humanize(slug),
+    badgeColor: (slug: string) => byKey[slug]?.badgeColor,
+    optionsIncluding: (tags: readonly string[]) => {
+      const options = registry.map((o) => ({ ...o }));
+      const seen = new Set(options.map((o) => o.key));
+      for (const tag of tags) {
+        if (tag && !seen.has(tag)) {
+          seen.add(tag);
+          options.push({
+            key: tag,
+            label: humanize(tag),
+            badgeColor: undefined as never,
+          });
+        }
+      }
+      return options;
+    },
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  };
+}
 
 function baseTags(overrides: Partial<GarmentTagsDraft> = {}): GarmentTagsDraft {
   return {
@@ -37,6 +91,7 @@ describe('ReviewStep', () => {
       mutate: mockMutate,
       isPending: false,
     });
+    mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
   });
 
   it("renders the BG-removed image when processing_status='bg_removed'", async () => {
@@ -257,7 +312,7 @@ describe('ReviewStep', () => {
 
   // --- SS-019 additions (layout/UX ACs) -----------------------------------
 
-  it("occasion/season badge rows carry flex-row flex-wrap classes (renders all 12 + 4 badges, doesn't assert pixel layout)", async () => {
+  it("occasion/season badge rows carry flex-row flex-wrap classes (renders the fetched occasions + 4 seasons, doesn't assert pixel layout)", async () => {
     (wardrobeService.fetchWardrobeItemImageUrl as jest.Mock).mockResolvedValue({
       url: 'https://r2.example.com/clean.png',
       source: 'clean',
@@ -308,5 +363,74 @@ describe('ReviewStep', () => {
     expect(frame.props.className).toContain('overflow-hidden');
     expect(frame.props.className).toContain('rounded-lg');
     expect(frame.props.className).toContain('border border-textMuted');
+  });
+});
+
+describe('ReviewStep — SS-025 occasion union rule', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (wardrobeQueries.useSaveWardrobeItemTags as jest.Mock).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+    });
+    mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
+    (wardrobeService.fetchWardrobeItemImageUrl as jest.Mock).mockResolvedValue({
+      url: 'https://r2.example.com/clean.png',
+      source: 'clean',
+    });
+  });
+
+  async function renderReview(tags: GarmentTagsDraft) {
+    return render(
+      <ReviewStep
+        itemId="item-1"
+        jwt="jwt"
+        processingStatus="bg_removed"
+        initialTags={tags}
+        onOpenCategoryPicker={jest.fn()}
+        onSaved={jest.fn()}
+      />,
+    );
+  }
+
+  it('renders chips with registry labels, not raw slugs', async () => {
+    const { findByTestId } = await renderReview(baseTags());
+
+    const chip = await findByTestId('occasion-badge-wedding_guest');
+    expect(chip).toBeOnTheScreen();
+  });
+
+  it('renders an UNKNOWN slug already on the draft as a SELECTED chip', async () => {
+    const { findByTestId } = await renderReview(
+      baseTags({ occasionTags: ['ganesh_chaturthi'] }),
+    );
+
+    const chip = await findByTestId('occasion-badge-ganesh_chaturthi');
+    // Union rule: an unknown slug already on the draft renders as a
+    // selected chip rather than being silently absent from the picker.
+    expect(chip).toBeOnTheScreen();
+  });
+
+  it('survives a save round-trip without dropping the unknown slug', async () => {
+    const { findByTestId, getByLabelText } = await renderReview(
+      baseTags({ occasionTags: ['ganesh_chaturthi', 'festival'] }),
+    );
+    await findByTestId('occasion-badge-ganesh_chaturthi');
+
+    await fireEvent.press(getByLabelText('Looks Good!'));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalled());
+    expect(mockMutate.mock.calls[0][0].tags.occasionTags).toEqual([
+      'ganesh_chaturthi',
+      'festival',
+    ]);
+  });
+
+  it('renders a DEACTIVATED occasion still on the draft (absent from the active registry)', async () => {
+    const { findByTestId } = await renderReview(
+      baseTags({ occasionTags: ['beach'] }),
+    );
+
+    expect(await findByTestId('occasion-badge-beach')).toBeOnTheScreen();
   });
 });

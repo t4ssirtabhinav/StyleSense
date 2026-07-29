@@ -148,6 +148,12 @@ export function selectFilteredSortedItems(
     if (!matchesCategoryFilter(item, filters.categoryFilter)) {
       return false;
     }
+    // (SS-025) Deliberately a plain string `includes` against the stored
+    // slugs, with NO registry membership check: an applied filter on an
+    // occasion that has since been deactivated (or that was never in the
+    // registry at all, e.g. an unknown AI-emitted slug) must keep matching
+    // the items carrying it. Never orphan a user's data because of a
+    // taxonomy edit (design §6.2).
     if (
       filters.occasionFilter !== 'all' &&
       !(item.occasion_tags ?? []).includes(filters.occasionFilter)

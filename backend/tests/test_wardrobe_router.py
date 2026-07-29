@@ -34,6 +34,7 @@ from routers.wardrobe import (
     get_daily_rate_limiter,
     get_deletion_service,
     get_r2_storage_client,
+    get_tag_cache,
     get_vision_provider,
     get_wardrobe_repository,
 )
@@ -334,10 +335,46 @@ def test_malformed_item_id_returns_422_not_500() -> None:
 # --- SS-012: POST /wardrobe/tag -------------------------------------------
 
 
+class _FakeTagCache:
+    """In-memory stand-in for the real Upstash-backed TagCache.
+
+    (SS-025) Added because the real TagCache was NOT overridden here, so
+    these tests talked to the live Upstash instance and SELF-POISONED: the
+    first run's `_write_success` wrote `tag:{md5}` with a 30-DAY TTL, and
+    every subsequent run within those 30 days took the cache-hit branch,
+    skipping the provider entirely -- making
+    `test_tag_dependency_override_swaps_the_vision_provider` fail with
+    `call_count == 0`. Confirmed by reading the live key's TTL (2,500,187s
+    remaining, i.e. written ~1 day before this ticket's Developer phase, so
+    the failure predates SS-025). Faking it here matches what every other
+    dependency in this helper already does. Logged as BL-091.
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[str, dict[str, Any]] = {}
+        self.inflight: set[str] = set()
+
+    async def get(self, image_hash: str) -> dict[str, Any] | None:
+        return self.entries.get(image_hash)
+
+    async def set(self, image_hash: str, payload: dict[str, Any]) -> None:
+        self.entries[image_hash] = payload
+
+    async def mark_inflight(self, image_hash: str) -> bool:
+        if image_hash in self.inflight:
+            return False
+        self.inflight.add(image_hash)
+        return True
+
+    async def clear_inflight(self, image_hash: str) -> None:
+        self.inflight.discard(image_hash)
+
+
 def _override_tag_infra(repository: _FakeRepository, provider: _FakeVisionProvider) -> None:
     app.dependency_overrides[get_wardrobe_repository] = lambda: repository
     app.dependency_overrides[get_vision_provider] = lambda: provider
     app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
+    app.dependency_overrides[get_tag_cache] = _FakeTagCache
 
 
 def test_tag_missing_authorization_header_returns_401() -> None:

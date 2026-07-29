@@ -18,7 +18,6 @@ import {
 } from '../../../components/ui';
 import { useAuthStore } from '../../auth/auth.store';
 import {
-  OCCASION_BADGE_COLOR_MAP,
   WARDROBE_CATEGORIES,
   WEAR_LOGGED_NO_PRICE_PREFIX,
   WEAR_LOGGED_TODAY_MESSAGE,
@@ -27,12 +26,13 @@ import {
 import {
   useDeleteWardrobeItem,
   useLogWardrobeItemWear,
+  useOccasionOptions,
   useToggleWardrobeItemFavourite,
   useWardrobeItemImageUrlQuery,
 } from '../wardrobe.queries';
 import type {
   GarmentTagsDraft,
-  OccasionType,
+  OccasionSlug,
   SeasonTag,
   WardrobeItemDetailsDraft,
   WardrobeItemRow,
@@ -92,7 +92,7 @@ function toEditableDraft(item: WardrobeItemRow): GarmentTagsDraft {
     colorSecondary: item.color_secondary,
     pattern: item.pattern,
     fabric: item.fabric,
-    occasionTags: (item.occasion_tags ?? []) as OccasionType[],
+    occasionTags: (item.occasion_tags ?? []) as OccasionSlug[],
     seasonTags: (item.season_tags ?? []) as SeasonTag[],
     confidence: 1,
     contentFlag: 'ok',
@@ -234,6 +234,9 @@ export const ItemDetailSheet = forwardRef<
   const toggleFavourite = useToggleWardrobeItemFavourite();
   const logWear = useLogWardrobeItemWear();
   const deleteItem = useDeleteWardrobeItem();
+  // (SS-025) Must be called before the `if (!item)` early return below --
+  // hooks are unconditional.
+  const occasionTaxonomy = useOccasionOptions();
 
   const heartScale = useSharedValue(1);
   const heartAnimatedStyle = useAnimatedStyle(() => ({
@@ -386,12 +389,17 @@ export const ItemDetailSheet = forwardRef<
           </View>
 
           <View className="mb-md flex-row flex-wrap gap-xs">
+            {/* (SS-025) Always renders a label, even for a slug the active
+             * registry no longer contains (deactivated) or never did
+             * (unknown AI output) -- `label()` falls back to the humanised
+             * slug, so a chip is never blank. Never orphan a user's data
+             * because of a taxonomy edit. */}
             {(item.occasion_tags ?? []).map((occasion) => (
               <Badge
                 key={occasion}
                 testID={`item-detail-occasion-${occasion}`}
-                label={occasion}
-                occasion={OCCASION_BADGE_COLOR_MAP[occasion as OccasionType]}
+                label={occasionTaxonomy.label(occasion)}
+                occasion={occasionTaxonomy.badgeColor(occasion)}
               />
             ))}
             {(item.season_tags ?? []).map((season) => (

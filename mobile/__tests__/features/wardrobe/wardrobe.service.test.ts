@@ -14,9 +14,11 @@ import {
   fetchWardrobeItems,
   logWardrobeItemWear,
   mapRealtimeRowToTagsDraft,
+  normalizeOccasionTagsForWrite,
   removeBackground,
   requestUploadUrl,
   saveWardrobeItemDetails,
+  saveWardrobeItemTags,
   subscribeToItemUpdates,
   tagItem,
   toggleWardrobeItemFavourite,
@@ -24,6 +26,41 @@ import {
   uploadToR2WithProgress,
 } from '../../../features/wardrobe/wardrobe.service';
 import type { WardrobeItemRealtimeRow } from '../../../features/wardrobe/wardrobe.types';
+
+// (SS-025) The occasion vocabulary the write path normalises against comes
+// from lib/storage.ts's last-known-good cache, not a network call.
+const mockReadCachedTaxonomies = jest.fn();
+jest.mock('../../../lib/storage', () => ({
+  readCachedTaxonomies: () => mockReadCachedTaxonomies(),
+  writeCachedTaxonomies: jest.fn(),
+}));
+
+const CACHED_TAXONOMIES = {
+  styleKeywords: [],
+  colourPalette: [],
+  isStale: false,
+  occasionAliases: [
+    { alias: 'wedding', occasionKey: 'wedding_guest' },
+    { alias: 'date', occasionKey: 'date_night' },
+  ],
+  occasions: [
+    'casual',
+    'festival',
+    'puja',
+    'travel',
+    'wedding_guest',
+    'date_night',
+  ].map((key, index) => ({
+    key,
+    label: key,
+    sortOrder: index + 1,
+    badgeColor: 'casual' as const,
+    kind: 'everyday',
+    parentKey: null,
+    regionScope: null,
+    cultureScope: null,
+  })),
+};
 
 const mockManipulateAsync = jest.fn();
 jest.mock('expo-image-manipulator', () => ({
@@ -757,5 +794,116 @@ describe('saveWardrobeItemDetails', () => {
       user_notes: 'Gift from mom',
     });
     expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+  });
+});
+
+// --- SS-025 (Occasion Taxonomy & Extensibility Migration) -----------------
+
+describe('saveWardrobeItemTags — occasion normalisation at the write boundary', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEq.mockResolvedValue({ error: null });
+    mockReadCachedTaxonomies.mockResolvedValue({
+      version: 1,
+      fetchedAt: '2026-07-28T00:00:00.000Z',
+      payload: CACHED_TAXONOMIES,
+    });
+  });
+
+  function draft(occasionTags: string[]) {
+    return {
+      category: 'ethnic_kurta' as const,
+      subcategory: 'kurta',
+      colorPrimary: 'blue',
+      colorSecondary: null,
+      pattern: 'solid',
+      fabric: 'cotton',
+      occasionTags,
+      seasonTags: ['summer' as const],
+      confidence: 0.9,
+      contentFlag: 'ok' as const,
+      containsPerson: false,
+    };
+  }
+
+  it('writes exactly the 8 tag columns, scoped to the item id', async () => {
+    await saveWardrobeItemTags('item-1', draft(['festival']));
+
+    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
+    expect(mockUpdate).toHaveBeenCalledWith({
+      category: 'ethnic_kurta',
+      subcategory: 'kurta',
+      color_primary: 'blue',
+      color_secondary: null,
+      pattern: 'solid',
+      fabric: 'cotton',
+      occasion_tags: ['festival'],
+      season_tags: ['summer'],
+    });
+    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+  });
+
+  it('normalises and dedupes occasion slugs BEFORE the Supabase call', async () => {
+    await saveWardrobeItemTags(
+      'item-1',
+      draft(['  Wedding Guest ', 'wedding', 'Travel', 'travel']),
+    );
+
+    // 'wedding' aliases onto wedding_guest and dedupes away; first-occurrence
+    // order preserved, never sorted.
+    expect(
+      (mockUpdate.mock.calls[0][0] as { occasion_tags: string[] })
+        .occasion_tags,
+    ).toEqual(['wedding_guest', 'travel']);
+  });
+
+  it('keeps an unknown slug rather than dropping it on save', async () => {
+    await saveWardrobeItemTags('item-1', draft(['Ganesh Chaturthi', 'puja']));
+
+    expect(
+      (mockUpdate.mock.calls[0][0] as { occasion_tags: string[] })
+        .occasion_tags,
+    ).toEqual(['ganesh_chaturthi', 'puja']);
+  });
+
+  it('degrades to shape-only normalisation when the taxonomy cache is empty', async () => {
+    mockReadCachedTaxonomies.mockResolvedValue(null);
+
+    await saveWardrobeItemTags('item-1', draft(['  Wedding Guest ']));
+
+    // The DB trigger completes the alias mapping; the write still happens.
+    expect(
+      (mockUpdate.mock.calls[0][0] as { occasion_tags: string[] })
+        .occasion_tags,
+    ).toEqual(['wedding_guest']);
+  });
+
+  it('throws the raw Supabase error on failure', async () => {
+    mockEq.mockResolvedValue({ error: new Error('boom') });
+
+    await expect(
+      saveWardrobeItemTags('item-1', draft(['casual'])),
+    ).rejects.toThrow('boom');
+  });
+});
+
+describe('normalizeOccasionTagsForWrite', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockReadCachedTaxonomies.mockResolvedValue({
+      version: 1,
+      fetchedAt: '2026-07-28T00:00:00.000Z',
+      payload: CACHED_TAXONOMIES,
+    });
+  });
+
+  it('returns an empty array for an empty input', async () => {
+    await expect(normalizeOccasionTagsForWrite([])).resolves.toEqual([]);
+  });
+
+  it('drops entries that normalise to nothing', async () => {
+    await expect(
+      normalizeOccasionTagsForWrite(['', '   ', '!!!', 'casual']),
+    ).resolves.toEqual(['casual']);
   });
 });

@@ -16,8 +16,10 @@ const THREE_STYLES = [
 
 const TAXONOMIES = {
   styleKeywords: THREE_STYLES,
-  occasionTypes: [],
+  occasions: [],
+  occasionAliases: [],
   colourPalette: [],
+  isStale: false,
 };
 
 function renderSection(initialStyles: string[] = []) {
@@ -114,7 +116,13 @@ describe('EditStyleKeywordsSection', () => {
       <EditStyleKeywordsSection
         userId="user-1"
         initialStyles={[]}
-        taxonomies={{ styleKeywords: [], occasionTypes: [], colourPalette: [] }}
+        taxonomies={{
+          styleKeywords: [],
+          occasions: [],
+          occasionAliases: [],
+          colourPalette: [],
+          isStale: false,
+        }}
         isTaxonomiesLoading={false}
         isTaxonomiesError={false}
         onRetryTaxonomies={jest.fn()}

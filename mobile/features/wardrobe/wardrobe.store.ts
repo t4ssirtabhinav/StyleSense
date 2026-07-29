@@ -5,7 +5,7 @@ import type {
   BatchItemStatus,
   CategoryFilterValue,
   GarmentTagsDraft,
-  OccasionType,
+  OccasionSlug,
   SeasonTag,
   WardrobeFilterState,
   WardrobeSortOption,
@@ -234,7 +234,7 @@ const DEFAULT_FILTER_STATE: WardrobeFilterState = {
 
 export interface WardrobeFilterStoreState extends WardrobeFilterState {
   setCategoryFilter: (value: CategoryFilterValue) => void;
-  setOccasionFilter: (value: OccasionType | 'all') => void;
+  setOccasionFilter: (value: OccasionSlug | 'all') => void;
   setSeasonFilter: (value: SeasonTag | 'all') => void;
   setColorFilter: (value: string | 'all') => void;
   setSearch: (value: string) => void;

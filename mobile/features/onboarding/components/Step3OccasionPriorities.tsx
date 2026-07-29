@@ -1,19 +1,25 @@
 import { View } from 'react-native';
 import { Badge, Button, Text } from '../../../components/ui';
-import { useOnboardingTaxonomiesQuery } from '../onboarding.queries';
+import { useOccasionTaxonomy } from '../onboarding.queries';
 import { useOnboardingStore } from '../onboarding.store';
 import { TaxonomyChipsSkeleton } from './TaxonomyChipsSkeleton';
 
-const OCCASION_TYPES_COUNT = 9;
+const OCCASION_TYPES_COUNT = 12;
 const MAX_OCCASIONS = 3;
 
-// All 9 chips render with Badge's neutral style (no `occasion` prop) rather
-// than inventing the 5 colours BL-008 still needs a product decision for —
-// see docs/tickets/SS-004-design.md's "Concrete values" section. Per "Files
-// to create/modify" #16.
+// (SS-025) Sources the 12 TOP-LEVEL active occasions from the `occasions`
+// registry (was the retired 9-row `occasion_types` table). `parent_key IS
+// NULL` is what keeps the wizard from flooding as the registry grows —
+// inserting `ganesh_chaturthi` under `festival` reaches wardrobe tagging,
+// filters and the AI vocabulary, and correctly does NOT appear here.
+//
+// Each chip now carries its registry `badge_color`. BL-008 (4 of 12
+// occasions coloured, the rest neutral) is resolved structurally: the
+// column is NOT NULL with a CHECK against Badge's four occasion tokens, so
+// a colourless occasion is unrepresentable.
 export function Step3OccasionPriorities() {
-  const { data, isLoading, isError, isSuccess, refetch } =
-    useOnboardingTaxonomiesQuery();
+  const { topLevelOccasions, badgeColor, isLoading, isError, refetch } =
+    useOccasionTaxonomy();
 
   const occasionsPriority = useOnboardingStore(
     (state) => state.occasionsPriority,
@@ -50,18 +56,20 @@ export function Step3OccasionPriorities() {
         </View>
       ) : null}
 
-      {isSuccess && data.occasionTypes.length === 0 ? (
+      {!isLoading && !isError && topLevelOccasions.length === 0 ? (
         <Text variant="body" color="secondary">
           No options available right now.
         </Text>
       ) : null}
 
-      {isSuccess && data.occasionTypes.length > 0 ? (
+      {!isLoading && !isError && topLevelOccasions.length > 0 ? (
         <View className="flex-row flex-wrap gap-2">
-          {data.occasionTypes.map((option) => (
+          {topLevelOccasions.map((option) => (
             <Badge
               key={option.key}
+              testID={`occasion-priority-${option.key}`}
               label={option.label}
+              occasion={badgeColor(option.key)}
               selected={occasionsPriority.includes(option.key)}
               onPress={() => toggleOccasion(option.key)}
             />

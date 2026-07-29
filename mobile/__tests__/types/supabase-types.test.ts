@@ -57,27 +57,21 @@ describe('Database["public"]["Enums"]["plan_tier"]', () => {
   });
 });
 
-describe('Database["public"]["Enums"]["occasion_type"]', () => {
-  const expected = [
-    'office',
-    'casual',
-    'date_night',
-    'wedding_guest',
-    'festival',
-    'puja',
-    'party',
-    'travel',
-    'workout',
-    'beach',
-    'formal_event',
-    'college',
-  ];
-
-  it('has exactly 12 members', () => {
-    expect(Constants.public.Enums.occasion_type).toHaveLength(12);
+// (SS-025) The `occasion_type` ENUM was dropped by
+// 009_drop_occasion_type_and_merge_taxonomy.sql, so this drift guard now
+// guards its ABSENCE. Deleting the block outright would have left nothing to
+// catch a re-introduction (or a stale, un-regenerated types file that still
+// carries the enum).
+describe('Database["public"]["Enums"] after the SS-025 occasion migration', () => {
+  it('no longer exposes occasion_type', () => {
+    expect(
+      Object.keys(Constants.public.Enums as Record<string, unknown>),
+    ).not.toContain('occasion_type');
   });
 
-  it('matches the exact value set and order from 001_initial.sql', () => {
-    expect(Constants.public.Enums.occasion_type).toEqual(expected);
+  it('still exposes exactly the two surviving 001_initial.sql enums plus wardrobe_processing_status', () => {
+    expect(
+      Object.keys(Constants.public.Enums as Record<string, unknown>).sort(),
+    ).toEqual(['plan_tier', 'wardrobe_category', 'wardrobe_processing_status']);
   });
 });

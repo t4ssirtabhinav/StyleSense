@@ -28,6 +28,7 @@ from adapters.interfaces import IWardrobeRepository
 from adapters.r2_storage import R2StorageClient
 from ai.ports.interfaces import GarmentTags, IVisionProvider
 from services.gemini_rate_limiter import GeminiRateLimiter
+from services.occasion_normalizer import OccasionNormalizer
 from services.tag_cache import TagCache
 
 logger = logging.getLogger(__name__)
@@ -48,12 +49,14 @@ class WardrobeTaggingService:
         storage: R2StorageClient,
         cache: TagCache,
         rate_limiter: GeminiRateLimiter,
+        occasion_normalizer: OccasionNormalizer,
     ) -> None:
         self._provider = provider
         self._repository = repository
         self._storage = storage
         self._cache = cache
         self._rate_limiter = rate_limiter
+        self._occasion_normalizer = occasion_normalizer
 
     async def tag(self, *, jwt: str, user_id: str, item_id: str) -> None:
         """The full pipeline for one item. Never raises -- any failure
@@ -81,7 +84,11 @@ class WardrobeTaggingService:
                 cached_tags = None
             if cached_tags is not None:
                 await self._write_success(
-                    jwt=jwt, item_id=item_id, tags=cached_tags, source="cache"
+                    jwt=jwt,
+                    user_id=user_id,
+                    item_id=item_id,
+                    tags=cached_tags,
+                    source="cache",
                 )
                 return
 
@@ -116,7 +123,13 @@ class WardrobeTaggingService:
                 },
             )
 
-            await self._write_success(jwt=jwt, item_id=item_id, tags=result.tags, source="gemini")
+            await self._write_success(
+                jwt=jwt,
+                user_id=user_id,
+                item_id=item_id,
+                tags=result.tags,
+                source="gemini",
+            )
         finally:
             # Always cleared, even on an exception above -- a crash between
             # mark and clear just lets the ~60s TTL expire the marker,
@@ -124,7 +137,7 @@ class WardrobeTaggingService:
             await self._cache.clear_inflight(image_hash)
 
     async def _write_success(
-        self, *, jwt: str, item_id: str, tags: GarmentTags, source: str
+        self, *, jwt: str, user_id: str, item_id: str, tags: GarmentTags, source: str
     ) -> None:
         flagged_for_review = tags.confidence < _CONFIDENCE_REVIEW_THRESHOLD
         moderation_flagged = tags.content_flag != "ok" or tags.contains_person
@@ -136,6 +149,27 @@ class WardrobeTaggingService:
         # model's own prompt-instructed output.
         category = None if tags.content_flag in _MODERATION_NULLING_FLAGS else tags.category
 
+        # (SS-025) Write boundary #1 of design §6.4's BL-078 matrix. Resolve
+        # the model's occasion strings against the `occasions` registry
+        # (canonical key -> alias -> keep-as-is) and dedupe, preserving
+        # first-occurrence order. Never raises: a registry read failure
+        # degrades to shape-only normalisation, and the DB trigger completes
+        # the job on write.
+        occasion_tags, unknown_occasions = await self._occasion_normalizer.normalize(
+            list(tags.occasion_tags), jwt=jwt
+        )
+
+        # An unknown slug is an occasion we have not modelled yet, not an
+        # error: it is STILL WRITTEN to the column (the DB trigger records it
+        # in `occasion_unknown_tags` for product review) and logged here, one
+        # record per slug. Nothing in this path drops the tag or fails the
+        # item write -- that is the non-negotiable property.
+        for slug in unknown_occasions:
+            logger.warning(
+                "occasion_unknown",
+                extra={"user_id": user_id, "item_id": item_id, "slug": slug},
+            )
+
         tag_columns: dict[str, Any] = {
             "category": category,
             "subcategory": tags.subcategory,
@@ -143,7 +177,7 @@ class WardrobeTaggingService:
             "color_secondary": tags.color_secondary,
             "pattern": tags.pattern,
             "fabric": tags.fabric,
-            "occasion_tags": list(tags.occasion_tags),
+            "occasion_tags": occasion_tags,
             "season_tags": list(tags.season_tags),
         }
 

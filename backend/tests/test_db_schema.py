@@ -5,7 +5,8 @@ These verify the *live* Postgres schema behind the linked Supabase project
 actually satisfies the ticket's acceptance criteria:
 
 - all 7 tables exist
-- all 3 ENUMs exist with the exact value sets from the migration
+- the 2 surviving ENUMs exist with the exact value sets from the migration
+  (`occasion_type` was dropped by SS-025 -- its absence is asserted instead)
 - RLS is enabled (`pg_class.relrowsecurity`) on every table
 - the GIN index on `wardrobe_items.occasion_tags` exists
 - `cost_per_wear` is computed correctly by the generated column
@@ -93,7 +94,12 @@ EXPECTED_WARDROBE_CATEGORY = [
 
 EXPECTED_PLAN_TIER = ["free", "premium", "premium_annual"]
 
-EXPECTED_OCCASION_TYPE = [
+# (SS-025) These are no longer ENUM labels -- the `occasion_type` type was
+# dropped by 009_drop_occasion_type_and_merge_taxonomy.sql. They are the 12
+# rows seeded into the `occasions` REGISTRY by 007_occasions_registry.sql, in
+# `sort_order` (which reproduces the retired enum's declaration order, so
+# every shipped picker renders in exactly the order it did before).
+EXPECTED_OCCASION_KEYS = [
     "office",
     "casual",
     "date_night",
@@ -107,6 +113,23 @@ EXPECTED_OCCASION_TYPE = [
     "formal_event",
     "college",
 ]
+
+# The value set of `occasions.badge_color`'s CHECK -- identical to Badge's
+# OccasionKey union in mobile/components/ui/Badge.tsx.
+EXPECTED_BADGE_COLORS = {"wedding", "office", "festival", "casual"}
+
+EXPECTED_OCCASION_ALIASES = {
+    "wedding": "wedding_guest",
+    "date": "date_night",
+    "work": "office",
+    "gym": "workout",
+    "pooja": "puja",
+    "vacation": "travel",
+    "formal": "formal_event",
+    "everyday": "casual",
+}
+
+EXPECTED_OCCASION_TABLES = {"occasions", "occasion_aliases", "occasion_unknown_tags"}
 
 
 @pytest.fixture
@@ -156,14 +179,11 @@ def test_enums_have_full_value_set(db_conn: Any) -> None:
     with db_conn.cursor() as cur:
         wardrobe_category = enum_values(cur, "wardrobe_category")
         plan_tier = enum_values(cur, "plan_tier")
-        occasion_type = enum_values(cur, "occasion_type")
 
     assert len(wardrobe_category) == 21
     assert wardrobe_category == EXPECTED_WARDROBE_CATEGORY
     assert len(plan_tier) == 3
     assert plan_tier == EXPECTED_PLAN_TIER
-    assert len(occasion_type) == 12
-    assert occasion_type == EXPECTED_OCCASION_TYPE
 
 
 def test_rls_enabled_on_all_tables(db_conn: Any) -> None:
@@ -276,3 +296,332 @@ def test_rls_denies_cross_user_read(db_conn: Any) -> None:
         "RLS should prevent user A from reading user B's wardrobe_items row, "
         f"but {len(rows_visible_to_a)} row(s) were visible"
     )
+
+
+# ==========================================================================
+# SS-025 -- Occasion Taxonomy & Extensibility Migration (007/008/009)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available. Every write below is rolled back by
+# the db_conn fixture, so none of them persists against the live project.
+# ==========================================================================
+
+
+def test_occasion_type_enum_no_longer_exists(db_conn: Any) -> None:
+    """The drift guard now guards the type's ABSENCE. `_occasion_type` (the
+    implicit array type) must be gone too -- it is dropped with the base
+    type, so a leftover would mean 009 did not complete."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT typname FROM pg_type WHERE typname IN ('occasion_type', '_occasion_type')"
+        )
+        rows = cur.fetchall()
+
+    assert rows == [], f"occasion_type should have been dropped by 009, found: {rows}"
+
+
+def test_occasion_types_onboarding_table_no_longer_exists(db_conn: Any) -> None:
+    """009 drops the superseded 9-row onboarding taxonomy table. Its content
+    is fully reconstructible from 003_onboarding_taxonomies.sql, transcribed
+    verbatim into 009's rollback block."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'occasion_types'
+            """
+        )
+        assert cur.fetchone() is None
+
+
+def test_occasion_registry_tables_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = ANY(%s)
+            """,
+            (list(EXPECTED_OCCASION_TABLES),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_OCCASION_TABLES
+
+
+def test_occasions_seeded_with_exactly_the_twelve_canonical_keys(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT key FROM occasions ORDER BY sort_order")
+        keys = [row[0] for row in cur.fetchall()]
+
+    assert len(keys) == 12
+    assert keys == EXPECTED_OCCASION_KEYS
+
+
+def test_every_occasion_has_a_badge_color_from_the_four_token_set(db_conn: Any) -> None:
+    """The BL-008 STRUCTURAL assertion: the 4-of-12 colour gap cannot recur,
+    because `badge_color` is NOT NULL with a CHECK against Badge's four
+    occasion tokens. No occasion can exist without a colour."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT key, badge_color FROM occasions")
+        rows = cur.fetchall()
+
+    assert rows, "occasions table is empty"
+    missing = [key for key, colour in rows if colour is None]
+    assert not missing, f"occasions with no badge_color: {missing}"
+    out_of_set = [(k, c) for k, c in rows if c not in EXPECTED_BADGE_COLORS]
+    assert not out_of_set, f"badge_color outside the token set: {out_of_set}"
+
+
+def test_badge_color_check_rejects_an_arbitrary_hex(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO occasions (key, label, kind, formality, badge_color)
+            VALUES ('bad_colour_probe', 'Probe', 'social', 5, '#FF0000')
+            """
+        )
+
+
+def test_occasion_aliases_seeded_and_disjoint_from_occasion_keys(db_conn: Any) -> None:
+    """key/alias disjointness has NO cross-table constraint by design -- it
+    is enforced by resolution order (canonical key wins) plus this test. Do
+    not "fix" a failure here by adding a trigger; fix the data."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT alias, occasion_key FROM occasion_aliases")
+        aliases = dict(cur.fetchall())
+        cur.execute("SELECT key FROM occasions")
+        keys = {row[0] for row in cur.fetchall()}
+
+    assert aliases == EXPECTED_OCCASION_ALIASES
+    assert not (set(aliases) & keys), (
+        f"alias/key collision: {set(aliases) & keys} -- inert by resolution "
+        "order, but it should not exist"
+    )
+
+
+def test_region_and_culture_scope_reject_the_empty_array(db_conn: Any) -> None:
+    """NULL means UNIVERSAL. The empty array is forbidden precisely so nobody
+    can write "applies nowhere" and get an occasion that silently never
+    matches."""
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO occasions (key, label, kind, formality, badge_color, region_scope)
+            VALUES ('empty_region_probe', 'Probe', 'social', 5, 'casual', '{}')
+            """
+        )
+
+
+def test_seeded_occasions_all_ship_universal_scope(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM occasions "
+            "WHERE region_scope IS NOT NULL OR culture_scope IS NOT NULL"
+        )
+        (scoped,) = cur.fetchone()
+
+    assert scoped == 0, "all 12 seed rows ship NULL (universal) region/culture scope"
+
+
+def test_wardrobe_occasion_tags_is_now_a_text_array(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT data_type, udt_name FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'wardrobe_items'
+              AND column_name = 'occasion_tags'
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None
+    data_type, udt_name = row
+    assert data_type == "ARRAY"
+    assert udt_name == "_text"
+
+
+def test_scalar_occasion_columns_are_now_text(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name, data_type FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND column_name = 'occasion'
+              AND table_name IN ('outfits', 'suggestion_sessions', 'social_posts')
+            ORDER BY table_name
+            """
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 3
+    assert all(data_type == "text" for _, data_type in rows), rows
+
+
+def test_rls_enabled_on_the_three_occasion_tables(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relname, c.relrowsecurity
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY(%s)
+            """,
+            (list(EXPECTED_OCCASION_TABLES),),
+        )
+        rls_by_table = dict(cur.fetchall())
+
+    assert set(rls_by_table) == EXPECTED_OCCASION_TABLES
+    disabled = [table for table, enabled in rls_by_table.items() if not enabled]
+    assert not disabled, f"RLS not enabled on: {disabled}"
+
+
+def test_only_select_policies_exist_on_the_occasion_tables(db_conn: Any) -> None:
+    """Absence of a write policy IS the write-protection mechanism (design
+    section 3.5). A permissive INSERT/UPDATE/DELETE policy appearing here is
+    a regression, not a fix."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, cmd FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = ANY(%s)",
+            (list(EXPECTED_OCCASION_TABLES),),
+        )
+        policies = {(table, cmd) for table, cmd in cur.fetchall()}
+
+    assert policies == {
+        ("occasions", "SELECT"),
+        ("occasion_aliases", "SELECT"),
+    }
+
+
+def test_normalisation_functions_are_security_definer_with_a_pinned_search_path(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.proname, p.prosecdef, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname LIKE 'occasion_%%'
+            """
+        )
+        rows = {name: (secdef, config) for name, secdef, config in cur.fetchall()}
+
+    for name in (
+        "occasion_normalize_one",
+        "occasion_normalize_array",
+        "occasion_is_known",
+        "occasion_log_unknown",
+    ):
+        assert name in rows, f"{name} is missing"
+        secdef, config = rows[name]
+        assert secdef is True, f"{name} must be SECURITY DEFINER"
+        assert config and any(
+            c.startswith("search_path=") for c in config
+        ), f"{name} must pin search_path"
+
+
+def test_normalisation_maps_aliases_dedupes_and_keeps_unknowns(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.occasion_normalize_one(%s)", ("  Wedding Guest ",))
+        assert cur.fetchone()[0] == "wedding_guest"
+
+        cur.execute("SELECT public.occasion_normalize_one(%s)", ("wedding",))
+        assert cur.fetchone()[0] == "wedding_guest"
+
+        cur.execute("SELECT public.occasion_normalize_one(%s)", ("Ganesh-Chaturthi!!",))
+        assert cur.fetchone()[0] == "ganesh_chaturthi"
+
+        cur.execute(
+            "SELECT public.occasion_normalize_array(%s, 'test', NULL)",
+            (["Travel", "wedding", "travel", "Sangeet Night"],),
+        )
+        assert cur.fetchone()[0] == ["travel", "wedding_guest", "sangeet_night"]
+
+        cur.execute("SELECT public.occasion_normalize_array(NULL, 'test', NULL)")
+        assert cur.fetchone()[0] is None
+
+        cur.execute("SELECT public.occasion_normalize_array('{}', 'test', NULL)")
+        assert cur.fetchone()[0] == []
+
+
+def test_canonical_key_wins_over_a_colliding_alias(db_conn: Any) -> None:
+    """Resolution order is the ONLY thing that makes an alias/key collision
+    inert, since Postgres has no cross-table CHECK. Prove it directly."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO occasion_aliases (alias, occasion_key) VALUES ('festival', 'party')"
+        )
+        cur.execute("SELECT public.occasion_normalize_one('festival')")
+        assert cur.fetchone()[0] == "festival"
+
+
+def test_wardrobe_items_trigger_normalises_occasion_tags_on_write(db_conn: Any) -> None:
+    """The DB-level backstop under the application normalisers -- what makes
+    the three write paths that don't exist yet honestly covered."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, occasion_tags)
+            VALUES (%s, 'western_top', %s)
+            RETURNING occasion_tags
+            """,
+            (
+                f"https://example.com/{uuid.uuid4()}.jpg",
+                [
+                    "  Wedding Guest ",
+                    "wedding",
+                    "Date",
+                    "Sangeet Night",
+                    "travel",
+                    "travel",
+                ],
+            ),
+        )
+        (tags,) = cur.fetchone()
+
+    assert tags == ["wedding_guest", "date_night", "sangeet_night", "travel"]
+
+
+def test_unknown_tag_write_is_captured_rather_than_dropped(db_conn: Any) -> None:
+    probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, occasion_tags)
+            VALUES (%s, 'western_top', %s)
+            RETURNING occasion_tags
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg", [probe_slug]),
+        )
+        (tags,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT occurrences, sample_source FROM occasion_unknown_tags WHERE slug = %s",
+            (probe_slug,),
+        )
+        row = cur.fetchone()
+
+    assert tags == [probe_slug], "an unknown tag must never be dropped from the column"
+    assert row is not None, "unknown slug was not captured"
+    assert row[0] == 1
+    assert row[1] == "wardrobe_items"
+
+
+def test_cost_per_wear_still_computes_after_the_table_rewrite(db_conn: Any) -> None:
+    """008's ALTER COLUMN ... TYPE rewrites wardrobe_items. cost_per_wear is
+    a GENERATED ... STORED column on that same table -- re-verified rather
+    than assumed (SS-015 regression adjacency)."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, purchase_price, wear_count)
+            VALUES (%s, 'western_top', 1000, 4)
+            RETURNING cost_per_wear
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (cost_per_wear,) = cur.fetchone()
+
+    assert cost_per_wear == 250

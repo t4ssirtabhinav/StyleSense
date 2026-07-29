@@ -2,17 +2,15 @@ import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { Badge, Button, Card, Input, Text } from '../../../components/ui';
+import { LOW_CONFIDENCE_THRESHOLD, SEASON_TAGS } from '../wardrobe.constants';
 import {
-  LOW_CONFIDENCE_THRESHOLD,
-  OCCASION_BADGE_COLOR_MAP,
-  OCCASION_TYPES,
-  SEASON_TAGS,
-} from '../wardrobe.constants';
-import { useSaveWardrobeItemTags } from '../wardrobe.queries';
+  useOccasionOptions,
+  useSaveWardrobeItemTags,
+} from '../wardrobe.queries';
 import { fetchWardrobeItemImageUrl } from '../wardrobe.service';
 import type {
   GarmentTagsDraft,
-  OccasionType,
+  OccasionSlug,
   SeasonTag,
   WardrobeCategory,
   WardrobeItemProcessingStatus,
@@ -63,6 +61,7 @@ export function ReviewStep({
     null,
   );
   const saveMutation = useSaveWardrobeItemTags();
+  const occasionTaxonomy = useOccasionOptions();
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +92,7 @@ export function ReviewStep({
     }
   }, [selectedCategoryOverride]);
 
-  const toggleOccasion = (occasion: OccasionType) => {
+  const toggleOccasion = (occasion: OccasionSlug) => {
     setDraft((current) => ({
       ...current,
       occasionTags: toggleInArray(current.occasionTags, occasion),
@@ -117,6 +116,9 @@ export function ReviewStep({
       { onSuccess: () => onSaved(draft) },
     );
   };
+
+  // Derived during render, never via useEffect (CLAUDE.md anti-pattern).
+  const occasionOptions = occasionTaxonomy.optionsIncluding(draft.occasionTags);
 
   const showFallbackNote =
     processingStatus !== 'bg_removed' && imageSource === 'original';
@@ -210,15 +212,21 @@ export function ReviewStep({
         }
       />
 
+      {/* (SS-025) The UNION rule: the active registry PLUS any slug already
+       * on the draft. Without the union, an unknown Gemini slug or a
+       * since-deactivated occasion is invisible in this picker and gets
+       * silently dropped on save -- the sharpest regression risk in the
+       * whole occasion migration. Out-of-registry chips render selected,
+       * humanised, and neutral-coloured; the user can keep or remove them. */}
       <View testID="occasion-badges-row" className="flex-row flex-wrap gap-xs">
-        {OCCASION_TYPES.map((occasion) => (
+        {occasionOptions.map((option) => (
           <Badge
-            key={occasion}
-            testID={`occasion-badge-${occasion}`}
-            label={occasion}
-            occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
-            selected={draft.occasionTags.includes(occasion)}
-            onPress={() => toggleOccasion(occasion)}
+            key={option.key}
+            testID={`occasion-badge-${option.key}`}
+            label={option.label}
+            occasion={option.badgeColor}
+            selected={draft.occasionTags.includes(option.key)}
+            onPress={() => toggleOccasion(option.key)}
           />
         ))}
       </View>

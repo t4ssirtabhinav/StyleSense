@@ -8,6 +8,8 @@
 // statically enumerable, hence the `string` widening below
 // (2026-07-13 revision).
 
+import type { OccasionKey } from '../../components/ui';
+
 export type GenderKey = 'woman' | 'man' | 'non_binary' | 'prefer_not_to_say';
 
 export type WardrobeTypeKey =
@@ -66,8 +68,48 @@ export interface ColourPaletteOption extends TaxonomyOption {
   hex: string;
 }
 
+// (SS-025) A row of the `occasions` registry — the single occasion
+// vocabulary for the whole app, replacing both the `occasion_type` DB enum
+// and the retired 9-row `occasion_types` onboarding table.
+//
+// `badgeColor` is a DESIGN-TOKEN KEY (Badge's own OccasionKey union), not a
+// hex — the DB's NOT NULL + CHECK guarantees every occasion has one, which
+// is what makes BL-008's 4-of-12 colour gap structurally impossible rather
+// than merely fixed. Still validated at read time by
+// `occasionBadgeColor()`; a value outside the four renders neutral rather
+// than crashing on an undefined NativeWind class.
+export interface OccasionOption extends TaxonomyOption {
+  badgeColor: OccasionKey;
+  kind: string;
+  /** `null` = a genuine top-level umbrella. Onboarding Step 3 and the home
+   * pill row source only these, so inserting a specific occasion with a
+   * parent (e.g. `ganesh_chaturthi` under `festival`) reaches wardrobe
+   * tagging/filters/AI vocabulary without flooding the wizard. */
+  parentKey: string | null;
+  /** `null` means UNIVERSAL / pan-India, NOT "no regions" — see
+   * `occasionAppliesTo()` in onboarding.occasions.ts. Never write
+   * `regionScope?.includes(r) ?? false`; that inverts the meaning and every
+   * pan-India occasion disappears. The empty array is forbidden by a DB
+   * CHECK so "applies nowhere" is unrepresentable. */
+  regionScope: string[] | null;
+  /** Same null semantics as `regionScope`. */
+  cultureScope: string[] | null;
+}
+
+export interface OccasionAlias {
+  alias: string;
+  occasionKey: string;
+}
+
 export interface OnboardingTaxonomies {
   styleKeywords: TaxonomyOption[];
-  occasionTypes: TaxonomyOption[];
+  occasions: OccasionOption[];
+  occasionAliases: OccasionAlias[];
   colourPalette: ColourPaletteOption[];
+  /** (SS-025) true when this payload came from the last-known-good
+   * AsyncStorage cache rather than a live fetch (design §6.5). Consumers
+   * render it identically to a fresh payload — it exists so a UI can
+   * optionally surface staleness, and so tests can prove the fallback
+   * actually fired. */
+  isStale: boolean;
 }

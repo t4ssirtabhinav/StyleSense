@@ -51,6 +51,7 @@ jest.mock('../../../features/wardrobe/wardrobe.service', () => ({
   updateWardrobeItemWear: jest.fn(),
   deleteWardrobeItemWear: jest.fn(),
   saveWardrobeItemDetails: jest.fn(),
+  saveWardrobeItemTags: jest.fn(),
 }));
 
 const mockEq = jest.fn();
@@ -406,6 +407,9 @@ describe('useSaveWardrobeItemTags', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockEq.mockResolvedValue({ error: null });
+    (wardrobeService.saveWardrobeItemTags as jest.Mock).mockResolvedValue(
+      undefined,
+    );
     setFakeSession();
   });
 
@@ -442,7 +446,12 @@ describe('useSaveWardrobeItemTags', () => {
     });
   });
 
-  it('issues a scoped .update() against wardrobe_items for the given itemId with exactly the edited fields', async () => {
+  // (SS-025) The UPDATE itself moved to wardrobe.service.ts's
+  // saveWardrobeItemTags, which normalises the occasion slugs before the
+  // Supabase call. The column-mapping assertion moved with it (see
+  // wardrobe.service.test.ts); this hook's own contract is "delegate, then
+  // invalidate", which is what is asserted here.
+  it('delegates the write to wardrobe.service.ts saveWardrobeItemTags', async () => {
     const tags = {
       category: 'ethnic_kurta' as const,
       subcategory: 'kurta',
@@ -450,7 +459,7 @@ describe('useSaveWardrobeItemTags', () => {
       colorSecondary: null,
       pattern: 'solid',
       fabric: 'cotton',
-      occasionTags: ['festival' as const],
+      occasionTags: ['festival'],
       seasonTags: ['summer' as const],
       confidence: 0.9,
       contentFlag: 'ok' as const,
@@ -463,18 +472,12 @@ describe('useSaveWardrobeItemTags', () => {
     result.current.mutate({ itemId: 'item-1', tags });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockFrom).toHaveBeenCalledWith('wardrobe_items');
-    expect(mockUpdate).toHaveBeenCalledWith({
-      category: 'ethnic_kurta',
-      subcategory: 'kurta',
-      color_primary: 'blue',
-      color_secondary: null,
-      pattern: 'solid',
-      fabric: 'cotton',
-      occasion_tags: ['festival'],
-      season_tags: ['summer'],
-    });
-    expect(mockEq).toHaveBeenCalledWith('id', 'item-1');
+    expect(wardrobeService.saveWardrobeItemTags).toHaveBeenCalledWith(
+      'item-1',
+      tags,
+    );
+    // No direct Supabase call from the queries layer for this write any more.
+    expect(mockFrom).not.toHaveBeenCalledWith('wardrobe_items');
   });
 });
 

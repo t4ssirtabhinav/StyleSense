@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View } from 'react-native';
 import { Badge, Button, Text } from '../../../components/ui';
+import { occasionBadgeColor, topLevelOccasions } from '../onboarding.occasions';
 import { useUpdateOccasionPrioritiesMutation } from '../onboarding.queries';
 import type {
   OccasionPriorityKey,
@@ -8,7 +9,7 @@ import type {
 } from '../onboarding.types';
 import { TaxonomyChipsSkeleton } from './TaxonomyChipsSkeleton';
 
-const OCCASION_TYPES_COUNT = 9;
+const OCCASION_TYPES_COUNT = 12;
 const MAX_OCCASIONS = 3;
 
 // (SS-007) Edit Preferences — occasion priorities section. Multi-select,
@@ -58,6 +59,10 @@ export function EditOccasionPrioritiesSection({
   };
 
   const hasTaxonomiesData = !isTaxonomiesLoading && !isTaxonomiesError;
+  // (SS-025) Same top-level-only + registry-colour sourcing as onboarding
+  // Step 3 — derived during render from the snapshot the parent already
+  // fetched, not a second query.
+  const occasionOptions = topLevelOccasions(taxonomies);
 
   return (
     <View className="p-md" testID="edit-occasion-priorities-section">
@@ -78,22 +83,20 @@ export function EditOccasionPrioritiesSection({
         </View>
       ) : null}
 
-      {hasTaxonomiesData &&
-      taxonomies &&
-      taxonomies.occasionTypes.length === 0 ? (
+      {hasTaxonomiesData && taxonomies && occasionOptions.length === 0 ? (
         <Text variant="body" color="secondary">
           No options available right now.
         </Text>
       ) : null}
 
-      {hasTaxonomiesData &&
-      taxonomies &&
-      taxonomies.occasionTypes.length > 0 ? (
+      {hasTaxonomiesData && taxonomies && occasionOptions.length > 0 ? (
         <View className="flex-row flex-wrap gap-2">
-          {taxonomies.occasionTypes.map((option) => (
+          {occasionOptions.map((option) => (
             <Badge
               key={option.key}
+              testID={`edit-occasion-priority-${option.key}`}
               label={option.label}
+              occasion={occasionBadgeColor(option.key, taxonomies)}
               selected={occasions.includes(option.key)}
               onPress={() => toggleOccasion(option.key)}
             />

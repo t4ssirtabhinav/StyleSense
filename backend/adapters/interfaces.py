@@ -17,7 +17,52 @@ against an application-layer bug passing the wrong ``user_id``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Literal
+
+
+@dataclass(frozen=True)
+class OccasionRegistrySnapshot:
+    """(SS-025) An immutable point-in-time read of the ``occasions`` registry.
+
+    ``keys`` is ordered by ``sort_order`` -- the Gemini prompt's occasion
+    vocabulary is rendered from it in that order, so a newly-INSERTed
+    occasion reaches the model with no code change and no redeploy.
+
+    ``aliases`` maps ``occasion_aliases.alias -> occasion_key``.
+    ``labels``/``badge_colors`` are carried for completeness (and for future
+    prompt/rationale text); nothing in this ticket's backend paths needs
+    them, and they must never become a second source of truth for the
+    mobile app's rendering.
+
+    Only ``is_active`` rows are ever fetched.
+    """
+
+    keys: tuple[str, ...] = ()
+    aliases: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+    badge_colors: dict[str, str] = field(default_factory=dict)
+
+
+class IOccasionRepository(ABC):
+    """Hexagonal port for reading the occasion registry (SS-025).
+
+    Same contract as ``IWardrobeRepository`` below: every concrete
+    implementation must scope its Supabase client to the CALLER'S OWN JWT
+    (never ``service_role``). ``occasions``/``occasion_aliases`` are
+    RLS-protected reference tables readable by ``authenticated``; using the
+    caller's token keeps that policy in the loop instead of bypassing it for
+    convenience.
+    """
+
+    @abstractmethod
+    async def fetch_registry(self, *, jwt: str) -> OccasionRegistrySnapshot:
+        """Read active ``occasions`` (ordered by ``sort_order``) plus every
+        ``occasion_aliases`` row. Raises on transport/RLS failure --
+        ``OccasionNormalizer`` owns the fallback policy (last-known snapshot,
+        else shape-only normalisation), so tagging never fails merely
+        because the registry read did."""
+        raise NotImplementedError
 
 
 class IWardrobeRepository(ABC):
@@ -102,7 +147,12 @@ class IWardrobeRepository(ABC):
         ``tag_columns``, when not ``None``, is applied wholesale as the 8
         first-class columns (``category``, ``subcategory``,
         ``color_primary``, ``color_secondary``, ``pattern``, ``fabric``,
-        ``occasion_tags``, ``season_tags``) on the UPDATE. When ``None``
+        ``occasion_tags``, ``season_tags``) on the UPDATE. (SS-025)
+        ``occasion_tags`` is now ``TEXT[]`` of ``occasions`` registry slugs
+        rather than ``occasion_type[]``; the caller normalises it before
+        building ``tag_columns``, and the ``wardrobe_items``
+        ``BEFORE INSERT OR UPDATE`` trigger normalises again as a backstop.
+        Unknown slugs are written, never dropped. When ``None``
         (a failed/timed-out tagging attempt), **no columns are written at
         all** -- only ``ai_tags.tagging`` is updated (to record
         ``status='failed'``), leaving any prior column values untouched.
