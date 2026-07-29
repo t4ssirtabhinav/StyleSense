@@ -156,7 +156,6 @@ describe('EditOccasionPrioritiesSection', () => {
     });
   });
 
-
   it('renders all 12 top-level registry occasions (was 9), each with a badge colour', async () => {
     const { getByTestId, getByText } = await renderSection();
 

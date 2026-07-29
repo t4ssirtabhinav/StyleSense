@@ -149,7 +149,6 @@ function occasionTaxonomy(registry = REGISTRY_OCCASIONS) {
   };
 }
 
-
 function makeItem(overrides: Partial<WardrobeItemRow> = {}): WardrobeItemRow {
   return {
     ai_tags: null,
