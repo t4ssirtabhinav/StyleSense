@@ -9,22 +9,47 @@ jest.mock('../../../../features/onboarding/onboarding.queries', () => ({
     mockUseUpdateOccasionPrioritiesMutation(),
 }));
 
-const NINE_OCCASIONS = [
-  { key: 'office', label: 'Office', sortOrder: 1 },
-  { key: 'wedding', label: 'Wedding', sortOrder: 2 },
-  { key: 'festival', label: 'Festival', sortOrder: 3 },
-  { key: 'casual', label: 'Casual', sortOrder: 4 },
-  { key: 'date', label: 'Date', sortOrder: 5 },
-  { key: 'party', label: 'Party', sortOrder: 6 },
-  { key: 'college', label: 'College', sortOrder: 7 },
-  { key: 'travel', label: 'Travel', sortOrder: 8 },
-  { key: 'puja', label: 'Puja', sortOrder: 9 },
-];
+// (SS-025) 12 top-level registry rows, up from the 9 of the retired
+// `occasion_types` table, each carrying a badge colour.
+const TWELVE_OCCASIONS = [
+  { key: 'office', label: 'Office', badgeColor: 'office' as const },
+  { key: 'casual', label: 'Casual', badgeColor: 'casual' as const },
+  { key: 'date_night', label: 'Date Night', badgeColor: 'wedding' as const },
+  {
+    key: 'wedding_guest',
+    label: 'Wedding Guest',
+    badgeColor: 'wedding' as const,
+  },
+  { key: 'festival', label: 'Festival', badgeColor: 'festival' as const },
+  { key: 'puja', label: 'Puja', badgeColor: 'festival' as const },
+  { key: 'party', label: 'Party', badgeColor: 'festival' as const },
+  { key: 'travel', label: 'Travel', badgeColor: 'casual' as const },
+  { key: 'workout', label: 'Workout', badgeColor: 'casual' as const },
+  { key: 'beach', label: 'Beach', badgeColor: 'casual' as const },
+  {
+    key: 'formal_event',
+    label: 'Formal Event',
+    badgeColor: 'wedding' as const,
+  },
+  { key: 'college', label: 'College', badgeColor: 'casual' as const },
+].map((option, index) => ({
+  ...option,
+  sortOrder: index + 1,
+  kind: 'everyday',
+  parentKey: null,
+  regionScope: null,
+  cultureScope: null,
+}));
 
 const TAXONOMIES = {
   styleKeywords: [],
-  occasionTypes: NINE_OCCASIONS,
+  occasions: TWELVE_OCCASIONS,
+  occasionAliases: [
+    { alias: 'wedding', occasionKey: 'wedding_guest' },
+    { alias: 'date', occasionKey: 'date_night' },
+  ],
   colourPalette: [],
+  isStale: false,
 };
 
 function renderSection(initialOccasions: string[] = []) {
@@ -55,13 +80,13 @@ describe('EditOccasionPrioritiesSection', () => {
   });
 
   it('renders pre-selected chips matching the passed-in occasions_priority array', async () => {
-    const { getByText } = await renderSection(['office', 'wedding']);
+    const { getByText } = await renderSection(['office', 'wedding_guest']);
 
     expect(getByText('Office').parent).toHaveProp(
       'className',
       expect.stringContaining('border-2'),
     );
-    expect(getByText('Wedding').parent).toHaveProp(
+    expect(getByText('Wedding Guest').parent).toHaveProp(
       'className',
       expect.stringContaining('border-2'),
     );
@@ -74,7 +99,7 @@ describe('EditOccasionPrioritiesSection', () => {
   it('selecting a 4th occasion when 3 are already selected does not add a 4th', async () => {
     const { getByLabelText, getByText } = await renderSection([
       'office',
-      'wedding',
+      'wedding_guest',
       'festival',
     ]);
 
@@ -89,7 +114,7 @@ describe('EditOccasionPrioritiesSection', () => {
   it('shows "You can select up to 3 occasions." only once 3 are selected', async () => {
     const { getByLabelText, getByText, queryByText } = await renderSection([
       'office',
-      'wedding',
+      'wedding_guest',
     ]);
 
     expect(queryByText('You can select up to 3 occasions.')).toBeNull();
@@ -102,7 +127,7 @@ describe('EditOccasionPrioritiesSection', () => {
   it('deselecting one of 3 selected, then selecting a different one, swaps successfully', async () => {
     const { getByLabelText, getByText } = await renderSection([
       'office',
-      'wedding',
+      'wedding_guest',
       'festival',
     ]);
 
@@ -122,13 +147,42 @@ describe('EditOccasionPrioritiesSection', () => {
   it('pressing Save calls the mutation with exactly the current local selection', async () => {
     const { getByLabelText, getByText } = await renderSection(['office']);
 
-    await fireEvent.press(getByLabelText('Wedding'));
+    await fireEvent.press(getByLabelText('Wedding Guest'));
     await fireEvent.press(getByText('Save'));
 
     expect(mockMutate).toHaveBeenCalledWith({
       userId: 'user-1',
-      occasions: ['office', 'wedding'],
+      occasions: ['office', 'wedding_guest'],
     });
+  });
+
+
+  it('renders all 12 top-level registry occasions (was 9), each with a badge colour', async () => {
+    const { getByTestId, getByText } = await renderSection();
+
+    expect(TWELVE_OCCASIONS).toHaveLength(12);
+    for (const option of TWELVE_OCCASIONS) {
+      expect(
+        getByTestId(`edit-occasion-priority-${option.key}`),
+      ).toBeOnTheScreen();
+      expect(getByText(option.label).parent).toHaveProp(
+        'className',
+        expect.stringMatching(/bg-occasion/),
+      );
+    }
+  });
+
+  it('renders a saved LEGACY key as selected once 009 has backfilled it (wedding -> wedding_guest)', async () => {
+    // 009's alias backfill rewrites users.style_preferences.occasions_priority
+    // in place, so by the time this screen loads, the stored value is already
+    // canonical -- this asserts the canonical value renders selected, which is
+    // what makes a re-entering user see their choice instead of a blank chip.
+    const { getByText } = await renderSection(['wedding_guest']);
+
+    expect(getByText('Wedding Guest').parent).toHaveProp(
+      'className',
+      expect.stringContaining('border-2'),
+    );
   });
 
   it('renders TaxonomyChipsSkeleton while loading', async () => {

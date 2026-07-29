@@ -4,6 +4,7 @@ import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 import { useAnalytics } from '../../hooks/useAnalytics';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../auth/auth.store';
+import { useOccasionTaxonomy } from '../onboarding/onboarding.queries';
 import {
   EXPIRED_URL_MAX_RETRIES,
   GRID_IMAGE_URLS_STALE_TIME_MS,
@@ -28,6 +29,7 @@ import {
   removeBackground,
   requestUploadUrl,
   saveWardrobeItemDetails,
+  saveWardrobeItemTags,
   tagItem,
   toggleWardrobeItemFavourite,
   updateWardrobeItemWear,
@@ -197,6 +199,19 @@ export interface SaveWardrobeItemTagsInput {
   tags: GarmentTagsDraft;
 }
 
+// (SS-025) A thin re-export of the onboarding domain's occasion-taxonomy
+// hook, so wardrobe components import their occasion vocabulary from their
+// own domain's queries layer instead of reaching across into
+// features/onboarding/ at the component layer.
+//
+// The cross-domain import is deliberately confined to this one line at the
+// queries layer — there is exactly ONE taxonomy fetcher in the app (the
+// ticket's own Technical Note). Promoting it to a `features/taxonomy/`
+// domain so neither side has to reach across is logged as BL-089.
+export function useOccasionOptions() {
+  return useOccasionTaxonomy();
+}
+
 // This is now one of several places in this domain a direct Supabase table
 // write happens (SS-014 adds favourite/worn/delete/list/count below) --
 // mirrors SS-007's patchStylePreferences precedent for partial-field saves,
@@ -213,30 +228,18 @@ export interface SaveWardrobeItemTagsInput {
 // widening SaveWardrobeItemTagsInput with a required `userId` field) so
 // ReviewStep.tsx's existing call site (`mutate({ itemId, tags })`) keeps
 // compiling unchanged.
+//
+// SS-025: the UPDATE itself moved to wardrobe.service.ts's
+// `saveWardrobeItemTags`, which normalises + dedupes the occasion slugs
+// first (design §6.4 write boundaries 2 and 3). This hook keeps its
+// signature and cache-invalidation behaviour exactly as SS-013/SS-014 left
+// them.
 export function useSaveWardrobeItemTags() {
   const queryClient = useQueryClient();
   const userId = useAuthStore((state) => state.session?.user.id);
 
   return useMutation<void, Error, SaveWardrobeItemTagsInput>({
-    mutationFn: async ({ itemId, tags }) => {
-      const { error } = await supabase
-        .from('wardrobe_items')
-        .update({
-          category: tags.category,
-          subcategory: tags.subcategory,
-          color_primary: tags.colorPrimary,
-          color_secondary: tags.colorSecondary,
-          pattern: tags.pattern,
-          fabric: tags.fabric,
-          occasion_tags: tags.occasionTags,
-          season_tags: tags.seasonTags,
-        })
-        .eq('id', itemId);
-
-      if (error) {
-        throw error;
-      }
-    },
+    mutationFn: ({ itemId, tags }) => saveWardrobeItemTags(itemId, tags),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: wardrobeItemsQueryKey(userId),

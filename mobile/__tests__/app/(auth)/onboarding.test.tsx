@@ -60,6 +60,11 @@ const mockCompleteOnboardingMutate = jest.fn();
 const mockUseOnboardingProgressQuery = jest.fn();
 const mockUseOnboardingTaxonomiesQuery = jest.fn();
 
+// (SS-025) Step3OccasionPriorities (always mounted as one of the pager's
+// steps) sources its vocabulary from useOccasionTaxonomy, not directly from
+// useOnboardingTaxonomiesQuery -- this screen-level test only needs it to
+// render without crashing (occasion-specific behaviour is covered by
+// Step3OccasionPriorities.test.tsx), so a minimal empty-but-valid shape.
 jest.mock('../../../features/onboarding/onboarding.queries', () => ({
   useSaveStep1Mutation: () => ({
     mutate: mockSaveStep1Mutate,
@@ -72,6 +77,19 @@ jest.mock('../../../features/onboarding/onboarding.queries', () => ({
   useOnboardingProgressQuery: (userId: string | undefined) =>
     mockUseOnboardingProgressQuery(userId),
   useOnboardingTaxonomiesQuery: () => mockUseOnboardingTaxonomiesQuery(),
+  useOccasionTaxonomy: () => ({
+    occasions: [],
+    topLevelOccasions: [],
+    resolveOccasion: (raw: string) => raw,
+    label: (slug: string) => slug,
+    badgeColor: () => undefined,
+    optionsIncluding: (tags: readonly string[]) =>
+      tags.map((t) => ({ key: t })),
+    isLoading: false,
+    isError: false,
+    isStale: false,
+    refetch: jest.fn(),
+  }),
 }));
 
 const FAKE_SESSION = { user: { id: 'user-1' } } as never;

@@ -1,7 +1,9 @@
 import * as Crypto from 'expo-crypto';
 import { SaveFormat, manipulateAsync } from 'expo-image-manipulator';
 import { EXPO_PUBLIC_BACKEND_URL } from '../../constants/api';
+import { readCachedTaxonomies } from '../../lib/storage';
 import { supabase } from '../../lib/supabase';
+import { normalizeOccasionTags } from '../onboarding/onboarding.occasions';
 import {
   COMPRESS_QUALITY_FLOOR,
   COMPRESS_QUALITY_START,
@@ -483,6 +485,64 @@ export async function saveWardrobeItemDetails(
       user_notes: details.userNotes,
     })
     .eq('id', itemId);
+  if (error) {
+    throw error;
+  }
+}
+
+// --- SS-025 (Occasion Taxonomy & Extensibility Migration) ---
+
+/**
+ * The application-layer half of write boundaries 2 and 3 in design §6.4's
+ * BL-078 matrix (upload Review save, item edit save).
+ *
+ * Normalises + dedupes occasion slugs against the last-known-good registry
+ * snapshot BEFORE the Supabase write. The DB's
+ * `trg_wardrobe_items_normalize_occasions` trigger is the backstop, not the
+ * primary — normalising here means the value the client just wrote is the
+ * value it will read back, without a round-trip to discover the trigger
+ * rewrote it.
+ *
+ * Reads the snapshot from `lib/storage.ts` rather than taking it as an
+ * argument, so every call site (hook or not) gets the same vocabulary
+ * without prop-drilling it. A cache miss degrades to shape-only
+ * normalisation (`resolveOccasionKey` with no snapshot still trims/lowers/
+ * underscores) — the alias mapping is then done by the DB trigger. An
+ * unknown slug is NEVER dropped and NEVER fails the write.
+ */
+export async function normalizeOccasionTagsForWrite(
+  tags: readonly string[],
+): Promise<string[]> {
+  const cached = await readCachedTaxonomies();
+  return normalizeOccasionTags(tags, cached?.payload);
+}
+
+// The 8 first-class tag columns, written wholesale from the user-edited
+// draft (last-write-wins, unchanged from SS-013/SS-015 -- this is NOT a
+// read-then-write, so it adds no third instance of BL-066/BL-036's bug
+// class). Moved here from wardrobe.queries.ts's mutationFn by SS-025 so the
+// occasion normalisation sits in the service layer with this domain's other
+// raw Supabase calls, per CLAUDE.md's queries.ts-wraps-service.ts layering.
+export async function saveWardrobeItemTags(
+  itemId: string,
+  tags: GarmentTagsDraft,
+): Promise<void> {
+  const occasionTags = await normalizeOccasionTagsForWrite(tags.occasionTags);
+
+  const { error } = await supabase
+    .from('wardrobe_items')
+    .update({
+      category: tags.category,
+      subcategory: tags.subcategory,
+      color_primary: tags.colorPrimary,
+      color_secondary: tags.colorSecondary,
+      pattern: tags.pattern,
+      fabric: tags.fabric,
+      occasion_tags: occasionTags,
+      season_tags: tags.seasonTags,
+    })
+    .eq('id', itemId);
+
   if (error) {
     throw error;
   }

@@ -56,7 +56,6 @@ export const UNKNOWN_UPLOAD_ERROR_MESSAGE =
 import type {
   CategoryFilterValue,
   CategoryGroup,
-  OccasionType,
   SeasonTag,
   WardrobeCategory,
   WardrobeSortOption,
@@ -101,20 +100,18 @@ const WARDROBE_CATEGORY_VALUES: WardrobeCategory[] = [
 export const WARDROBE_CATEGORIES: CategoryOption[] =
   WARDROBE_CATEGORY_VALUES.map((value) => ({ value, label: humanize(value) }));
 
-export const OCCASION_TYPES: OccasionType[] = [
-  'office',
-  'casual',
-  'date_night',
-  'wedding_guest',
-  'festival',
-  'puja',
-  'party',
-  'travel',
-  'workout',
-  'beach',
-  'formal_event',
-  'college',
-];
+// (SS-025) `OCCASION_TYPES` is DELETED. The occasion vocabulary is fetched
+// at runtime from the `occasions` registry via
+// features/onboarding/onboarding.taxonomies.service.ts — use
+// `useOccasionOptions()` (wardrobe.queries.ts) in components and
+// `features/onboarding/onboarding.occasions.ts`'s pure helpers elsewhere.
+// Do not reintroduce a hardcoded list here, even as an offline fallback:
+// the cold-start-no-cache case is an error/retry state by design
+// (docs/tickets/SS-025-design.md §6.5).
+//
+// `OCCASION_BADGE_COLOR_MAP` is likewise DELETED. `badge_color` is a NOT
+// NULL, CHECK-constrained column on `occasions`, so BL-008's 4-of-12 colour
+// gap is now structurally impossible rather than patched.
 
 export const SEASON_TAGS: SeasonTag[] = ['summer', 'winter', 'monsoon', 'all'];
 
@@ -129,17 +126,6 @@ export const ONE_ITEM_AT_A_TIME_TIP =
   'Tip: photograph one item at a time for the best results';
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.7;
-
-// wedding_guest (occasion_type) vs. Badge's 'wedding' OccasionKey -- see
-// docs/tickets/SS-013-design.md's "Concrete values" note on this mismatch.
-export const OCCASION_BADGE_COLOR_MAP: Partial<
-  Record<OccasionType, 'wedding' | 'office' | 'festival' | 'casual'>
-> = {
-  wedding_guest: 'wedding',
-  office: 'office',
-  festival: 'festival',
-  casual: 'casual',
-};
 
 // --- SS-014 (Wardrobe Grid & Catalogue View) ---
 // Per docs/tickets/SS-014-design.md's "Concrete values" section --

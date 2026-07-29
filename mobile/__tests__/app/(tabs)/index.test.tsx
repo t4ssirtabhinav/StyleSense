@@ -38,6 +38,27 @@ jest.mock('../../../features/wardrobe/wardrobe.queries', () => ({
   }),
 }));
 
+// (SS-025) OccasionPillRow now calls useOccasionTaxonomy for pill colour --
+// the real module's import chain reaches lib/supabase.ts (createClient at
+// module scope), which throws without real Supabase env vars under Jest.
+// Mocked here for the same "composition smoke test" reason as the two
+// mocks above -- OccasionPillRow.test.tsx covers the real hook's behaviour.
+jest.mock('../../../features/onboarding/onboarding.queries', () => ({
+  useOccasionTaxonomy: () => ({
+    occasions: [],
+    topLevelOccasions: [],
+    resolveOccasion: (raw: string) => raw,
+    label: (slug: string) => slug,
+    badgeColor: () => undefined,
+    optionsIncluding: (tags: readonly string[]) =>
+      tags.map((t) => ({ key: t })),
+    isLoading: false,
+    isError: false,
+    isStale: false,
+    refetch: jest.fn(),
+  }),
+}));
+
 describe('HomeScreen (app/(tabs)/index.tsx)', () => {
   it('renders GreetingHeader, OccasionPillRow, WardrobeNudgeCard, and TrendingPicksPlaceholder', async () => {
     const { getByTestId } = await render(<HomeScreen />);

@@ -138,19 +138,21 @@ export type WardrobeCategory =
   | 'accessory_belt'
   | 'accessory_scarf';
 
-export type OccasionType =
-  | 'office'
-  | 'casual'
-  | 'date_night'
-  | 'wedding_guest'
-  | 'festival'
-  | 'puja'
-  | 'party'
-  | 'travel'
-  | 'workout'
-  | 'beach'
-  | 'formal_event'
-  | 'college';
+// (SS-025) The 12-member `OccasionType` union is GONE, along with the
+// `occasion_type` Postgres ENUM it mirrored. Occasions are now a
+// data-driven registry (`occasions` table) — adding one is an INSERT, so
+// the compiler cannot enumerate them any more.
+//
+// That trade is paid for with runtime normalisation and validation at every
+// write boundary (design §6.4's six-boundary matrix): the app-layer
+// normaliser in wardrobe.service.ts, the backend `OccasionNormalizer`, and
+// the DB `BEFORE INSERT OR UPDATE` triggers that cover the write paths that
+// do not exist yet. `BL-078` stays Active as a standing obligation for
+// every NEW occasion write path.
+//
+// No `OccasionType` alias is kept deliberately — the compiler is what
+// found every call site during this migration.
+export type OccasionSlug = string;
 
 export type SeasonTag = 'summer' | 'winter' | 'monsoon' | 'all';
 
@@ -170,7 +172,7 @@ export interface GarmentTagsDraft {
   colorSecondary: string | null;
   pattern: string | null;
   fabric: string | null;
-  occasionTags: OccasionType[];
+  occasionTags: OccasionSlug[];
   seasonTags: SeasonTag[];
   confidence: number;
   alternatives?: WardrobeCategory[];
@@ -214,7 +216,7 @@ export interface WardrobeItemRealtimeRow {
   color_secondary: string | null;
   pattern: string | null;
   fabric: string | null;
-  occasion_tags: OccasionType[] | null;
+  occasion_tags: OccasionSlug[] | null;
   season_tags: SeasonTag[] | null;
   ai_tags: {
     tagging?: {
@@ -257,7 +259,7 @@ export type WardrobeItemImageUrlsMap = Record<string, WardrobeItemImageUrlInfo>;
 
 export interface WardrobeFilterState {
   categoryFilter: CategoryFilterValue;
-  occasionFilter: OccasionType | 'all';
+  occasionFilter: OccasionSlug | 'all';
   seasonFilter: SeasonTag | 'all';
   colorFilter: string | 'all';
   search: string;

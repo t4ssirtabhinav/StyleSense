@@ -46,13 +46,67 @@ const mockSaveDetailsMutate = jest.fn(
     options?.onSuccess?.();
   },
 );
+const mockUseOccasionOptions = jest.fn();
 jest.mock('../../../../features/wardrobe/wardrobe.queries', () => ({
   useSaveWardrobeItemTags: () => ({ mutate: mockMutate, isPending: false }),
   useSaveWardrobeItemDetails: () => ({
     mutate: mockSaveDetailsMutate,
     isPending: false,
   }),
+  useOccasionOptions: () => mockUseOccasionOptions(),
 }));
+
+// (SS-025) Occasion chips come from the `occasions` registry at runtime.
+// `optionsIncluding` implements the UNION rule: active registry PLUS any slug
+// already on the draft/item, so an unknown AI slug or a since-deactivated
+// occasion stays visible and selected instead of being silently dropped on
+// the next save.
+const REGISTRY_OCCASIONS = [
+  { key: 'office', label: 'Office', badgeColor: 'office' as const },
+  { key: 'casual', label: 'Casual', badgeColor: 'casual' as const },
+  {
+    key: 'wedding_guest',
+    label: 'Wedding Guest',
+    badgeColor: 'wedding' as const,
+  },
+  { key: 'festival', label: 'Festival', badgeColor: 'festival' as const },
+  { key: 'college', label: 'College', badgeColor: 'casual' as const },
+];
+
+function humanize(slug: string): string {
+  return slug
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function occasionTaxonomy(registry = REGISTRY_OCCASIONS) {
+  const byKey = Object.fromEntries(registry.map((o) => [o.key, o]));
+  return {
+    occasions: registry,
+    label: (slug: string) => byKey[slug]?.label ?? humanize(slug),
+    badgeColor: (slug: string) => byKey[slug]?.badgeColor,
+    optionsIncluding: (tags: readonly string[]) => {
+      const options = registry.map((o) => ({ ...o }));
+      const seen = new Set(options.map((o) => o.key));
+      for (const tag of tags) {
+        if (tag && !seen.has(tag)) {
+          seen.add(tag);
+          options.push({
+            key: tag,
+            label: humanize(tag),
+            badgeColor: undefined as never,
+          });
+        }
+      }
+      return options;
+    },
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  };
+}
 
 const BASE_TAGS: GarmentTagsDraft = {
   category: 'ethnic_kurta',
@@ -74,6 +128,10 @@ const BASE_DETAILS: WardrobeItemDetailsDraft = {
   purchaseDate: '2026-01-01',
   userNotes: 'A gift',
 };
+
+beforeEach(() => {
+  mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
+});
 
 describe('EditItemTagsForm', () => {
   beforeEach(() => {
@@ -228,5 +286,43 @@ describe('EditItemTagsForm', () => {
 
     expect(onCancel).toHaveBeenCalled();
     expect(mockMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('EditItemTagsForm — SS-025 occasion union rule', () => {
+  beforeEach(() => {
+    mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
+  });
+
+  it('does not drop an unknown tag when an unrelated field is edited and saved', async () => {
+    const tags: GarmentTagsDraft = {
+      ...BASE_TAGS,
+      occasionTags: ['ganesh_chaturthi', 'festival'],
+    };
+    const { getByLabelText, getByTestId, getByDisplayValue } = await render(
+      <EditItemTagsForm
+        itemId="item-1"
+        initialTags={tags}
+        initialDetails={BASE_DETAILS}
+        onSaved={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+    );
+
+    // The unknown tag is visible (union rule) rather than silently absent.
+    expect(
+      getByTestId('edit-occasion-badge-ganesh_chaturthi'),
+    ).toBeOnTheScreen();
+
+    // Edit an unrelated field (Subcategory has no accessibilityLabel of its
+    // own -- matched by its current display value, same pattern as the
+    // other tests in this file).
+    await fireEvent.changeText(getByDisplayValue('Straight-fit'), 'kurta');
+    await fireEvent.press(getByLabelText('Save'));
+
+    expect(
+      (mockMutate.mock.calls[0][0] as { tags: GarmentTagsDraft }).tags
+        .occasionTags,
+    ).toEqual(['ganesh_chaturthi', 'festival']);
   });
 });

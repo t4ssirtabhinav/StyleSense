@@ -10,9 +10,45 @@ from typing import Any
 
 import pytest
 
-from adapters.interfaces import IWardrobeRepository
+from adapters.interfaces import (
+    IOccasionRepository,
+    IWardrobeRepository,
+    OccasionRegistrySnapshot,
+)
 from ai.ports.interfaces import GarmentTags, IVisionProvider, VisionTaggingResult
+from services.occasion_normalizer import OccasionNormalizer
 from services.wardrobe_tagging_service import WardrobeTaggingService, original_image_key
+
+
+# (SS-025) The 12 seeded registry keys plus the two load-bearing aliases,
+# so the tagging service's occasion normalisation is exercised against a
+# realistic vocabulary without touching a DB.
+class _FakeOccasionRepository(IOccasionRepository):
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls = 0
+        self._fail = fail
+
+    async def fetch_registry(self, *, jwt: str) -> OccasionRegistrySnapshot:
+        self.calls += 1
+        if self._fail:
+            raise RuntimeError("registry read failed")
+        return OccasionRegistrySnapshot(
+            keys=(
+                "office",
+                "casual",
+                "date_night",
+                "wedding_guest",
+                "festival",
+                "puja",
+                "party",
+                "travel",
+                "workout",
+                "beach",
+                "formal_event",
+                "college",
+            ),
+            aliases={"wedding": "wedding_guest", "date": "date_night"},
+        )
 
 
 def _valid_tags(**overrides: Any) -> GarmentTags:
@@ -151,11 +187,20 @@ def _service(
     storage: _FakeStorage | None = None,
     cache: _FakeCache | None = None,
     rate_limiter: _FakeRateLimiter | None = None,
+    occasion_repository: _FakeOccasionRepository | None = None,
 ) -> tuple[WardrobeTaggingService, _FakeStorage, _FakeCache, _FakeRateLimiter]:
     storage = storage or _FakeStorage()
     cache = cache or _FakeCache()
     rate_limiter = rate_limiter or _FakeRateLimiter()
-    service = WardrobeTaggingService(provider, repository, storage, cache, rate_limiter)  # type: ignore[arg-type]
+    normalizer = OccasionNormalizer(occasion_repository or _FakeOccasionRepository())
+    service = WardrobeTaggingService(
+        provider,
+        repository,
+        storage,  # type: ignore[arg-type]
+        cache,  # type: ignore[arg-type]
+        rate_limiter,  # type: ignore[arg-type]
+        normalizer,
+    )
     return service, storage, cache, rate_limiter
 
 
@@ -335,3 +380,108 @@ async def test_successful_call_logs_ai_call_with_user_id_latency_and_model(
 
 def test_original_image_key_shape() -> None:
     assert original_image_key("user-1", "item-1") == "wardrobe/user-1/item-1/original.jpg"
+
+
+# --- SS-025: occasion normalisation at write boundary #1 -------------------
+
+
+async def test_write_success_writes_normalised_and_deduped_occasion_tags() -> None:
+    provider = _FakeProvider(
+        [
+            VisionTaggingResult(
+                success=True,
+                tags=_valid_tags(
+                    occasion_tags=["  Wedding Guest ", "wedding", "Festival", "festival"]
+                ),
+                latency_ms=50,
+            )
+        ]
+    )
+    repository = _FakeRepository()
+    service, _, _, _ = _service(provider=provider, repository=repository)
+
+    await service.tag(jwt="jwt", user_id="user-1", item_id="item-1")
+
+    written = repository.updates[0]["tag_columns"]["occasion_tags"]
+    # 'wedding' aliases onto wedding_guest, so it dedupes away; first-
+    # occurrence order is preserved and nothing is sorted.
+    assert written == ["wedding_guest", "festival"]
+
+
+async def test_unknown_occasion_is_still_written_and_logged_exactly_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = _FakeProvider(
+        [
+            VisionTaggingResult(
+                success=True,
+                tags=_valid_tags(occasion_tags=["festival", "Ganesh Chaturthi"]),
+                latency_ms=50,
+            )
+        ]
+    )
+    repository = _FakeRepository()
+    service, _, _, _ = _service(provider=provider, repository=repository)
+
+    with caplog.at_level(logging.WARNING):
+        await service.tag(jwt="jwt", user_id="user-1", item_id="item-1")
+
+    # Never dropped -- the tag reaches the column.
+    assert repository.updates[0]["tag_columns"]["occasion_tags"] == [
+        "festival",
+        "ganesh_chaturthi",
+    ]
+
+    records = [r for r in caplog.records if r.message == "occasion_unknown"]
+    assert len(records) == 1
+    assert records[0].user_id == "user-1"  # type: ignore[attr-defined]
+    assert records[0].item_id == "item-1"  # type: ignore[attr-defined]
+    assert records[0].slug == "ganesh_chaturthi"  # type: ignore[attr-defined]
+
+
+async def test_no_unknown_log_when_every_occasion_is_canonical(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = _FakeProvider(
+        [
+            VisionTaggingResult(
+                success=True,
+                tags=_valid_tags(occasion_tags=["festival", "puja"]),
+                latency_ms=50,
+            )
+        ]
+    )
+    repository = _FakeRepository()
+    service, _, _, _ = _service(provider=provider, repository=repository)
+
+    with caplog.at_level(logging.WARNING):
+        await service.tag(jwt="jwt", user_id="user-1", item_id="item-1")
+
+    assert [r for r in caplog.records if r.message == "occasion_unknown"] == []
+
+
+async def test_registry_read_failure_does_not_fail_the_item_write() -> None:
+    """Tagging must never fail merely because the occasion registry read
+    failed -- normalisation degrades to shape-only and the DB trigger
+    completes the alias mapping."""
+    provider = _FakeProvider(
+        [
+            VisionTaggingResult(
+                success=True,
+                tags=_valid_tags(occasion_tags=["  Wedding Guest "]),
+                latency_ms=50,
+            )
+        ]
+    )
+    repository = _FakeRepository()
+    service, _, _, _ = _service(
+        provider=provider,
+        repository=repository,
+        occasion_repository=_FakeOccasionRepository(fail=True),
+    )
+
+    await service.tag(jwt="jwt", user_id="user-1", item_id="item-1")
+
+    assert len(repository.updates) == 1
+    assert repository.updates[0]["tag_columns"]["occasion_tags"] == ["wedding_guest"]
+    assert repository.updates[0]["tagging_tags"]["status"] == "tagged"

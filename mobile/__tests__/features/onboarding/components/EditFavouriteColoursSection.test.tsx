@@ -31,8 +31,10 @@ const TWELVE_COLOURS = [
 
 const TAXONOMIES = {
   styleKeywords: [],
-  occasionTypes: [],
+  occasions: [],
+  occasionAliases: [],
   colourPalette: TWELVE_COLOURS,
+  isStale: false,
 };
 
 function renderSection(initialColours: string[] = []) {

@@ -52,11 +52,57 @@ def test_garmenttags_accepts_null_category_with_zero_confidence() -> None:
     assert tags.confidence == 0.0
 
 
-def test_garmenttags_rejects_occasion_tag_outside_the_12_value_enum() -> None:
+def test_garmenttags_accepts_an_out_of_registry_occasion_tag() -> None:
+    """(SS-025) The INVERSE of the pre-SS-025 assertion: occasion_tags moved
+    from strict (out-of-enum fails the whole payload) to lenient-with-capture
+    now that occasions are a data-driven registry rather than a DB enum. An
+    occasion we have not modelled yet is a signal, not an error -- it must
+    reach the item write so the DB trigger can capture it."""
+    tags = GarmentTags(
+        category="western_top",
+        occasion_tags=["ganesh_chaturthi", "festival"],
+        confidence=0.9,
+        content_flag="ok",
+        contains_person=False,
+    )
+    assert tags.occasion_tags == ["ganesh_chaturthi", "festival"]
+
+
+def test_garmenttags_coerces_occasion_tag_shape_without_checking_vocabulary() -> None:
+    """Shape coercion only: None -> [], a bare string -> one-element list,
+    non-string members dropped, blanks dropped, values otherwise verbatim.
+    Vocabulary resolution belongs to OccasionNormalizer (it has DB access)."""
+    assert GarmentTags(
+        category="western_top",
+        occasion_tags=None,  # type: ignore[arg-type]
+        confidence=0.9,
+        content_flag="ok",
+        contains_person=False,
+    ).occasion_tags == []
+
+    assert GarmentTags(
+        category="western_top",
+        occasion_tags="Wedding Guest",  # type: ignore[arg-type]
+        confidence=0.9,
+        content_flag="ok",
+        contains_person=False,
+    ).occasion_tags == ["Wedding Guest"]
+
+    assert GarmentTags(
+        category="western_top",
+        occasion_tags=["  puja  ", "", 7, None, "festival"],  # type: ignore[list-item]
+        confidence=0.9,
+        content_flag="ok",
+        contains_person=False,
+    ).occasion_tags == ["puja", "festival"]
+
+
+def test_garmenttags_still_rejects_a_category_outside_the_wardrobe_enum() -> None:
+    """category strictness is UNCHANGED by SS-025 -- wardrobe_category is
+    still a real DB enum, so an out-of-enum value must still fail."""
     with pytest.raises(ValidationError):
         GarmentTags(
-            category="western_top",
-            occasion_tags=["not_a_real_occasion"],  # type: ignore[list-item]
+            category="not_a_real_category",  # type: ignore[arg-type]
             confidence=0.9,
             content_flag="ok",
             contains_person=False,

@@ -1,7 +1,50 @@
 import { fireEvent, render, within } from '@testing-library/react-native';
+import type { OccasionOption } from '../../../../features/onboarding/onboarding.types';
 import { WardrobeFilterSheet } from '../../../../features/wardrobe/components/WardrobeFilterSheet';
 import { useWardrobeFilterStore } from '../../../../features/wardrobe/wardrobe.store';
 import type { WardrobeItemRow } from '../../../../features/wardrobe/wardrobe.types';
+
+// (SS-025) Occasion chips are fetched from the `occasions` registry at
+// runtime, not read from a deleted OCCASION_TYPES constant.
+const mockUseOccasionOptions = jest.fn();
+const mockRefetchOccasions = jest.fn();
+jest.mock('../../../../features/wardrobe/wardrobe.queries', () => ({
+  useOccasionOptions: () => mockUseOccasionOptions(),
+}));
+
+const REGISTRY_OCCASIONS: OccasionOption[] = [
+  { key: 'office', label: 'Office', badgeColor: 'office' as const },
+  { key: 'casual', label: 'Casual', badgeColor: 'casual' as const },
+  {
+    key: 'wedding_guest',
+    label: 'Wedding Guest',
+    badgeColor: 'wedding' as const,
+  },
+  { key: 'festival', label: 'Festival', badgeColor: 'festival' as const },
+].map((option, index) => ({
+  ...option,
+  sortOrder: index + 1,
+  kind: 'everyday',
+  parentKey: null,
+  regionScope: null,
+  cultureScope: null,
+}));
+
+function occasionTaxonomy(
+  overrides: Record<string, unknown> = {},
+  occasions: OccasionOption[] = REGISTRY_OCCASIONS,
+) {
+  const byKey = Object.fromEntries(occasions.map((o) => [o.key, o]));
+  return {
+    occasions,
+    label: (slug: string) => byKey[slug]?.label ?? slug,
+    badgeColor: (slug: string) => byKey[slug]?.badgeColor,
+    isLoading: false,
+    isError: false,
+    refetch: mockRefetchOccasions,
+    ...overrides,
+  };
+}
 
 jest.mock('@gorhom/bottom-sheet', () => {
   const actual = jest.requireActual('@gorhom/bottom-sheet');
@@ -28,6 +71,10 @@ jest.mock('@gorhom/bottom-sheet', () => {
     BottomSheetModal: MockBottomSheetModal,
     BottomSheetView: reactNative.View,
   };
+});
+
+beforeEach(() => {
+  mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
 });
 
 function makeItem(overrides: Partial<WardrobeItemRow> = {}): WardrobeItemRow {
@@ -117,7 +164,7 @@ describe('WardrobeFilterSheet', () => {
     // Left-rail caption under "Occasion" reflects the draft selection even
     // while a different section ("Season") is now active.
     expect(
-      within(getByTestId('filter-section-tab-occasion')).getByText('office'),
+      within(getByTestId('filter-section-tab-occasion')).getByText('Office'),
     ).toBeOnTheScreen();
   });
 
@@ -158,5 +205,95 @@ describe('WardrobeFilterSheet', () => {
     expect(state.seasonFilter).toBe('all');
     expect(state.colorFilter).toBe('all');
     expect(state.sort).toBe('newest');
+  });
+});
+
+// --- SS-025 -------------------------------------------------------------
+
+describe('WardrobeFilterSheet — registry-sourced occasion chips (SS-025)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseOccasionOptions.mockReturnValue(occasionTaxonomy());
+    useWardrobeFilterStore.getState().reset();
+  });
+
+  it('renders occasion chips with registry LABELS, not raw slugs', async () => {
+    const { getByTestId } = await render(<WardrobeFilterSheet items={[]} />);
+
+    expect(
+      within(getByTestId('filter-occasion-wedding_guest')).getByText(
+        'Wedding Guest',
+      ),
+    ).toBeOnTheScreen();
+  });
+
+  it('a newly-added registry occasion appears with NO code change', async () => {
+    mockUseOccasionOptions.mockReturnValue(
+      occasionTaxonomy({}, [
+        ...REGISTRY_OCCASIONS,
+        {
+          key: 'ganesh_chaturthi',
+          label: 'Ganesh Chaturthi',
+          badgeColor: 'festival',
+          sortOrder: 20,
+          kind: 'festival',
+          parentKey: 'festival',
+          regionScope: null,
+          cultureScope: null,
+        },
+      ]),
+    );
+
+    const { getByTestId } = await render(<WardrobeFilterSheet items={[]} />);
+
+    expect(
+      within(getByTestId('filter-occasion-ganesh_chaturthi')).getByText(
+        'Ganesh Chaturthi',
+      ),
+    ).toBeOnTheScreen();
+  });
+
+  it('shows the taxonomy skeleton while the registry is loading', async () => {
+    mockUseOccasionOptions.mockReturnValue(
+      occasionTaxonomy({ isLoading: true }, []),
+    );
+
+    const { getAllByTestId, queryByTestId } = await render(
+      <WardrobeFilterSheet items={[]} />,
+    );
+
+    expect(getAllByTestId('skeleton').length).toBeGreaterThan(0);
+    expect(queryByTestId('filter-occasion-office')).toBeNull();
+  });
+
+  it('shows an occasion-only error state while season/colour/sort still work', async () => {
+    mockUseOccasionOptions.mockReturnValue(
+      occasionTaxonomy({ isError: true }, []),
+    );
+
+    const { getByTestId, queryByTestId } = await render(
+      <WardrobeFilterSheet items={[]} />,
+    );
+
+    expect(getByTestId('filter-occasion-error')).toBeOnTheScreen();
+    expect(queryByTestId('filter-occasion-office')).toBeNull();
+
+    // The other three sections are unaffected by the taxonomy failure.
+    await fireEvent.press(getByTestId('filter-section-tab-season'));
+    expect(getByTestId('filter-season-summer')).toBeOnTheScreen();
+    await fireEvent.press(getByTestId('filter-section-tab-sort'));
+    expect(getByTestId('filter-sort-most_worn')).toBeOnTheScreen();
+  });
+
+  it('the selected-summary chip shows the registry label, not the slug', async () => {
+    const { getByTestId } = await render(<WardrobeFilterSheet items={[]} />);
+
+    await fireEvent.press(getByTestId('filter-occasion-wedding_guest'));
+
+    expect(
+      within(getByTestId('filter-selected-chip-occasion')).getByText(
+        'Wedding Guest',
+      ),
+    ).toBeOnTheScreen();
   });
 });

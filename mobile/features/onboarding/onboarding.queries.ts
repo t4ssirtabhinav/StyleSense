@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo } from 'react';
 import { onboardingCompletedQueryKey } from '../auth/auth.queries';
 import { useAuthStore } from '../auth/auth.store';
+import {
+  activeOccasionsPlus,
+  occasionBadgeColor,
+  occasionLabel,
+  resolveOccasionKey,
+  topLevelOccasions,
+} from './onboarding.occasions';
 import {
   type OnboardingProgress,
   type Step1ProfileInput,
@@ -185,4 +193,57 @@ export function useOnboardingTaxonomiesQuery() {
     gcTime: Number.POSITIVE_INFINITY, // keep cached for the app session lifetime
     enabled: Boolean(session),
   });
+}
+
+// (SS-025) The occasion-vocabulary view over the single taxonomy query
+// above. Every occasion surface in the app (onboarding Step 3, edit
+// preferences, wardrobe filter sheet, upload Review, item edit, item detail,
+// home pill row) resolves labels/colours through this one hook, so adding an
+// occasion is an INSERT with no code change anywhere.
+//
+// The underlying query's key/staleTime/gcTime/`enabled: Boolean(session)`
+// gate are untouched — that gate is load-bearing, not cosmetic (see the
+// comment above it).
+//
+// Derived values are computed during render (useMemo/useCallback for stable
+// identities), never via useEffect — CLAUDE.md's anti-pattern rule.
+export function useOccasionTaxonomy() {
+  const query = useOnboardingTaxonomiesQuery();
+  const snapshot = query.data;
+
+  const occasions = useMemo(() => snapshot?.occasions ?? [], [snapshot]);
+  const topLevel = useMemo(() => topLevelOccasions(snapshot), [snapshot]);
+
+  const resolveOccasion = useCallback(
+    (raw: string) => resolveOccasionKey(raw, snapshot),
+    [snapshot],
+  );
+  const label = useCallback(
+    (slug: string) => occasionLabel(slug, snapshot),
+    [snapshot],
+  );
+  const badgeColor = useCallback(
+    (slug: string) => occasionBadgeColor(slug, snapshot),
+    [snapshot],
+  );
+  const optionsIncluding = useCallback(
+    (currentTags: readonly string[]) =>
+      activeOccasionsPlus(currentTags, snapshot),
+    [snapshot],
+  );
+
+  return {
+    occasions,
+    topLevelOccasions: topLevel,
+    resolveOccasion,
+    label,
+    badgeColor,
+    optionsIncluding,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    /** true when the payload came from the last-known-good AsyncStorage
+     * cache rather than a live fetch (design §6.5). */
+    isStale: snapshot?.isStale ?? false,
+    refetch: query.refetch,
+  };
 }

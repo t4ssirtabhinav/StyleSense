@@ -83,10 +83,34 @@ jest.mock('@gorhom/bottom-sheet', () => {
 
 const mockUploadMutateAsync = jest.fn();
 const mockProcessMutateAsync = jest.fn();
+// (SS-025) ReviewStep (reached once Realtime marks an item tagged/failed)
+// sources its occasion chips from useOccasionOptions -- this integration
+// test only needs it to render without crashing; occasion-specific
+// behaviour is covered by ReviewStep.test.tsx directly.
 jest.mock('../../../features/wardrobe/wardrobe.queries', () => ({
   useUploadWardrobeItem: jest.fn(),
   useProcessWardrobeItem: jest.fn(),
   useSaveWardrobeItemTags: jest.fn(),
+  useOccasionOptions: () => ({
+    occasions: [
+      { key: 'casual', label: 'Casual', badgeColor: 'casual' },
+      { key: 'office', label: 'Office', badgeColor: 'office' },
+      { key: 'festival', label: 'Festival', badgeColor: 'festival' },
+    ],
+    label: (slug: string) => slug,
+    badgeColor: () => undefined,
+    optionsIncluding: (tags: readonly string[]) => [
+      { key: 'casual', label: 'Casual', badgeColor: 'casual' },
+      { key: 'office', label: 'Office', badgeColor: 'office' },
+      { key: 'festival', label: 'Festival', badgeColor: 'festival' },
+      ...tags
+        .filter((t) => !['casual', 'office', 'festival'].includes(t))
+        .map((t) => ({ key: t, label: t, badgeColor: undefined })),
+    ],
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  }),
 }));
 
 const mockSubscribeToItemUpdates = jest.fn();

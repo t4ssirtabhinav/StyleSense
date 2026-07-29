@@ -8,19 +8,15 @@ import {
   Input,
   Text,
 } from '../../../components/ui';
+import { MAX_USER_NOTES_LENGTH, SEASON_TAGS } from '../wardrobe.constants';
 import {
-  MAX_USER_NOTES_LENGTH,
-  OCCASION_BADGE_COLOR_MAP,
-  OCCASION_TYPES,
-  SEASON_TAGS,
-} from '../wardrobe.constants';
-import {
+  useOccasionOptions,
   useSaveWardrobeItemDetails,
   useSaveWardrobeItemTags,
 } from '../wardrobe.queries';
 import type {
   GarmentTagsDraft,
-  OccasionType,
+  OccasionSlug,
   SeasonTag,
   WardrobeItemDetailsDraft,
 } from '../wardrobe.types';
@@ -75,8 +71,15 @@ export function EditItemTagsForm({
   const categoryPickerRef = useRef<AppBottomSheetRef>(null);
   const saveTagsMutation = useSaveWardrobeItemTags();
   const saveDetailsMutation = useSaveWardrobeItemDetails();
+  const occasionTaxonomy = useOccasionOptions();
 
-  const toggleOccasion = (occasion: OccasionType) => {
+  // (SS-025) Same UNION rule as ReviewStep: active registry ∪ the tags this
+  // item already carries. An unknown or deactivated tag must stay visible
+  // and selected, so an unrelated edit (changing the brand, say) cannot
+  // silently strip it.
+  const occasionOptions = occasionTaxonomy.optionsIncluding(draft.occasionTags);
+
+  const toggleOccasion = (occasion: OccasionSlug) => {
     setDraft((current) => ({
       ...current,
       occasionTags: toggleInArray(current.occasionTags, occasion),
@@ -211,14 +214,14 @@ export function EditItemTagsForm({
           testID="edit-occasion-badges-row"
           className="flex-row flex-wrap gap-xs"
         >
-          {OCCASION_TYPES.map((occasion) => (
+          {occasionOptions.map((option) => (
             <Badge
-              key={occasion}
-              testID={`edit-occasion-badge-${occasion}`}
-              label={occasion}
-              occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
-              selected={draft.occasionTags.includes(occasion)}
-              onPress={() => toggleOccasion(occasion)}
+              key={option.key}
+              testID={`edit-occasion-badge-${option.key}`}
+              label={option.label}
+              occasion={option.badgeColor}
+              selected={draft.occasionTags.includes(option.key)}
+              onPress={() => toggleOccasion(option.key)}
             />
           ))}
         </View>

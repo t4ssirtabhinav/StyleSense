@@ -7,15 +7,12 @@ import {
   Button,
   Text,
 } from '../../../components/ui';
-import {
-  OCCASION_BADGE_COLOR_MAP,
-  OCCASION_TYPES,
-  SEASON_TAGS,
-  SORT_OPTIONS,
-} from '../wardrobe.constants';
+import { TaxonomyChipsSkeleton } from '../../onboarding/components/TaxonomyChipsSkeleton';
+import { SEASON_TAGS, SORT_OPTIONS } from '../wardrobe.constants';
+import { useOccasionOptions } from '../wardrobe.queries';
 import { useWardrobeFilterStore } from '../wardrobe.store';
 import type {
-  OccasionType,
+  OccasionSlug,
   SeasonTag,
   WardrobeItemRow,
   WardrobeSortOption,
@@ -41,6 +38,11 @@ const FILTER_SECTIONS: FilterSectionDescriptor[] = [
   { key: 'color', label: 'Colour' },
   { key: 'sort', label: 'Sort by' },
 ];
+
+// Matches the 12-row seed of the `occasions` registry -- a skeleton count,
+// not a vocabulary, so a registry that grows past 12 just renders a
+// slightly-short shimmer for one frame.
+const OCCASION_SKELETON_COUNT = 12;
 
 const SORT_LABEL_BY_VALUE: Record<WardrobeSortOption, string> =
   Object.fromEntries(
@@ -89,9 +91,16 @@ export const WardrobeFilterSheet = forwardRef<
   );
   const setSort = useWardrobeFilterStore((state) => state.setSort);
 
+  // (SS-025) Occasion chips are fetched at runtime from the `occasions`
+  // registry -- adding an occasion is an INSERT, with no code change here.
+  // Only the OCCASION section gets loading/error states: the season, colour
+  // and sort sections have no network dependency and must keep working if
+  // the taxonomy fetch failed.
+  const occasionTaxonomy = useOccasionOptions();
+
   const [activeSection, setActiveSection] =
     useState<FilterSectionKey>('occasion');
-  const [draftOccasion, setDraftOccasion] = useState<OccasionType | 'all'>(
+  const [draftOccasion, setDraftOccasion] = useState<OccasionSlug | 'all'>(
     storeOccasion,
   );
   const [draftSeason, setDraftSeason] = useState<SeasonTag | 'all'>(
@@ -115,8 +124,13 @@ export const WardrobeFilterSheet = forwardRef<
     [items],
   );
 
+  // (SS-025) Real registry labels, not the raw slug -- showing
+  // `ganesh_chaturthi` to a user stops being acceptable once occasions can
+  // be arbitrary. `label()` falls back to the humanised slug for an unknown
+  // or since-deactivated occasion, so a chip is never blank.
   const sectionSummary: Record<FilterSectionKey, string> = {
-    occasion: draftOccasion === 'all' ? 'All' : draftOccasion,
+    occasion:
+      draftOccasion === 'all' ? 'All' : occasionTaxonomy.label(draftOccasion),
     season: draftSeason === 'all' ? 'All' : draftSeason,
     color: draftColor === 'all' ? 'All' : draftColor,
     sort: SORT_LABEL_BY_VALUE[draftSort],
@@ -124,7 +138,10 @@ export const WardrobeFilterSheet = forwardRef<
 
   const activeFilterChips: Array<{ key: string; label: string }> = [];
   if (draftOccasion !== 'all') {
-    activeFilterChips.push({ key: 'occasion', label: draftOccasion });
+    activeFilterChips.push({
+      key: 'occasion',
+      label: occasionTaxonomy.label(draftOccasion),
+    });
   }
   if (draftSeason !== 'all') {
     activeFilterChips.push({ key: 'season', label: draftSeason });
@@ -224,18 +241,35 @@ export const WardrobeFilterSheet = forwardRef<
           testID="filter-section-panel"
           className="flex-1 flex-row flex-wrap content-start gap-sm bg-surfacePrimary p-sm"
         >
-          {activeSection === 'occasion'
-            ? OCCASION_TYPES.map((occasion) => (
+          {activeSection === 'occasion' ? (
+            occasionTaxonomy.isLoading ? (
+              <TaxonomyChipsSkeleton count={OCCASION_SKELETON_COUNT} />
+            ) : occasionTaxonomy.isError ? (
+              <View testID="filter-occasion-error" className="items-start">
+                <Text variant="body" color="secondary">
+                  Couldn't load occasion options.
+                </Text>
+                <Button
+                  variant="ghost"
+                  accessibilityLabel="Retry loading occasion options"
+                  onPress={() => occasionTaxonomy.refetch()}
+                >
+                  Retry
+                </Button>
+              </View>
+            ) : (
+              occasionTaxonomy.occasions.map((option) => (
                 <Badge
-                  key={occasion}
-                  testID={`filter-occasion-${occasion}`}
-                  label={occasion}
-                  occasion={OCCASION_BADGE_COLOR_MAP[occasion]}
-                  selected={draftOccasion === occasion}
-                  onPress={() => setDraftOccasion(occasion)}
+                  key={option.key}
+                  testID={`filter-occasion-${option.key}`}
+                  label={option.label}
+                  occasion={occasionTaxonomy.badgeColor(option.key)}
+                  selected={draftOccasion === option.key}
+                  onPress={() => setDraftOccasion(option.key)}
                 />
               ))
-            : null}
+            )
+          ) : null}
           {activeSection === 'season'
             ? SEASON_TAGS.map((season) => (
                 <Badge

@@ -25,7 +25,8 @@ otherwise-eligible suggestion outright.
 Mirrors ``mobile/features/onboarding/onboarding.types.ts``'s ``StylePreferences``
 verbatim (see ``StylePreferencesInput`` below). ``styles``/``occasions_priority``
 are ``list[str]`` (not a closed enum) because SS-004's 2026-07-13 revision
-widened them to DB-backed taxonomy tables (``style_keywords``/``occasion_types``)
+widened them to DB-backed taxonomy tables (``style_keywords`` and, since
+SS-025, the ``occasions`` registry that superseded ``occasion_types``)
 -- do not reintroduce a fixed Python ``Literal``/enum for either field.
 
 Never modify ``IStylingProvider``'s signature to fit a new provider -- add a
@@ -176,24 +177,15 @@ WardrobeCategory = Literal[
     "accessory_scarf",
 ]
 
-OccasionType = Literal[
-    # Transcribed verbatim from supabase/migrations/001_initial.sql (lines
-    # 18-21), the real occasion_type DB enum. occasion_tags is a real
-    # occasion_type[] column -- validated strictly (an out-of-enum member
-    # fails the whole payload), unlike SeasonTag/pattern/fabric below.
-    "office",
-    "casual",
-    "date_night",
-    "wedding_guest",
-    "festival",
-    "puja",
-    "party",
-    "travel",
-    "workout",
-    "beach",
-    "formal_event",
-    "college",
-]
+# (SS-025) The ``OccasionType`` Literal is GONE, along with the
+# ``occasion_type`` DB enum it transcribed. ``wardrobe_items.occasion_tags``
+# is now ``TEXT[]`` of slugs from the data-driven ``occasions`` registry --
+# adding an occasion is an INSERT, so no closed Python Literal can enumerate
+# them. Do NOT reintroduce one.
+#
+# Vocabulary checking moved to ``services/occasion_normalizer.py``, which has
+# DB access; this module stays I/O-free. See ``GarmentTags`` below for the
+# resulting strict-to-lenient posture change.
 
 SeasonTag = Literal["summer", "winter", "monsoon", "all"]
 """``season_tags`` is a ``TEXT[]`` column, not a DB enum -- validated
@@ -211,17 +203,28 @@ not-clothing" are kept as two separate signals rather than conflated."""
 class GarmentTags(BaseModel):
     """Structured output of a single Gemini vision-tagging pass (SS-012).
 
-    ``category``/``occasion_tags`` are validated STRICTLY against the real
-    DB enums (``wardrobe_category``, ``occasion_type``) -- an out-of-enum
-    value on either fails the whole payload (a Pydantic ``ValidationError``
-    the adapter catches and turns into ``VisionTaggingResult(success=False)``,
-    never a raise). ``pattern``/``fabric``/``subcategory`` are free ``TEXT``
-    columns in the DB, so kept as plain ``str | None`` with no enum
-    enforcement -- an odd/out-of-vocabulary value must never nuke an
-    otherwise-good result (risk-weighted: strict where the DB enforces an
-    enum, lenient where it's free text). ``season_tags`` (``TEXT[]``, not a
-    DB enum) is validated against SeasonTag's closed set but leniently --
-    an unknown member is silently dropped rather than failing validation.
+    ``category`` is validated STRICTLY against the real ``wardrobe_category``
+    DB enum -- an out-of-enum value fails the whole payload (a Pydantic
+    ``ValidationError`` the adapter catches and turns into
+    ``VisionTaggingResult(success=False)``, never a raise).
+    ``pattern``/``fabric``/``subcategory`` are free ``TEXT`` columns in the
+    DB, so kept as plain ``str | None`` with no enum enforcement -- an
+    odd/out-of-vocabulary value must never nuke an otherwise-good result
+    (risk-weighted: strict where the DB enforces an enum, lenient where it's
+    free text). ``season_tags`` (``TEXT[]``, not a DB enum) is validated
+    against SeasonTag's closed set but leniently -- an unknown member is
+    silently dropped rather than failing validation.
+
+    (SS-025) ``occasion_tags`` moved from *strict, out-of-vocabulary fails
+    the payload* to **lenient-with-capture**, matching ``pattern``/
+    ``fabric``'s existing posture. The ``occasion_type`` enum is gone; the
+    column is ``TEXT[]`` of registry slugs, and an occasion the registry
+    hasn't modelled yet is a SIGNAL, not an error (the raw ticket's own
+    edge case: "store it and log it for review rather than dropping the tag
+    or failing the item write"). The validator below only coerces SHAPE --
+    it deliberately performs NO vocabulary check, because that needs DB
+    access; ``services/occasion_normalizer.py`` owns resolution, and the DB
+    trigger + ``occasion_unknown_tags`` own capture.
 
     ``category = None`` is a valid state (non-clothing photo, prompt-
     instructed ``confidence = 0.0``) -- not an error.
@@ -233,7 +236,7 @@ class GarmentTags(BaseModel):
     color_secondary: str | None = None
     pattern: str | None = None
     fabric: str | None = None
-    occasion_tags: list[OccasionType] = Field(default_factory=list)
+    occasion_tags: list[str] = Field(default_factory=list)
     season_tags: list[SeasonTag] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     content_flag: ContentFlag
@@ -252,6 +255,30 @@ class GarmentTags(BaseModel):
             return []
         valid = {"summer", "winter", "monsoon", "all"}
         return [v for v in value if isinstance(v, str) and v in valid]
+
+    @field_validator("occasion_tags", mode="before")
+    @classmethod
+    def _coerce_occasion_tags(cls, value: Any) -> Any:
+        """(SS-025) SHAPE coercion only -- deliberately no vocabulary check.
+
+        Accepts ``None`` (-> ``[]``), a bare string (-> one-element list, a
+        shape some models emit for a single tag), or a list. Non-string
+        members and members that are blank after trimming are dropped;
+        everything else is kept verbatim, including occasions the registry
+        has never heard of. Resolution against ``occasions``/
+        ``occasion_aliases`` is ``OccasionNormalizer``'s job (it has DB
+        access; this module is I/O-free), and capture is the DB trigger's.
+
+        The whole point is that an unmodelled occasion NEVER fails the
+        payload -- the inverse of the pre-SS-025 behaviour.
+        """
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
 
 class VisionTaggingResult(BaseModel):

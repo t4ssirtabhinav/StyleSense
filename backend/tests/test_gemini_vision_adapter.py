@@ -13,7 +13,9 @@ from typing import Any
 
 from google.genai import errors
 
+from adapters.interfaces import IOccasionRepository, OccasionRegistrySnapshot
 from ai.adapters.gemini_vision_adapter import MODEL, GeminiVisionAdapter
+from services.occasion_normalizer import OccasionNormalizer
 
 VALID_PAYLOAD = {
     "category": "ethnic_kurta",
@@ -178,3 +180,99 @@ async def test_client_error_is_never_retried() -> None:
     assert result.success is False
     assert len(fake_client.models.calls) == 1
     assert result.error is not None and result.error.startswith("client_error")
+
+
+# --- SS-025: registry-sourced occasion vocabulary in the prompt ------------
+
+
+class _FakeOccasionRepository(IOccasionRepository):
+    def __init__(self, keys: tuple[str, ...], *, fail: bool = False) -> None:
+        self.calls = 0
+        self._keys = keys
+        self._fail = fail
+
+    async def fetch_registry(self, *, jwt: str) -> OccasionRegistrySnapshot:
+        self.calls += 1
+        if self._fail:
+            raise RuntimeError("registry read failed")
+        return OccasionRegistrySnapshot(keys=self._keys)
+
+
+def _adapter_with_registry(
+    fake_client: _FakeClient, keys: tuple[str, ...], *, fail: bool = False
+) -> GeminiVisionAdapter:
+    normalizer = OccasionNormalizer(
+        _FakeOccasionRepository(keys, fail=fail), ttl_seconds=0.0
+    )
+    return GeminiVisionAdapter(
+        client=fake_client, occasion_normalizer=normalizer, registry_jwt="caller-jwt"
+    )
+
+
+SEEDED_KEYS = (
+    "office",
+    "casual",
+    "date_night",
+    "wedding_guest",
+    "festival",
+    "puja",
+    "party",
+    "travel",
+    "workout",
+    "beach",
+    "formal_event",
+    "college",
+)
+
+
+async def test_prompt_contains_every_active_registry_key_in_sort_order() -> None:
+    fake_client = _FakeClient([_valid_response()])
+    adapter = _adapter_with_registry(fake_client, SEEDED_KEYS)
+
+    await adapter.tag_garment(b"fake-image-bytes")
+
+    prompt = fake_client.models.calls[0]["contents"][0]
+    assert ", ".join(SEEDED_KEYS) in prompt
+    for key in SEEDED_KEYS:
+        assert key in prompt
+
+
+async def test_a_newly_inserted_occasion_reaches_the_prompt_with_no_code_change() -> None:
+    """The ticket's headline AC at the AI layer: inserting a row into
+    `occasions` must change the vocabulary the model is given, with no
+    rebuild, no redeploy and no edit to this adapter."""
+    fake_client = _FakeClient([_valid_response()])
+    adapter = _adapter_with_registry(fake_client, (*SEEDED_KEYS, "ganesh_chaturthi"))
+
+    await adapter.tag_garment(b"fake-image-bytes")
+
+    prompt = fake_client.models.calls[0]["contents"][0]
+    assert "ganesh_chaturthi" in prompt
+    # No placeholder survives into the rendered prompt.
+    assert "{occasion_vocabulary}" not in prompt
+
+
+async def test_prompt_renders_without_a_registry_and_never_blocks_tagging() -> None:
+    fake_client = _FakeClient([_valid_response()])
+    adapter = _adapter_with_registry(fake_client, (), fail=True)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    prompt = fake_client.models.calls[0]["contents"][0]
+    assert "{occasion_vocabulary}" not in prompt
+    assert result.success is True
+
+
+async def test_response_with_an_unknown_occasion_still_succeeds_with_the_tag_retained() -> None:
+    """The inverse of the pre-SS-025 behaviour: an occasion outside the
+    registry no longer fails GarmentTags validation, so the whole payload
+    survives and the tag reaches the item write."""
+    payload = {**VALID_PAYLOAD, "occasion_tags": ["festival", "Ganesh Chaturthi"]}
+    fake_client = _FakeClient([_FakeResponse(json.dumps(payload))])
+    adapter = _adapter_with_registry(fake_client, SEEDED_KEYS)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    assert result.success is True
+    assert result.tags is not None
+    assert result.tags.occasion_tags == ["festival", "Ganesh Chaturthi"]

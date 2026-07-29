@@ -25,7 +25,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
 
-from adapters.interfaces import IWardrobeRepository
+from adapters.interfaces import IOccasionRepository, IWardrobeRepository
+from adapters.occasion_repository import SupabaseOccasionRepository
 from adapters.r2_storage import R2StorageClient
 from adapters.wardrobe_repository import SupabaseWardrobeRepository
 from ai.adapters.gemini_vision_adapter import GeminiVisionAdapter
@@ -34,6 +35,7 @@ from ai.ports.interfaces import IBackgroundRemovalProvider, IVisionProvider
 from dependencies.auth import get_current_user_id
 from services.circuit_breaker import CircuitBreaker
 from services.gemini_rate_limiter import GeminiRateLimiter
+from services.occasion_normalizer import OccasionNormalizer
 from services.rate_limiter import DailyRateLimiter
 from services.tag_cache import TagCache
 from services.wardrobe_bg_removal_service import WardrobeBgRemovalService
@@ -55,6 +57,22 @@ _FREE_DAILY_LIMIT = 20
 # remember any prior call and would make the 15 RPM gate a no-op. Built
 # once at import time; still swappable via dependency_overrides for tests.
 _gemini_rate_limiter = GeminiRateLimiter()
+
+# (SS-025) Process-wide, for the same reason as _gemini_rate_limiter: its 60s
+# TTL registry cache only pays for itself across requests. Holds no caller
+# credentials -- the JWT is a per-call argument.
+_occasion_normalizer = OccasionNormalizer(SupabaseOccasionRepository())
+
+
+def _safe_bearer_token(authorization: str | None) -> str | None:
+    """Like _extract_bearer_token below, but returns None instead of raising
+    on a missing/malformed header. Used only where the token is an OPTIONAL
+    enrichment (rendering the occasion vocabulary into the Gemini prompt) --
+    a DI provider must not be the thing that 401s a request; the route's own
+    auth dependency owns that."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    return authorization[len("Bearer ") :].strip() or None
 
 
 def get_background_removal_provider() -> IBackgroundRemovalProvider:
@@ -89,11 +107,36 @@ def get_bg_removal_service(
     return WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)
 
 
-def get_vision_provider() -> IVisionProvider:
+def get_occasion_repository() -> IOccasionRepository:
+    """(SS-025) Port -> adapter binding for the occasion registry. Route
+    handlers depend on the port, never on SupabaseOccasionRepository."""
+    return SupabaseOccasionRepository()
+
+
+def get_occasion_normalizer() -> OccasionNormalizer:
+    """Returns the process-wide singleton, NOT a per-request instance -- the
+    60s TTL registry cache only pays for itself if it survives across
+    requests (same reasoning as _gemini_rate_limiter above). The caller's JWT
+    is passed per call, not held, so the singleton never carries one user's
+    credentials into another user's request."""
+    return _occasion_normalizer
+
+
+def get_vision_provider(
+    authorization: str | None = Header(default=None),
+    occasion_normalizer: OccasionNormalizer = Depends(get_occasion_normalizer),
+) -> IVisionProvider:
     """The binding from port to concrete adapter lives here, and only here
     -- the route handler never imports GeminiVisionAdapter directly.
-    Override via app.dependency_overrides to swap in a fake for tests."""
-    return GeminiVisionAdapter()
+    Override via app.dependency_overrides to swap in a fake for tests.
+
+    (SS-025) The normaliser and the caller's JWT are constructor-injected so
+    the adapter can render the occasion vocabulary from the live registry.
+    IVisionProvider.tag_garment's signature is untouched (Open/Closed)."""
+    return GeminiVisionAdapter(
+        occasion_normalizer=occasion_normalizer,
+        registry_jwt=_safe_bearer_token(authorization),
+    )
 
 
 def get_tag_cache() -> TagCache:
@@ -116,8 +159,11 @@ def get_tagging_service(
     storage: R2StorageClient = Depends(get_r2_storage_client),
     cache: TagCache = Depends(get_tag_cache),
     rate_limiter: GeminiRateLimiter = Depends(get_gemini_rate_limiter),
+    occasion_normalizer: OccasionNormalizer = Depends(get_occasion_normalizer),
 ) -> WardrobeTaggingService:
-    return WardrobeTaggingService(provider, repository, storage, cache, rate_limiter)
+    return WardrobeTaggingService(
+        provider, repository, storage, cache, rate_limiter, occasion_normalizer
+    )
 
 
 class RemoveBgRequest(BaseModel):
