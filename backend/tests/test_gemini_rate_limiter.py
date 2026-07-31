@@ -60,3 +60,47 @@ async def test_tokens_refill_over_elapsed_time_via_injected_clock() -> None:
     # Advance past the window -- both old timestamps should now evict.
     clock_value[0] = 111.0
     await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+
+
+def test_constructor_default_is_still_15() -> None:
+    import inspect
+
+    default = inspect.signature(GeminiRateLimiter.__init__).parameters["max_requests"].default
+    assert default == 15
+
+
+def test_max_requests_property_reflects_the_constructor_value() -> None:
+    limiter = GeminiRateLimiter(max_requests=7)
+    assert limiter.max_requests == 7
+
+
+def test_set_max_requests_changes_the_effective_ceiling_on_the_next_acquire() -> None:
+    clock_value = [0.0]
+
+    def clock() -> float:
+        return clock_value[0]
+
+    limiter = GeminiRateLimiter(max_requests=1, window_seconds=60.0, clock=clock)
+
+    async def _run() -> None:
+        await limiter.acquire()
+        assert limiter.max_requests == 1
+
+        limiter.set_max_requests(3)
+        assert limiter.max_requests == 3
+
+        # Two more should now succeed without blocking, within the same window.
+        await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+        await asyncio.wait_for(limiter.acquire(), timeout=0.5)
+
+    asyncio.run(_run())
+
+
+def test_set_max_requests_values_below_one_are_clamped_to_one() -> None:
+    limiter = GeminiRateLimiter(max_requests=5)
+
+    limiter.set_max_requests(0)
+    assert limiter.max_requests == 1
+
+    limiter.set_max_requests(-10)
+    assert limiter.max_requests == 1
