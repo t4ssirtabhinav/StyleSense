@@ -609,6 +609,82 @@ def test_unknown_tag_write_is_captured_rather_than_dropped(db_conn: Any) -> None
     assert row[1] == "wardrobe_items"
 
 
+# ==========================================================================
+# SS-029 -- Cost & Capacity Ledger (012_ai_cost_ledger.sql)
+#
+# Like the rest of this module, SKIPPED unless psycopg2 and SUPABASE_DB_URL
+# are both available -- QA must state that plainly rather than reporting a
+# pass (BL-005).
+# ==========================================================================
+
+
+def test_ai_cost_ledger_table_exists_with_generated_cost_paise_column(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, is_generated
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'ai_cost_ledger'
+              AND column_name IN ('cost_micropaise', 'cost_paise')
+            """
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows.get("cost_micropaise") == "NEVER"
+    assert rows.get("cost_paise") == "ALWAYS"
+
+
+def test_ai_cost_ledger_indexes_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = 'ai_cost_ledger'
+            """
+        )
+        indexes = {row[0] for row in cur.fetchall()}
+
+    assert {
+        "idx_ai_cost_ledger_user_created",
+        "idx_ai_cost_ledger_request",
+        "idx_ai_cost_ledger_feature",
+    } <= indexes
+
+
+def test_ai_cost_ledger_rls_enabled_with_zero_policies_for_anon_or_authenticated(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relrowsecurity
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = 'ai_cost_ledger'
+            """
+        )
+        (rls_enabled,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'ai_cost_ledger'"
+        )
+        (policy_count,) = cur.fetchone()
+
+    assert rls_enabled is True
+    assert policy_count == 0, "ai_cost_ledger must have ZERO policies -- service_role only"
+
+
+def test_ai_cost_breakdown_view_exists(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.views
+            WHERE table_schema = 'public' AND table_name = 'ai_cost_breakdown'
+            """
+        )
+        assert cur.fetchone() is not None
+
+
 def test_cost_per_wear_still_computes_after_the_table_rewrite(db_conn: Any) -> None:
     """008's ALTER COLUMN ... TYPE rewrites wardrobe_items. cost_per_wear is
     a GENERATED ... STORED column on that same table -- re-verified rather

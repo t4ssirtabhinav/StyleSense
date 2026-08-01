@@ -1,4 +1,5 @@
-"""Tests for backend/services/wardrobe_bg_removal_service.py (SS-011)."""
+"""Tests for backend/services/wardrobe_bg_removal_service.py (SS-011;
+SS-029 adds cost-ledger wiring)."""
 
 from __future__ import annotations
 
@@ -10,15 +11,36 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from adapters.interfaces import IWardrobeRepository
+from adapters.interfaces import CostLedgerEntry, ICostLedger, IWardrobeRepository
 from ai.ports.interfaces import BackgroundRemovalResult, IBackgroundRemovalProvider
 from services.circuit_breaker import CircuitBreaker
+from services.cost_budget_gate import Reservation
+from services.cost_config_specs import _DEFAULT_PRICE_TABLE
 from services.image_processing import resize_for_bg_removal
+from services.price_table import PriceTable
 from services.wardrobe_bg_removal_service import (
     WardrobeBgRemovalService,
     clean_image_key,
     thumbnail_image_key,
 )
+
+_REQUEST_ID = "bbbbbbbb-1111-1111-1111-111111111111"
+_PRICE_TABLE = PriceTable(_DEFAULT_PRICE_TABLE)
+
+
+def _reservation(*, reserved_micropaise: int = 2_000_000, touched_redis: bool = True) -> Reservation:
+    return Reservation(
+        user_id="user-1",
+        tier="free",
+        reserved_micropaise=reserved_micropaise,
+        daily_key="stylesense:cost:daily:user-1:2026-07-30",
+        monthly_key="stylesense:cost:monthly:user-1:2026-07",
+        daily_current=reserved_micropaise,
+        monthly_current=reserved_micropaise,
+        daily_ceiling=500_000_000,
+        monthly_ceiling=2_500_000_000,
+        touched_redis=touched_redis,
+    )
 
 
 def _jpeg_bytes(
@@ -158,6 +180,69 @@ class _FakeCircuitBreaker:
         self.successes_recorded += 1
 
 
+class _FakeCostBudgetGate:
+    def __init__(self) -> None:
+        self.reconcile_calls: list[dict[str, Any]] = []
+
+    async def reconcile(self, *, reservation: Reservation, actual_micropaise: int) -> None:
+        self.reconcile_calls.append(
+            {"reservation": reservation, "actual_micropaise": actual_micropaise}
+        )
+
+
+class _FakeCostLedger(ICostLedger):
+    def __init__(self) -> None:
+        self.records: list[CostLedgerEntry] = []
+
+    async def record(self, entry: CostLedgerEntry) -> None:
+        self.records.append(entry)
+
+    async def breakdown(self, *, user_id: str, since: Any, until: Any) -> list[dict[str, Any]]:
+        return []
+
+
+def _build_service(
+    provider: Any,
+    repository: Any,
+    storage: Any,
+    circuit_breaker: Any,
+    *,
+    cost_budget_gate: _FakeCostBudgetGate | None = None,
+    cost_ledger: _FakeCostLedger | None = None,
+    max_concurrent_replicate_calls: int = 3,
+) -> tuple[WardrobeBgRemovalService, _FakeCostBudgetGate, _FakeCostLedger]:
+    cost_budget_gate = cost_budget_gate or _FakeCostBudgetGate()
+    cost_ledger = cost_ledger or _FakeCostLedger()
+    service = WardrobeBgRemovalService(
+        provider,
+        repository,
+        storage,
+        circuit_breaker,
+        cost_budget_gate,  # type: ignore[arg-type]
+        cost_ledger,
+        max_concurrent_replicate_calls=max_concurrent_replicate_calls,
+    )
+    return service, cost_budget_gate, cost_ledger
+
+
+async def _process(
+    service: WardrobeBgRemovalService,
+    *,
+    jwt: str = "jwt",
+    user_id: str = "user-1",
+    item_id: str = "item-1",
+    reservation: Reservation | None = None,
+) -> None:
+    await service.process(
+        jwt=jwt,
+        user_id=user_id,
+        item_id=item_id,
+        request_id=_REQUEST_ID,
+        reservation=reservation or _reservation(),
+        price_table=_PRICE_TABLE,
+    )
+
+
 async def test_happy_path_uploads_clean_and_thumbnail_and_marks_bg_removed() -> None:
     # Original wider than the 800px proxy default, so we can distinguish
     # "provider received the full-resolution original" (wrong, post-QA
@@ -168,8 +253,8 @@ async def test_happy_path_uploads_clean_and_thumbnail_and_marks_bg_removed() -> 
     storage = _FakeStorage(original_bytes)
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
-    await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+    service, gate, ledger = _build_service(provider, repository, storage, circuit_breaker)
+    await _process(service)
 
     assert provider.calls == 1
     # Post-QA amendment: the provider must receive the resize_for_bg_removal
@@ -203,6 +288,12 @@ async def test_happy_path_uploads_clean_and_thumbnail_and_marks_bg_removed() -> 
     assert update["thumbnail_url"] == thumbnail_image_key("user-1", "item-1")
     assert update["bg_removal_tags"]["source"] == "replicate"
 
+    assert len(ledger.records) == 1
+    assert ledger.records[0].outcome == "success"
+    assert ledger.records[0].provider == "replicate"
+    assert ledger.records[0].model == "bria-rmbg"
+    assert len(gate.reconcile_calls) == 1
+
 
 async def test_already_transparent_input_skips_provider_call_and_still_marks_bg_removed() -> None:
     provider = _FakeProvider()
@@ -210,14 +301,19 @@ async def test_already_transparent_input_skips_provider_call_and_still_marks_bg_
     storage = _FakeStorage(_white_jpeg_bytes())
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
-    await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+    service, gate, ledger = _build_service(provider, repository, storage, circuit_breaker)
+    reservation = _reservation(reserved_micropaise=1_000_000)
+    await _process(service, reservation=reservation)
 
     assert provider.calls == 0
     assert len(repository.updates) == 1
     update = repository.updates[0]
     assert update["processing_status"] == "bg_removed"
     assert update["bg_removal_tags"]["source"] == "skipped_already_transparent"
+    # Never calls Replicate -- full refund, no ledger row (design edge case 13).
+    assert len(gate.reconcile_calls) == 1
+    assert gate.reconcile_calls[0]["actual_micropaise"] == 0
+    assert ledger.records == []
 
 
 async def test_circuit_open_skips_provider_marks_bg_pending_no_cost() -> None:
@@ -226,14 +322,38 @@ async def test_circuit_open_skips_provider_marks_bg_pending_no_cost() -> None:
     storage = _FakeStorage(_jpeg_bytes())
     circuit_breaker = _FakeCircuitBreaker(open_=True)
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
-    await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+    service, gate, ledger = _build_service(provider, repository, storage, circuit_breaker)
+    await _process(service)
 
     assert provider.calls == 0
     assert len(repository.updates) == 1
     update = repository.updates[0]
     assert update["processing_status"] == "bg_pending"
     assert update["bg_removal_tags"]["source"] == "circuit_open"
+    assert len(gate.reconcile_calls) == 1
+    assert gate.reconcile_calls[0]["actual_micropaise"] == 0
+    assert ledger.records == []
+
+
+async def test_storage_read_failure_refunds_and_records_no_row() -> None:
+    class _FailingStorage:
+        def get_object_bytes(self, key: str) -> bytes:
+            raise RuntimeError("R2 read failed")
+
+        def put_object_bytes(self, key: str, data: bytes, content_type: str) -> None:
+            pass
+
+    provider = _FakeProvider()
+    repository = _FakeRepository()
+    circuit_breaker = _FakeCircuitBreaker()
+
+    service, gate, ledger = _build_service(provider, repository, _FailingStorage(), circuit_breaker)
+    await _process(service)
+
+    assert repository.updates[0]["bg_removal_tags"]["source"] == "r2_read_failed"
+    assert len(gate.reconcile_calls) == 1
+    assert gate.reconcile_calls[0]["actual_micropaise"] == 0
+    assert ledger.records == []
 
 
 async def test_provider_failure_not_yet_third_marks_bg_pending_records_one_failure() -> None:
@@ -242,11 +362,15 @@ async def test_provider_failure_not_yet_third_marks_bg_pending_records_one_failu
     storage = _FakeStorage(_jpeg_bytes())
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
-    await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+    service, gate, ledger = _build_service(provider, repository, storage, circuit_breaker)
+    await _process(service)
 
     assert circuit_breaker.failures_recorded == 1
     assert repository.updates[0]["processing_status"] == "bg_pending"
+    # A billed-but-failed provider call -- NOT refunded (design edge case 15).
+    assert len(gate.reconcile_calls) == 1
+    assert len(ledger.records) == 1
+    assert ledger.records[0].outcome == "failed"
 
 
 async def test_third_consecutive_failure_opens_real_circuit_breaker(
@@ -284,13 +408,13 @@ async def test_third_consecutive_failure_opens_real_circuit_breaker(
 
     for _ in range(3):
         provider = _FakeProvider(results=[BackgroundRemovalResult(success=False, error="boom")])
-        service = WardrobeBgRemovalService(provider, repository, storage, real_circuit_breaker)  # type: ignore[arg-type]
-        await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+        service, *_ = _build_service(provider, repository, storage, real_circuit_breaker)
+        await _process(service)
 
     assert await real_circuit_breaker.is_open() is True
 
 
-async def test_r2_upload_failure_after_successful_provider_call_marks_bg_pending_but_logs_cost(
+async def test_r2_upload_failure_after_successful_provider_call_marks_bg_pending_and_still_bills(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider = _FakeProvider()
@@ -298,15 +422,19 @@ async def test_r2_upload_failure_after_successful_provider_call_marks_bg_pending
     storage = _FakeStorage(_jpeg_bytes(), fail_put=True)
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
+    service, gate, ledger = _build_service(provider, repository, storage, circuit_breaker)
 
     with caplog.at_level(logging.INFO):
-        await service.process(jwt="jwt", user_id="user-1", item_id="item-1")
+        await _process(service)
 
     assert repository.updates[0]["processing_status"] == "bg_pending"
     ai_call_records = [r for r in caplog.records if r.message == "ai_call"]
     assert len(ai_call_records) == 1
-    assert ai_call_records[0].cost_usd == 0.0023  # type: ignore[attr-defined]
+    # The Replicate call itself succeeded (and was billed) before the R2
+    # write failed -- the ledger row/reconcile already happened.
+    assert len(ledger.records) == 1
+    assert ledger.records[0].outcome == "success"
+    assert len(gate.reconcile_calls) == 1
 
 
 async def test_semaphore_caps_concurrency_at_three_for_ten_parallel_calls() -> None:
@@ -315,16 +443,12 @@ async def test_semaphore_caps_concurrency_at_three_for_ten_parallel_calls() -> N
     storage = _FakeStorage(_jpeg_bytes())
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(
-        provider,
-        repository,
-        storage,  # type: ignore[arg-type]
-        circuit_breaker,  # type: ignore[arg-type]
-        max_concurrent_replicate_calls=3,
+    service, *_ = _build_service(
+        provider, repository, storage, circuit_breaker, max_concurrent_replicate_calls=3
     )
 
     await asyncio.gather(
-        *(service.process(jwt="jwt", user_id="user-1", item_id=f"item-{i}") for i in range(10))
+        *(_process(service, item_id=f"item-{i}") for i in range(10))
     )
 
     assert provider.calls == 10
@@ -339,14 +463,45 @@ async def test_successful_real_call_logs_user_id_cost_and_latency(
     storage = _FakeStorage(_jpeg_bytes())
     circuit_breaker = _FakeCircuitBreaker()
 
-    service = WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)  # type: ignore[arg-type]
+    service, *_ = _build_service(provider, repository, storage, circuit_breaker)
 
     with caplog.at_level(logging.INFO):
-        await service.process(jwt="jwt", user_id="user-42", item_id="item-1")
+        await _process(service, user_id="user-42")
 
     ai_call_records = [r for r in caplog.records if r.message == "ai_call"]
     assert len(ai_call_records) == 1
     record = ai_call_records[0]
     assert record.user_id == "user-42"  # type: ignore[attr-defined]
-    assert record.cost_usd == 0.0023  # type: ignore[attr-defined]
+    assert record.cost_micropaise is not None  # type: ignore[attr-defined]
     assert record.latency_ms is not None  # type: ignore[attr-defined]
+
+
+async def test_ledger_failure_does_not_break_the_bg_removal_pipeline(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _RaisingLedger(ICostLedger):
+        async def record(self, entry: CostLedgerEntry) -> None:
+            raise RuntimeError("ledger write failed")
+
+        async def breakdown(self, *, user_id: str, since: Any, until: Any) -> list[dict[str, Any]]:
+            return []
+
+    provider = _FakeProvider()
+    repository = _FakeRepository()
+    storage = _FakeStorage(_jpeg_bytes())
+    circuit_breaker = _FakeCircuitBreaker()
+
+    service = WardrobeBgRemovalService(
+        provider,
+        repository,
+        storage,  # type: ignore[arg-type]
+        circuit_breaker,  # type: ignore[arg-type]
+        _FakeCostBudgetGate(),  # type: ignore[arg-type]
+        _RaisingLedger(),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await _process(service)
+
+    assert repository.updates[0]["processing_status"] == "bg_removed"
+    assert any(r.message == "ledger_write_failed" for r in caplog.records)

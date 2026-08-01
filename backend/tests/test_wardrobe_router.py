@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from adapters.interfaces import IWardrobeRepository
+from adapters.interfaces import CostLedgerEntry, ICostLedger, IWardrobeRepository
 from ai.ports.interfaces import (
     BackgroundRemovalResult,
     GarmentTags,
@@ -29,8 +29,11 @@ from ai.ports.interfaces import (
 from dependencies.auth import get_current_user_id
 from main import app
 from routers.wardrobe import (
+    get_app_config_snapshot,
     get_background_removal_provider,
     get_circuit_breaker,
+    get_cost_budget_gate,
+    get_cost_ledger,
     get_daily_rate_limiter,
     get_deletion_service,
     get_r2_storage_client,
@@ -38,6 +41,8 @@ from routers.wardrobe import (
     get_vision_provider,
     get_wardrobe_repository,
 )
+from services.app_config import AppConfigSnapshot
+from services.cost_budget_gate import GateDecision, Reservation
 from services.wardrobe_deletion_service import WardrobeDeletionService
 
 client = TestClient(app)
@@ -192,16 +197,86 @@ class _FakeCircuitBreaker:
         pass
 
 
+class _FakeCostBudgetGate:
+    """(SS-029) Router-level fake -- always allows unless constructed with
+    ``allowed=False``, mirroring _FakeRateLimiter's own shape above. Real
+    CostBudgetGate/UpstashRateLimiter correctness is exercised in
+    test_cost_budget_gate.py / test_cost_budget_gate_concurrency.py, not
+    here -- these tests only need to prove the ROUTER wires the gate
+    correctly (dispatch-on-allow, 429-on-deny, no dispatch on deny)."""
+
+    def __init__(self, *, allowed: bool = True, scope: str | None = None) -> None:
+        self._allowed = allowed
+        self._scope = scope
+        self.reserve_calls: list[dict[str, Any]] = []
+        self.reconcile_calls: list[dict[str, Any]] = []
+
+    async def reconcile(self, *, reservation: Reservation, actual_micropaise: int) -> None:
+        self.reconcile_calls.append(
+            {"reservation": reservation, "actual_micropaise": actual_micropaise}
+        )
+
+    async def reserve(
+        self,
+        *,
+        user_id: str,
+        tier: str | None,
+        estimate_micropaise: int,
+        config_snapshot: AppConfigSnapshot,
+    ) -> GateDecision:
+        self.reserve_calls.append(
+            {"user_id": user_id, "tier": tier, "estimate_micropaise": estimate_micropaise}
+        )
+        if not self._allowed:
+            return GateDecision(allowed=False, scope=self._scope or "daily", degraded=False, reservation=None)
+        return GateDecision(
+            allowed=True,
+            scope=None,
+            degraded=False,
+            reservation=Reservation(
+                user_id=user_id,
+                tier=tier or "free",
+                reserved_micropaise=estimate_micropaise,
+                daily_key="stylesense:cost:daily:test",
+                monthly_key="stylesense:cost:monthly:test",
+                daily_current=estimate_micropaise,
+                monthly_current=estimate_micropaise,
+                daily_ceiling=999_999_999_999,
+                monthly_ceiling=999_999_999_999,
+                touched_redis=True,
+            ),
+        )
+
+
+class _FakeCostLedgerForRouter(ICostLedger):
+    def __init__(self) -> None:
+        self.records: list[CostLedgerEntry] = []
+
+    async def record(self, entry: CostLedgerEntry) -> None:
+        self.records.append(entry)
+
+    async def breakdown(self, *, user_id: str, since: Any, until: Any) -> list[dict[str, Any]]:
+        return []
+
+
 def teardown_function() -> None:
     app.dependency_overrides.clear()
 
 
-def _override_infra(repository: _FakeRepository, rate_limiter: _FakeRateLimiter) -> None:
+def _override_infra(
+    repository: _FakeRepository,
+    rate_limiter: _FakeRateLimiter,
+    *,
+    cost_budget_gate: _FakeCostBudgetGate | None = None,
+) -> None:
     app.dependency_overrides[get_wardrobe_repository] = lambda: repository
     app.dependency_overrides[get_daily_rate_limiter] = lambda: rate_limiter
     app.dependency_overrides[get_background_removal_provider] = lambda: _FakeProvider()
     app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
     app.dependency_overrides[get_circuit_breaker] = lambda: _FakeCircuitBreaker()
+    app.dependency_overrides[get_cost_budget_gate] = lambda: (cost_budget_gate or _FakeCostBudgetGate())
+    app.dependency_overrides[get_cost_ledger] = lambda: _FakeCostLedgerForRouter()
+    app.dependency_overrides[get_app_config_snapshot] = lambda: AppConfigSnapshot()
 
 
 def test_missing_or_invalid_auth_returns_401_via_real_dependency(
@@ -332,6 +407,47 @@ def test_malformed_item_id_returns_422_not_500() -> None:
     assert response.status_code == 422
 
 
+# --- SS-029: cost budget gate on POST /wardrobe/remove-bg -------------------
+
+
+def test_remove_bg_budget_denied_returns_429_no_row_created_no_task_queued() -> None:
+    repository = _FakeRepository(plan_tier="free")
+    rate_limiter = _FakeRateLimiter(allowed=True)  # the OLD call-count limiter allows
+    gate = _FakeCostBudgetGate(allowed=False, scope="daily")
+    _override_infra(repository, rate_limiter, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-budget-1"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(
+            "/wardrobe/remove-bg",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 429
+    assert len(repository.upserts) == 0
+    mock_add_task.assert_not_called()
+    assert gate.reserve_calls[0]["user_id"] == "user-budget-1"
+
+
+def test_remove_bg_budget_gate_runs_before_dispatch() -> None:
+    repository = _FakeRepository(plan_tier="free")
+    rate_limiter = _FakeRateLimiter(allowed=True)
+    gate = _FakeCostBudgetGate(allowed=True)
+    _override_infra(repository, rate_limiter, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-budget-2"
+
+    response = client.post(
+        "/wardrobe/remove-bg",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_id": VALID_ITEM_ID},
+    )
+
+    assert response.status_code == 202
+    assert len(gate.reserve_calls) == 1
+    assert len(gate.reconcile_calls) == 1  # dispatched task ran synchronously (TestClient)
+
+
 # --- SS-012: POST /wardrobe/tag -------------------------------------------
 
 
@@ -370,11 +486,19 @@ class _FakeTagCache:
         self.inflight.discard(image_hash)
 
 
-def _override_tag_infra(repository: _FakeRepository, provider: _FakeVisionProvider) -> None:
+def _override_tag_infra(
+    repository: _FakeRepository,
+    provider: _FakeVisionProvider,
+    *,
+    cost_budget_gate: _FakeCostBudgetGate | None = None,
+) -> None:
     app.dependency_overrides[get_wardrobe_repository] = lambda: repository
     app.dependency_overrides[get_vision_provider] = lambda: provider
     app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
     app.dependency_overrides[get_tag_cache] = _FakeTagCache
+    app.dependency_overrides[get_cost_budget_gate] = lambda: (cost_budget_gate or _FakeCostBudgetGate())
+    app.dependency_overrides[get_cost_ledger] = lambda: _FakeCostLedgerForRouter()
+    app.dependency_overrides[get_app_config_snapshot] = lambda: AppConfigSnapshot()
 
 
 def test_tag_missing_authorization_header_returns_401() -> None:
@@ -432,6 +556,90 @@ def test_tag_malformed_item_id_returns_422_not_500() -> None:
     )
 
     assert response.status_code == 422
+
+
+# --- SS-029: cost budget gate on POST /wardrobe/tag -------------------------
+
+
+def test_tag_returns_429_when_budget_exceeded() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    gate = _FakeCostBudgetGate(allowed=False, scope="monthly")
+    _override_tag_infra(repository, provider, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-budget-tag"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(
+            "/wardrobe/tag",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 429
+    mock_add_task.assert_not_called()
+    assert provider.call_count == 0
+
+
+def test_tag_429_body_is_a_clear_message_not_a_generic_500() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    gate = _FakeCostBudgetGate(allowed=False, scope="daily")
+    _override_tag_infra(repository, provider, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-budget-tag-2"
+
+    response = client.post(
+        "/wardrobe/tag",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_id": VALID_ITEM_ID},
+    )
+
+    assert response.status_code == 429
+    body = response.json()
+    assert "detail" in body
+    assert body["detail"] != "Internal Server Error"
+    assert "spending limit" in body["detail"].lower()
+
+
+def test_request_id_is_minted_once_per_request_and_passed_to_the_task() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    gate = _FakeCostBudgetGate(allowed=True)
+    _override_tag_infra(repository, provider, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-budget-tag-3"
+
+    response = client.post(
+        "/wardrobe/tag",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"item_id": VALID_ITEM_ID},
+    )
+
+    assert response.status_code == 202
+    assert len(gate.reserve_calls) == 1
+    assert len(gate.reconcile_calls) == 1
+
+
+def test_existing_daily_rate_limiter_429_behaviour_is_unchanged() -> None:
+    """SS-011 regression guard -- the OLD call-count DailyRateLimiter on
+    /remove-bg still enforces its own ceiling independently of the new
+    budget gate (design Q4: both coexist, neither ticket retires the
+    other)."""
+    repository = _FakeRepository(plan_tier="free")
+    rate_limiter = _FakeRateLimiter(allowed=False)
+    gate = _FakeCostBudgetGate(allowed=True)  # budget would allow -- old limiter still denies
+    _override_infra(repository, rate_limiter, cost_budget_gate=gate)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-daily-cap"
+
+    with patch("routers.wardrobe.BackgroundTasks.add_task") as mock_add_task:
+        response = client.post(
+            "/wardrobe/remove-bg",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 429
+    mock_add_task.assert_not_called()
+    # The budget gate is never even reached -- the old limiter denies first.
+    assert gate.reserve_calls == []
 
 
 def test_tag_dependency_override_swaps_the_vision_provider() -> None:

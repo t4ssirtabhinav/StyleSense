@@ -13,6 +13,13 @@ client batch fires in parallel (addresses the ticket's own "batch of 10,
 queue sequentially" edge case). **Known limitation, not fixed here:** this is
 in-process state -- correct for today's single-``uvicorn``-process reality,
 compounds with ``BL-037`` if this backend is ever deployed with >1 worker.
+
+**SS-029 addition:** every outcome reconciles the router's pre-call
+reservation and, for any path that actually invoked Replicate, writes a
+ledger row. Paths that never call Replicate at all (already-transparent
+skip, circuit open, storage read failure) refund the full reservation and
+write NO row (design §5 edge case 13) -- the now-redundant
+``COST_USD_PER_RUN`` stdout ``ai_call`` log is superseded by the ledger.
 """
 
 from __future__ import annotations
@@ -21,10 +28,11 @@ import asyncio
 import logging
 from typing import Any
 
-from adapters.interfaces import IWardrobeRepository
+from adapters.interfaces import CostLedgerEntry, ICostLedger, IWardrobeRepository
 from adapters.r2_storage import R2StorageClient
 from ai.ports.interfaces import IBackgroundRemovalProvider
 from services.circuit_breaker import CircuitBreaker
+from services.cost_budget_gate import CostBudgetGate, Reservation
 from services.image_processing import (
     apply_alpha_mask_to_original,
     generate_thumbnail,
@@ -32,14 +40,21 @@ from services.image_processing import (
     looks_already_transparent_or_white,
     resize_for_bg_removal,
 )
+from services.ist_window import ist_today
+from services.price_table import PriceResolution, PriceTable
 
 logger = logging.getLogger(__name__)
+
+FEATURE = "wardrobe_bg_removal"
+PROVIDER = "replicate"
+MODEL = "bria-rmbg"
 
 # Mirrors ai/adapters/replicate_bg_removal_adapter.py's own constant -- kept
 # duplicated rather than imported to avoid this orchestration service
 # depending on a concrete adapter (it only depends on the
-# IBackgroundRemovalProvider port). Both values must stay in sync with
-# Replicate's actual per-run price.
+# IBackgroundRemovalProvider port). Superseded as the billing source of
+# truth by the ai_price_table config's `replicate/bria-rmbg` row (SS-029) --
+# kept here only as a stale doc-comment reference, no longer read for cost.
 COST_USD_PER_RUN = 0.0023
 
 
@@ -62,6 +77,8 @@ class WardrobeBgRemovalService:
         repository: IWardrobeRepository,
         storage: R2StorageClient,
         circuit_breaker: CircuitBreaker,
+        cost_budget_gate: CostBudgetGate,
+        cost_ledger: ICostLedger,
         *,
         max_concurrent_replicate_calls: int = 3,
     ) -> None:
@@ -69,9 +86,20 @@ class WardrobeBgRemovalService:
         self._repository = repository
         self._storage = storage
         self._circuit_breaker = circuit_breaker
+        self._cost_budget_gate = cost_budget_gate
+        self._cost_ledger = cost_ledger
         self._semaphore = asyncio.Semaphore(max_concurrent_replicate_calls)
 
-    async def process(self, *, jwt: str, user_id: str, item_id: str) -> None:
+    async def process(
+        self,
+        *,
+        jwt: str,
+        user_id: str,
+        item_id: str,
+        request_id: str,
+        reservation: Reservation,
+        price_table: PriceTable,
+    ) -> None:
         """The full pipeline for one item. Never raises -- any failure along
         the way is caught and results in a ``bg_pending`` status update
         rather than an unhandled background-task exception."""
@@ -84,12 +112,15 @@ class WardrobeBgRemovalService:
                 "bg_removal_original_read_failed",
                 extra={"user_id": user_id, "item_id": item_id, "error": str(exc)},
             )
+            await self._cost_budget_gate.reconcile(reservation=reservation, actual_micropaise=0)
             await self._mark_pending(
                 jwt=jwt, item_id=item_id, source="r2_read_failed", latency_ms=None
             )
             return
 
         if looks_already_transparent_or_white(original_bytes):
+            # Never calls Replicate -- full refund, no ledger row (edge case 13).
+            await self._cost_budget_gate.reconcile(reservation=reservation, actual_micropaise=0)
             await self._finish_success(
                 jwt=jwt,
                 user_id=user_id,
@@ -102,6 +133,8 @@ class WardrobeBgRemovalService:
             return
 
         if await self._circuit_breaker.is_open():
+            # Never calls Replicate -- full refund, no ledger row (edge case 13).
+            await self._cost_budget_gate.reconcile(reservation=reservation, actual_micropaise=0)
             await self._mark_pending(
                 jwt=jwt, item_id=item_id, source="circuit_open", latency_ms=None
             )
@@ -117,8 +150,25 @@ class WardrobeBgRemovalService:
         async with self._semaphore:
             result = await self._provider.remove_background(proxy_bytes)
 
+        cost_resolution = price_table.cost(
+            provider=PROVIDER, model=MODEL, tokens_in=None, tokens_out=None, at=ist_today()
+        )
+
         if not result.success:
             await self._circuit_breaker.record_failure()
+            # Design edge case 15's per-call analogue: the Replicate call
+            # was actually made (and billed) even though it failed -- do
+            # NOT refund.
+            await self._cost_budget_gate.reconcile(
+                reservation=reservation, actual_micropaise=cost_resolution.cost_micropaise
+            )
+            await self._record_ledger(
+                user_id=user_id,
+                request_id=request_id,
+                cost_resolution=cost_resolution,
+                latency_ms=result.latency_ms,
+                outcome="failed",
+            )
             await self._mark_pending(
                 jwt=jwt, item_id=item_id, source="replicate_failed", latency_ms=result.latency_ms
             )
@@ -129,11 +179,25 @@ class WardrobeBgRemovalService:
             result.image_bytes is not None
         )  # success=True guarantees this per the port's contract
 
+        # per_call pricing: estimate == actual, so this reconcile is a no-op
+        # delta (still called explicitly for the production ceiling
+        # assertion's sake -- see CostBudgetGate._assert_ceiling).
+        await self._cost_budget_gate.reconcile(
+            reservation=reservation, actual_micropaise=cost_resolution.cost_micropaise
+        )
+        await self._record_ledger(
+            user_id=user_id,
+            request_id=request_id,
+            cost_resolution=cost_resolution,
+            latency_ms=result.latency_ms,
+            outcome="success",
+        )
+
         logger.info(
             "ai_call",
             extra={
                 "user_id": user_id,
-                "cost_usd": COST_USD_PER_RUN,
+                "cost_micropaise": cost_resolution.cost_micropaise,
                 "latency_ms": result.latency_ms,
             },
         )
@@ -153,6 +217,43 @@ class WardrobeBgRemovalService:
             low_confidence=is_low_confidence(result.image_bytes),
             latency_ms=result.latency_ms,
         )
+
+    async def _record_ledger(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+        cost_resolution: PriceResolution,
+        latency_ms: int | None,
+        outcome: str,
+    ) -> None:
+        # Defense in depth on top of ICostLedger.record's own "never raises"
+        # contract -- see WardrobeTaggingService's identical helper.
+        try:
+            await self._cost_ledger.record(
+                CostLedgerEntry(
+                    user_id=user_id,
+                    request_id=request_id,
+                    provider=PROVIDER,
+                    model=MODEL,
+                    feature=FEATURE,
+                    cost_micropaise=cost_resolution.cost_micropaise,
+                    pricing_status=cost_resolution.pricing_status,
+                    unit_price_snapshot=cost_resolution.unit_price_snapshot,
+                    tokens_in=None,
+                    tokens_out=None,
+                    latency_ms=latency_ms,
+                    cache_hit=False,
+                    price_effective_from=cost_resolution.price_effective_from,
+                    attempt=1,
+                    outcome=outcome,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - never break bg-removal over an accounting failure
+            logger.error(
+                "ledger_write_failed",
+                extra={"user_id": user_id, "request_id": request_id, "error": str(exc)},
+            )
 
     async def _finish_success(
         self,
