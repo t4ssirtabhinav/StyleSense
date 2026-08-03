@@ -42,10 +42,12 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from services.ist_window import seconds_until_next_ist_midnight as _ist_seconds_until_midnight
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +134,12 @@ class RateLimiter:
 
 
 def _seconds_until_next_ist_midnight(now: datetime | None = None) -> int:
-    """Exact seconds remaining until the next 00:00 IST (Asia/Kolkata), not a
-    fixed 86400 -- this, combined with the IST-date-in-key, is what makes
-    "resets at IST midnight, not UTC" literally true rather than an
-    approximate rolling window."""
-    current = now.astimezone(_IST) if now else datetime.now(_IST)
-    next_midnight = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return max(1, int((next_midnight - current).total_seconds()))
+    """Behaviour-preserving delegation to ``services/ist_window.py`` (SS-029)
+    -- this is now the single home for IST day/month key + TTL math (removes
+    what would otherwise have been a third copy of this exact logic). Kept
+    as a module-level function here, not just deleted, because this repo's
+    shipped SS-018 tests import it by this name from this module."""
+    return _ist_seconds_until_midnight(now)
 
 
 class DailyRateLimiter:

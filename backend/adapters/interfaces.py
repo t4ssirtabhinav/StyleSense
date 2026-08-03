@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Literal
 
 
@@ -219,4 +220,86 @@ class IWardrobeRepository(ABC):
         ``ON DELETE CASCADE`` on ``wardrobe_item_wears``' composite FK
         removes that item's wear-history rows as part of the same delete,
         no separate call needed."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# SS-029 -- IRateLimiter / ICostLedger.
+#
+# Placed here, not in ai/ports/interfaces.py: CLAUDE.md scopes ai/ports/ to
+# AI *provider capabilities* (IVisionProvider, IStylingProvider, ...); these
+# two are infrastructure ports one layer below AI. adapters/interfaces.py
+# already hosts non-AI external-system ports by documented precedent
+# (IWardrobeRepository/Postgres, IOccasionRepository/Postgres,
+# IAppConfigRepository/Postgres-service_role, R2 storage) -- see design
+# doc §2.4. No new folder invented.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RateLimitDecision:
+    """Amounts and ceilings are opaque non-negative integers -- micropaise
+    for the cost budget gate, 1-per-call for a plain count limiter."""
+
+    allowed: bool
+    current: int | None  # post-INCRBY counter value; None when degraded
+    ceiling: int
+    degraded: bool  # True = decision came from the fail-open/closed fallback, not a real counter
+
+
+class IRateLimiter(ABC):
+    """Never widen this to fit a new backend -- add a new adapter instead
+    (Open/Closed, per CLAUDE.md). The future Durable Objects adapter
+    (``BL-082``) implements exactly this contract, which is the point of
+    extracting it now."""
+
+    @abstractmethod
+    async def check_and_consume(
+        self, *, key: str, amount: int, ceiling: int, ttl_seconds: int, fail_open: bool
+    ) -> RateLimitDecision:
+        """Atomically add ``amount`` and decide from the returned total in
+        ONE round-trip. MUST NOT read-then-write. On infra failure returns
+        ``RateLimitDecision(allowed=fail_open, current=None, degraded=True)``."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def adjust(self, *, key: str, delta: int) -> None:
+        """Best-effort counter correction (refund or reconcile). Never
+        raises; a failure is logged and never flips an already-made
+        decision."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class CostLedgerEntry:
+    user_id: str
+    request_id: str
+    provider: str
+    model: str
+    feature: str
+    cost_micropaise: int
+    pricing_status: str  # 'priced' | 'estimated' | 'unpriced'
+    unit_price_snapshot: dict[str, Any]
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    latency_ms: int | None = None
+    cache_hit: bool = False
+    price_effective_from: str | None = None
+    attempt: int = 1
+    outcome: str = "success"  # 'success' | 'failed' | 'timeout' | 'denied'
+
+
+class ICostLedger(ABC):
+    @abstractmethod
+    async def record(self, entry: CostLedgerEntry) -> None:
+        """MUST NEVER RAISE. An accounting failure must never fail a user's
+        request whose AI call already succeeded -- log and drop."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def breakdown(
+        self, *, user_id: str, since: date, until: date
+    ) -> list[dict[str, Any]]:
+        """Reads ``ai_cost_breakdown``. May raise -- this is an
+        operator/BI read path, not on any user request path."""
         raise NotImplementedError

@@ -110,6 +110,58 @@ async def test_valid_json_response_maps_through_to_a_successful_result() -> None
     assert result.latency_ms is not None
 
 
+class _FakeUsageMetadata:
+    def __init__(self, prompt_token_count: int | None, candidates_token_count: int | None) -> None:
+        self.prompt_token_count = prompt_token_count
+        self.candidates_token_count = candidates_token_count
+
+
+class _FakeResponseWithUsage(_FakeResponse):
+    def __init__(self, text: str | None, usage_metadata: _FakeUsageMetadata | None) -> None:
+        super().__init__(text)
+        self.usage_metadata = usage_metadata
+
+
+async def test_successful_response_with_usage_metadata_populates_token_usage() -> None:
+    """(SS-029) response.usage_metadata.prompt_token_count/
+    candidates_token_count -- [VERIFIED 2026-07-30] against the installed
+    google-genai==2.14.0 SDK's own types.py source (see
+    ai/adapters/gemini_vision_adapter.py::_extract_usage's docstring)."""
+    fake_client = _FakeClient(
+        [_FakeResponseWithUsage(json.dumps(VALID_PAYLOAD), _FakeUsageMetadata(1234, 210))]
+    )
+    adapter = GeminiVisionAdapter(client=fake_client)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    assert result.success is True
+    assert result.usage is not None
+    assert result.usage.tokens_in == 1234
+    assert result.usage.tokens_out == 210
+
+
+async def test_response_without_usage_metadata_leaves_usage_none() -> None:
+    fake_client = _FakeClient([_valid_response()])  # plain _FakeResponse, no usage_metadata attr
+    adapter = GeminiVisionAdapter(client=fake_client)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    assert result.success is True
+    assert result.usage is None
+
+
+async def test_response_with_partial_usage_metadata_leaves_usage_none() -> None:
+    fake_client = _FakeClient(
+        [_FakeResponseWithUsage(json.dumps(VALID_PAYLOAD), _FakeUsageMetadata(1234, None))]
+    )
+    adapter = GeminiVisionAdapter(client=fake_client)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    assert result.success is True
+    assert result.usage is None
+
+
 async def test_malformed_non_json_output_returns_failure_without_raising() -> None:
     fake_client = _FakeClient([_FakeResponse("not valid json{{{")])
     adapter = GeminiVisionAdapter(client=fake_client)
