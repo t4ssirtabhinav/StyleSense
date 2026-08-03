@@ -62,7 +62,7 @@ from google import genai
 from google.genai import errors, types
 from pydantic import ValidationError
 
-from ai.ports.interfaces import GarmentTags, IVisionProvider, VisionTaggingResult
+from ai.ports.interfaces import GarmentTags, IVisionProvider, TokenUsage, VisionTaggingResult
 from services.occasion_normalizer import OccasionNormalizer
 
 logger = logging.getLogger(__name__)
@@ -288,7 +288,12 @@ class GeminiVisionAdapter(IVisionProvider):
                 )
 
             return VisionTaggingResult(
-                success=True, tags=tags, latency_ms=latency_ms, model=MODEL, source="gemini"
+                success=True,
+                tags=tags,
+                latency_ms=latency_ms,
+                model=MODEL,
+                source="gemini",
+                usage=_extract_usage(response),
             )
 
     def _backoff_seconds(self, attempt: int) -> float:
@@ -298,3 +303,29 @@ class GeminiVisionAdapter(IVisionProvider):
 
 def _elapsed_ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
+
+
+def _extract_usage(response: Any) -> TokenUsage | None:
+    """(SS-029, design §7 Q1) ``response.usage_metadata.prompt_token_count``
+    / ``.candidates_token_count`` -- ``[VERIFIED 2026-07-30]`` by reading the
+    installed ``google-genai==2.14.0`` SDK's own ``types.py`` source
+    (``GenerateContentResponse.usage_metadata: Optional[
+    GenerateContentResponseUsageMetadata]``, whose fields are
+    ``prompt_token_count``/``candidates_token_count``). NOT re-verified via
+    a live API call this pass (no ``GEMINI_API_KEY``/network access in this
+    session) -- SS-012's Developer phase live-verified the surrounding call
+    shape with a real key; this field's *presence in the SDK's response
+    type* is confirmed from source, its *actual population on a live
+    response* is not independently re-confirmed here. Never raises -- a
+    missing/partial usage block (either count ``None``) returns ``None``,
+    and the caller (``WardrobeTaggingService``) falls back to the price
+    row's ``default_tokens_in/out`` with ``pricing_status='estimated'``
+    rather than a silently wrong token count."""
+    usage_metadata = getattr(response, "usage_metadata", None)
+    if usage_metadata is None:
+        return None
+    tokens_in = getattr(usage_metadata, "prompt_token_count", None)
+    tokens_out = getattr(usage_metadata, "candidates_token_count", None)
+    if tokens_in is None or tokens_out is None:
+        return None
+    return TokenUsage(tokens_in=tokens_in, tokens_out=tokens_out)

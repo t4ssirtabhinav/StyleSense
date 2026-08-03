@@ -281,6 +281,20 @@ class GarmentTags(BaseModel):
         return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
 
+class TokenUsage(BaseModel):
+    """(SS-029) Per-call token usage, when the provider's SDK exposes it.
+    Additive, optional field on ``VisionTaggingResult`` below -- does NOT
+    change ``IVisionProvider.tag_garment``'s signature (Open/Closed, per
+    CLAUDE.md). Feeds ``WardrobeTaggingService``'s post-call cost
+    reconciliation (``PriceTable.cost(..., tokens_in=..., tokens_out=...)``);
+    when a call has no ``usage``, the caller falls back to the price row's
+    ``default_tokens_in/out`` with ``pricing_status='estimated'`` rather
+    than a silent zero (design §7 Q1)."""
+
+    tokens_in: int
+    tokens_out: int
+
+
 class VisionTaggingResult(BaseModel):
     """Pydantic ``BaseModel`` (JSON-shaped, like ``OutfitSuggestionResult``)
     -- unlike the binary ``BackgroundRemovalResult`` dataclass, this result
@@ -293,6 +307,7 @@ class VisionTaggingResult(BaseModel):
     model: str = "gemini-3.5-flash-lite"
     source: Literal["gemini", "cache", "mock"] = "gemini"
     error: str | None = None
+    usage: TokenUsage | None = None
 
 
 class IVisionProvider(ABC):

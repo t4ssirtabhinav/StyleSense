@@ -25,21 +25,32 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
 
-from adapters.interfaces import IOccasionRepository, IWardrobeRepository
+from adapters.interfaces import ICostLedger, IOccasionRepository, IRateLimiter, IWardrobeRepository
 from adapters.occasion_repository import SupabaseOccasionRepository
 from adapters.r2_storage import R2StorageClient
+from adapters.supabase_cost_ledger import SupabaseCostLedger
+from adapters.upstash_rate_limiter import UpstashRateLimiter
 from adapters.wardrobe_repository import SupabaseWardrobeRepository
+from ai.adapters.gemini_vision_adapter import MODEL as GEMINI_TAG_MODEL
 from ai.adapters.gemini_vision_adapter import GeminiVisionAdapter
 from ai.adapters.replicate_bg_removal_adapter import ReplicateBgRemovalAdapter
 from ai.ports.interfaces import IBackgroundRemovalProvider, IVisionProvider
 from dependencies.auth import get_current_user_id
+from services.app_config import AppConfigSnapshot, app_config_service
 from services.circuit_breaker import CircuitBreaker
+from services.cost_budget_gate import CostBudgetGate, GateDecision
+from services.cost_config_specs import AI_PRICE_TABLE_SPEC
 from services.gemini_rate_limiter import GeminiRateLimiter
+from services.ist_window import ist_today
 from services.occasion_normalizer import OccasionNormalizer
+from services.price_table import PriceTable
 from services.rate_limiter import DailyRateLimiter
 from services.tag_cache import TagCache
+from services.wardrobe_bg_removal_service import MODEL as BG_REMOVAL_MODEL
+from services.wardrobe_bg_removal_service import PROVIDER as BG_REMOVAL_PROVIDER
 from services.wardrobe_bg_removal_service import WardrobeBgRemovalService
 from services.wardrobe_deletion_service import WardrobeDeletionService
+from services.wardrobe_tagging_service import PROVIDER as TAG_PROVIDER
 from services.wardrobe_tagging_service import WardrobeTaggingService
 
 logger = logging.getLogger(__name__)
@@ -98,13 +109,68 @@ def get_daily_rate_limiter() -> DailyRateLimiter:
     return DailyRateLimiter(max_requests=_FREE_DAILY_LIMIT)
 
 
+# SS-029: UpstashRateLimiter holds NO in-process state (every round-trip is
+# a real Upstash REST call keyed by the caller-supplied key) -- unlike
+# _gemini_rate_limiter/_occasion_normalizer above, a fresh instance per
+# request is harmless. Still a module-level singleton for symmetry/one
+# fewer allocation per request; swappable via dependency_overrides.
+_cost_rate_limiter = UpstashRateLimiter()
+
+
+def get_cost_rate_limiter() -> IRateLimiter:
+    return _cost_rate_limiter
+
+
+def get_cost_ledger() -> ICostLedger:
+    return SupabaseCostLedger()
+
+
+def get_cost_budget_gate(
+    limiter: IRateLimiter = Depends(get_cost_rate_limiter),
+) -> CostBudgetGate:
+    return CostBudgetGate(limiter, app_config_service)
+
+
+async def get_app_config_snapshot() -> AppConfigSnapshot:
+    """(SS-029, design edge case 16) Exactly ONE ``AppConfigSnapshot`` per
+    request -- FastAPI's own per-request ``Depends()`` result caching means
+    every route parameter depending on this returns the SAME snapshot
+    object, never re-fetched mid-request. Passed into both the
+    ``PriceTable`` construction and ``CostBudgetGate.reserve`` below, and
+    threaded into the background task unchanged."""
+    return await app_config_service.snapshot()
+
+
+def _budget_denied_detail(scope: str | None) -> str:
+    if scope == "monthly":
+        return "Monthly AI spending limit reached. Resets at the start of next month, or upgrade to premium for a higher ceiling."
+    return "Daily AI spending limit reached. Resets at midnight IST, or upgrade to premium for a higher ceiling."
+
+
+async def _resolve_plan_tier(
+    repository: IWardrobeRepository, *, jwt: str, user_id: str
+) -> str:
+    """Never raises (SS-029 design edge case 9) -- a tier-lookup failure
+    must not become an accidental unlimited-spend path. Falls back to
+    'free' (fail-closed direction) and logs."""
+    try:
+        return await repository.get_plan_tier(jwt=jwt, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 - never let a tier lookup crash the request
+        logger.warning("plan_tier_lookup_failed", extra={"user_id": user_id, "error": str(exc)})
+        return "free"
+
+
 def get_bg_removal_service(
     provider: IBackgroundRemovalProvider = Depends(get_background_removal_provider),
     repository: IWardrobeRepository = Depends(get_wardrobe_repository),
     storage: R2StorageClient = Depends(get_r2_storage_client),
     circuit_breaker: CircuitBreaker = Depends(get_circuit_breaker),
+    cost_budget_gate: CostBudgetGate = Depends(get_cost_budget_gate),
+    cost_ledger: ICostLedger = Depends(get_cost_ledger),
 ) -> WardrobeBgRemovalService:
-    return WardrobeBgRemovalService(provider, repository, storage, circuit_breaker)
+    return WardrobeBgRemovalService(
+        provider, repository, storage, circuit_breaker, cost_budget_gate, cost_ledger
+    )
 
 
 def get_occasion_repository() -> IOccasionRepository:
@@ -160,9 +226,18 @@ def get_tagging_service(
     cache: TagCache = Depends(get_tag_cache),
     rate_limiter: GeminiRateLimiter = Depends(get_gemini_rate_limiter),
     occasion_normalizer: OccasionNormalizer = Depends(get_occasion_normalizer),
+    cost_budget_gate: CostBudgetGate = Depends(get_cost_budget_gate),
+    cost_ledger: ICostLedger = Depends(get_cost_ledger),
 ) -> WardrobeTaggingService:
     return WardrobeTaggingService(
-        provider, repository, storage, cache, rate_limiter, occasion_normalizer
+        provider,
+        repository,
+        storage,
+        cache,
+        rate_limiter,
+        occasion_normalizer,
+        cost_budget_gate,
+        cost_ledger,
     )
 
 
@@ -258,11 +333,13 @@ async def remove_background(
     repository: IWardrobeRepository = Depends(get_wardrobe_repository),
     rate_limiter: DailyRateLimiter = Depends(get_daily_rate_limiter),
     service: WardrobeBgRemovalService = Depends(get_bg_removal_service),
+    cost_budget_gate: CostBudgetGate = Depends(get_cost_budget_gate),
+    config_snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
 ) -> dict[str, Any]:
     jwt = _extract_bearer_token(authorization)
 
     try:
-        plan_tier = await repository.get_plan_tier(jwt=jwt, user_id=user_id)
+        plan_tier = await _resolve_plan_tier(repository, jwt=jwt, user_id=user_id)
         is_premium = plan_tier in _PREMIUM_PLAN_TIERS
 
         allowed = await rate_limiter.check_and_increment(user_id, skip=is_premium)
@@ -272,13 +349,39 @@ async def remove_background(
                 detail="Daily background-removal limit reached. Upgrade to premium for unlimited use.",
             )
 
+        # SS-029: the cost budget gate runs BEFORE dispatching the
+        # BackgroundTask (CLAUDE.md: "Rate limit checks via Upstash Redis
+        # BEFORE expensive AI calls") -- a denial never queues Replicate work.
+        price_table = PriceTable(app_config_service.read(config_snapshot, AI_PRICE_TABLE_SPEC))
+        estimate = price_table.estimate(
+            provider=BG_REMOVAL_PROVIDER, model=BG_REMOVAL_MODEL, at=ist_today()
+        )
+        request_id = str(uuid.uuid4())
+        gate_decision: GateDecision = await cost_budget_gate.reserve(
+            user_id=user_id,
+            tier=plan_tier,
+            estimate_micropaise=estimate.cost_micropaise,
+            config_snapshot=config_snapshot,
+        )
+        if not gate_decision.allowed:
+            raise HTTPException(
+                status_code=429, detail=_budget_denied_detail(gate_decision.scope)
+            )
+        assert gate_decision.reservation is not None  # allowed=True always carries one
+
         image_key = f"wardrobe/{user_id}/{request.item_id}/original.jpg"
         await repository.upsert_uploaded_row(
             jwt=jwt, item_id=request.item_id, user_id=user_id, image_key=image_key
         )
 
         background_tasks.add_task(
-            service.process, jwt=jwt, user_id=user_id, item_id=request.item_id
+            service.process,
+            jwt=jwt,
+            user_id=user_id,
+            item_id=request.item_id,
+            request_id=request_id,
+            reservation=gate_decision.reservation,
+            price_table=price_table,
         )
 
         return {"status": "processing", "item_id": request.item_id}
@@ -297,6 +400,8 @@ async def tag_wardrobe_item(
     user_id: str = Depends(get_current_user_id),
     repository: IWardrobeRepository = Depends(get_wardrobe_repository),
     service: WardrobeTaggingService = Depends(get_tagging_service),
+    cost_budget_gate: CostBudgetGate = Depends(get_cost_budget_gate),
+    config_snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
 ) -> dict[str, Any]:
     jwt = _extract_bearer_token(authorization)
 
@@ -308,7 +413,33 @@ async def tag_wardrobe_item(
                 detail="Wardrobe item not found. Call /wardrobe/remove-bg first.",
             )
 
-        background_tasks.add_task(service.tag, jwt=jwt, user_id=user_id, item_id=request.item_id)
+        # SS-029: the cost budget gate runs BEFORE dispatching the
+        # BackgroundTask -- a denial never queues a Gemini call.
+        plan_tier = await _resolve_plan_tier(repository, jwt=jwt, user_id=user_id)
+        price_table = PriceTable(app_config_service.read(config_snapshot, AI_PRICE_TABLE_SPEC))
+        estimate = price_table.estimate(provider=TAG_PROVIDER, model=GEMINI_TAG_MODEL, at=ist_today())
+        request_id = str(uuid.uuid4())
+        gate_decision: GateDecision = await cost_budget_gate.reserve(
+            user_id=user_id,
+            tier=plan_tier,
+            estimate_micropaise=estimate.cost_micropaise,
+            config_snapshot=config_snapshot,
+        )
+        if not gate_decision.allowed:
+            raise HTTPException(
+                status_code=429, detail=_budget_denied_detail(gate_decision.scope)
+            )
+        assert gate_decision.reservation is not None  # allowed=True always carries one
+
+        background_tasks.add_task(
+            service.tag,
+            jwt=jwt,
+            user_id=user_id,
+            item_id=request.item_id,
+            request_id=request_id,
+            reservation=gate_decision.reservation,
+            price_table=price_table,
+        )
 
         return {"status": "processing", "item_id": request.item_id}
     except HTTPException:
