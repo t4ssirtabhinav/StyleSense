@@ -21,6 +21,7 @@ from ai.ports.interfaces import (
 )
 from main import app
 from routers.outfit_suggestions import get_styling_provider
+from services.styling_router import StylingRouter
 
 client = TestClient(app)
 
@@ -146,3 +147,46 @@ def test_mock_provider_invoked_exactly_once_after_request_completes() -> None:
     # starlette version (verified via probe -- see worklog), so this is
     # observable immediately after the request call returns.
     assert counting_adapter.call_count == 1
+
+
+def test_get_styling_provider_now_takes_di_helper_dependencies() -> None:
+    """(SS-028) get_styling_provider() is no longer the SS-006 zero-argument
+    stub that always returned MockStylingAdapter() -- it now composes a
+    StylingRouter from several Depends()-injected helpers (proven directly
+    below via the real composition path)."""
+    import inspect
+
+    from fastapi.params import Depends as DependsMarker
+
+    sig = inspect.signature(get_styling_provider)
+    assert len(sig.parameters) >= 4
+    assert all(isinstance(p.default, DependsMarker) for p in sig.parameters.values())
+
+
+async def test_real_composition_path_builds_a_styling_router_instance() -> None:
+    """Exercises get_styling_provider's real dependency chain end-to-end
+    (no override), proving the object it hands back is a StylingRouter, not
+    the pre-SS-028 MockStylingAdapter stub."""
+    from routers.outfit_suggestions import (
+        get_provider_quota_tracker,
+        get_routing_context,
+        get_routing_mix_monitor,
+        get_styling_provider_registry,
+    )
+    from services.app_config import AppConfigSnapshot
+
+    snapshot = AppConfigSnapshot(values={}, fetched_at=0.0, stale=True)
+    registry = get_styling_provider_registry()
+    quota = get_provider_quota_tracker(snapshot)
+    monitor = get_routing_mix_monitor(snapshot)
+    context = get_routing_context(user_id="user-xyz")
+
+    provider = get_styling_provider(
+        snapshot=snapshot,
+        registry=registry,
+        quota=quota,
+        monitor=monitor,
+        context=context,
+    )
+
+    assert isinstance(provider, StylingRouter)

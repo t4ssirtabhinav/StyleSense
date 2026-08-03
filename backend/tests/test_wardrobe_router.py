@@ -1008,3 +1008,42 @@ def test_delete_omits_null_keys_from_the_cleanup_call() -> None:
 
     assert response.status_code == 200
     assert deletion_service.calls[0]["keys"] == [f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg"]
+
+
+async def test_get_gemini_rate_limiter_is_now_async_and_applies_config_ceiling() -> None:
+    """(SS-028, closes BL-076) get_gemini_rate_limiter() reads
+    gemini_quota_ceiling_rpm off one AppConfigSnapshot and live-applies it
+    onto the shared singleton via set_max_requests() -- proven here against
+    a fake snapshot rather than a real Supabase read."""
+    from routers.wardrobe import _gemini_rate_limiter, get_gemini_rate_limiter
+    from services.app_config import AppConfigSnapshot
+    from services.app_config_specs import GEMINI_QUOTA_CEILING_SPEC
+
+    original_max_requests = _gemini_rate_limiter.max_requests
+    try:
+        snapshot = AppConfigSnapshot(
+            values={GEMINI_QUOTA_CEILING_SPEC.key: {"rpm": 42}}, fetched_at=0.0, stale=False
+        )
+
+        limiter = await get_gemini_rate_limiter(snapshot)
+
+        assert limiter is _gemini_rate_limiter  # the SAME shared singleton
+        assert limiter.max_requests == 42
+    finally:
+        _gemini_rate_limiter.set_max_requests(original_max_requests)
+
+
+async def test_get_gemini_rate_limiter_missing_config_falls_back_to_default() -> None:
+    from routers.wardrobe import _gemini_rate_limiter, get_gemini_rate_limiter
+    from services.app_config import AppConfigSnapshot
+
+    original_max_requests = _gemini_rate_limiter.max_requests
+    try:
+        _gemini_rate_limiter.set_max_requests(999)  # perturb it first
+        snapshot = AppConfigSnapshot(values={}, fetched_at=0.0, stale=False)
+
+        limiter = await get_gemini_rate_limiter(snapshot)
+
+        assert limiter.max_requests == 15  # coded default, per the missing-key path
+    finally:
+        _gemini_rate_limiter.set_max_requests(original_max_requests)

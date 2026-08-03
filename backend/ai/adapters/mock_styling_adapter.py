@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from ai.adapters.styling_call import is_effectively_empty as _is_effectively_empty
 from ai.ports.interfaces import (
     IStylingProvider,
     OutfitSuggestionItem,
@@ -124,17 +125,6 @@ _GENERIC_FALLBACK: list[OutfitSuggestionItem] = [
         rationale="A versatile popular pick shown while your style profile is empty.",
     ),
 ]
-
-
-def _is_effectively_empty(preferences: StylePreferencesInput) -> bool:
-    return (
-        not preferences.styles
-        and preferences.wardrobe_type is None
-        and not preferences.occasions_priority
-        and preferences.budget_range is None
-        and not preferences.favourite_colours
-        and preferences.gender is None
-    )
 
 
 def _hex_distance(a: str, b: str) -> int:

@@ -35,8 +35,10 @@ from ai.adapters.gemini_vision_adapter import MODEL as GEMINI_TAG_MODEL
 from ai.adapters.gemini_vision_adapter import GeminiVisionAdapter
 from ai.adapters.replicate_bg_removal_adapter import ReplicateBgRemovalAdapter
 from ai.ports.interfaces import IBackgroundRemovalProvider, IVisionProvider
+from dependencies.app_config import get_app_config_snapshot
 from dependencies.auth import get_current_user_id
 from services.app_config import AppConfigSnapshot, app_config_service
+from services.app_config_specs import GEMINI_QUOTA_CEILING_SPEC
 from services.circuit_breaker import CircuitBreaker
 from services.cost_budget_gate import CostBudgetGate, GateDecision
 from services.cost_config_specs import AI_PRICE_TABLE_SPEC
@@ -131,16 +133,6 @@ def get_cost_budget_gate(
     return CostBudgetGate(limiter, app_config_service)
 
 
-async def get_app_config_snapshot() -> AppConfigSnapshot:
-    """(SS-029, design edge case 16) Exactly ONE ``AppConfigSnapshot`` per
-    request -- FastAPI's own per-request ``Depends()`` result caching means
-    every route parameter depending on this returns the SAME snapshot
-    object, never re-fetched mid-request. Passed into both the
-    ``PriceTable`` construction and ``CostBudgetGate.reserve`` below, and
-    threaded into the background task unchanged."""
-    return await app_config_service.snapshot()
-
-
 def _budget_denied_detail(scope: str | None) -> str:
     if scope == "monthly":
         return "Monthly AI spending limit reached. Resets at the start of next month, or upgrade to premium for a higher ceiling."
@@ -209,7 +201,19 @@ def get_tag_cache() -> TagCache:
     return TagCache()
 
 
-def get_gemini_rate_limiter() -> GeminiRateLimiter:
+async def get_gemini_rate_limiter(
+    snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
+) -> GeminiRateLimiter:
+    """(SS-028, closes ``BL-076``) Reads ``gemini_quota_ceiling_rpm`` off
+    ONE ``AppConfigSnapshot`` per request and applies it onto the SAME
+    process-wide singleton via ``set_max_requests()`` -- the sliding-window
+    state itself (``_timestamps``) must survive across requests to mean
+    anything (see ``_gemini_rate_limiter``'s own comment above), so this
+    still returns that one shared instance, never a fresh one. Zero I/O at
+    import still holds -- the only I/O is the snapshot read the route
+    already triggers via its other dependencies."""
+    ceiling = app_config_service.read(snapshot, GEMINI_QUOTA_CEILING_SPEC)
+    _gemini_rate_limiter.set_max_requests(ceiling.rpm)
     return _gemini_rate_limiter
 
 
