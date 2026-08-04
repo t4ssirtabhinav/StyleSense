@@ -703,18 +703,24 @@ describe('logWardrobeItemWear', () => {
   });
 
   it('uses the three-column conflict target (item_id,worn_on,occasion_key)', async () => {
-    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+    mockUpsertSelect.mockResolvedValue({
+      data: [{ id: 'wear-1' }],
+      error: null,
+    });
 
     await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'office');
 
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.any(Object),
-      { onConflict: 'item_id,worn_on,occasion_key', ignoreDuplicates: true },
-    );
+    expect(mockUpsert).toHaveBeenCalledWith(expect.any(Object), {
+      onConflict: 'item_id,worn_on,occasion_key',
+      ignoreDuplicates: true,
+    });
   });
 
   it('logs a wear with a normalised occasion key', async () => {
-    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+    mockUpsertSelect.mockResolvedValue({
+      data: [{ id: 'wear-1' }],
+      error: null,
+    });
 
     await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'Wedding');
 
@@ -725,9 +731,17 @@ describe('logWardrobeItemWear', () => {
   });
 
   it('passes an unknown slug through rather than dropping it', async () => {
-    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+    mockUpsertSelect.mockResolvedValue({
+      data: [{ id: 'wear-1' }],
+      error: null,
+    });
 
-    await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'Sangeet Night');
+    await logWardrobeItemWear(
+      'item-1',
+      'user-1',
+      '2026-07-27',
+      'Sangeet Night',
+    );
 
     expect(
       (mockUpsert.mock.calls[0][0] as { occasion_key: string | null })
@@ -736,7 +750,10 @@ describe('logWardrobeItemWear', () => {
   });
 
   it('omits the occasion (null) when none is selected', async () => {
-    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+    mockUpsertSelect.mockResolvedValue({
+      data: [{ id: 'wear-1' }],
+      error: null,
+    });
 
     await logWardrobeItemWear('item-1', 'user-1', '2026-07-27');
 

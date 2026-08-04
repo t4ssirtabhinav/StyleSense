@@ -123,7 +123,9 @@ describe('WearOccasionField', () => {
   });
 
   it('renders a disabled/loading state while the taxonomy loads', async () => {
-    mockUseOccasionOptions.mockReturnValue(occasionTaxonomy({ isLoading: true }));
+    mockUseOccasionOptions.mockReturnValue(
+      occasionTaxonomy({ isLoading: true }),
+    );
 
     const { getByTestId, queryByTestId } = await render(
       <WearOccasionField value={null} onChange={jest.fn()} />,
