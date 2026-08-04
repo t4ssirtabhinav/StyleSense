@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Anthropic from "https://esm.sh/@anthropic-ai/sdk";
+import { applyBillableFilter } from "../_shared/suggestionSessions.ts";
 
 Deno.serve(async (_req: Request) => {
   const supabase = createClient(
@@ -15,6 +16,7 @@ Deno.serve(async (_req: Request) => {
   const [
     { count: newUsers },
     { count: aiSessions },
+    { count: billableAiSessions },
     { count: outfitsCreated },
     { count: socialPosts },
     { count: premiumUsers },
@@ -23,10 +25,21 @@ Deno.serve(async (_req: Request) => {
       .from("users")
       .select("*", { count: "exact", head: true })
       .gte("created_at", sevenDaysAgo),
+    // "AI outfit sessions" is an ENGAGEMENT metric, not a cost figure --
+    // deliberately left UNFILTERED (SS-033 design §7.3's documented
+    // asymmetry with cost-monitor). A second, billable-only count is added
+    // alongside it below so the reported business metric doesn't silently
+    // change.
     supabase
       .from("suggestion_sessions")
       .select("*", { count: "exact", head: true })
       .gte("created_at", sevenDaysAgo),
+    applyBillableFilter(
+      supabase
+        .from("suggestion_sessions")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", sevenDaysAgo),
+    ),
     supabase
       .from("outfits")
       .select("*", { count: "exact", head: true })
@@ -52,7 +65,7 @@ Deno.serve(async (_req: Request) => {
         content: `Write a brief weekly health report for StyleSense (India-first AI fashion app).
 Data from the past 7 days:
 - New signups: ${newUsers ?? 0}
-- AI outfit sessions: ${aiSessions ?? 0}
+- AI outfit sessions: ${aiSessions ?? 0} (${billableAiSessions ?? 0} billable)
 - Outfits created: ${outfitsCreated ?? 0}
 - OOTD social posts: ${socialPosts ?? 0}
 - Total premium users: ${premiumUsers ?? 0}
@@ -93,6 +106,7 @@ Write 3-4 sentences in a positive, founder-friendly tone. Highlight what's worki
         <table style="border-collapse:collapse;width:100%;max-width:400px">
           ${row("New signups", newUsers ?? 0)}
           ${row("AI outfit sessions", aiSessions ?? 0)}
+          ${row("of which billable", billableAiSessions ?? 0)}
           ${row("Outfits created", outfitsCreated ?? 0)}
           ${row("OOTD posts", socialPosts ?? 0)}
           ${row("Total premium users", premiumUsers ?? 0)}
@@ -105,7 +119,14 @@ Write 3-4 sentences in a positive, founder-friendly tone. Highlight what's worki
   return new Response(
     JSON.stringify({
       success: true,
-      metrics: { newUsers, aiSessions, outfitsCreated, socialPosts, premiumUsers },
+      metrics: {
+        newUsers,
+        aiSessions,
+        billableAiSessions,
+        outfitsCreated,
+        socialPosts,
+        premiumUsers,
+      },
     }),
     { headers: { "Content-Type": "application/json" } },
   );
