@@ -17,8 +17,9 @@ against an application-layer bug passing the wrong ``user_id``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal
 
 
@@ -76,6 +77,107 @@ class IAppConfigRepository(ABC):
     async def fetch_all(self) -> dict[str, Any]:
         """Return {key: raw JSONB value} for every row. No filtering, no
         parsing -- AppConfigService validates per-key, lazily, on read()."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class SuggestionSessionLog:
+    """(SS-033) One request's context. ``occasion`` is normalised again by
+    008's ``trg_suggestion_sessions_normalize_occasion`` trigger -- the
+    value read back may not be byte-identical to what was written (design
+    §6.3/§3.1). ``cost_incurred``/``zero_cost_reason`` mirror the column
+    default and its paired CHECK: alerting fails loud, never quiet."""
+
+    user_id: str
+    occasion: str | None = None
+    weather_data: dict[str, Any] | None = None
+    tier: str | None = None  # snapshot of users.plan_tier at request time
+    effort_tier: str | None = None  # 'E0'..'E4'
+    engine_version: str | None = None
+    config_snapshot_hash: str | None = None
+    candidate_count: int = 0
+    cache_key: str | None = None
+    request_id: str | None = None  # joins SS-029's ai_cost_ledger.request_id
+    latency_ms: int | None = None
+    cost_incurred: bool = True  # default matches the column default: fail loud
+    zero_cost_reason: str | None = None  # REQUIRED when cost_incurred is False
+
+
+@dataclass(frozen=True)
+class SuggestionImpressionLog:
+    """(SS-033) One scored candidate shown to a user, mapped 1:1 from a
+    ``ScoredCandidate`` (design §5.3)."""
+
+    rank: int  # 1-based; unique within a session
+    item_ids: list[str]
+    outfit_fingerprint: str  # 64-char lowercase hex, see design §5.3
+    total_score: float  # [0.0, 1.0]
+    rule_scores: list[dict[str, Any]] = field(default_factory=list)
+    gap_flags: list[str] = field(default_factory=list)
+    is_exploration: bool = False
+    strategy: str | None = None
+
+
+@dataclass(frozen=True)
+class SuggestionOutcomeLog:
+    """(SS-033) One user reaction to an impression. No ``user_id`` field --
+    it is derived server-side from the impression's owner by the
+    ``suggestion_outcome_set_user_id`` trigger, never supplied by the
+    caller (design §3.5)."""
+
+    impression_id: str
+    outcome_type: str  # one of the five AC values
+    outfit_id: str | None = None
+    dedupe_key: str | None = None
+    client_occurred_at: str | None = None  # ISO-8601; clamped by the adapter, see design §6.7
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class ISuggestionLogRepository(ABC):
+    """(SS-033) ALWAYS uses service_role -- the second port in this file to
+    do so after IAppConfigRepository, and for a different reason: these
+    tables have NO write policy for any client role at all (design §3.5),
+    because they are accounting-style data ABOUT a user rather than
+    authored BY them, and the write can outlive the caller's JWT (it
+    happens in a BackgroundTasks callback after the response was sent).
+
+    NOTHING ON THIS PORT MAY RAISE. A logging failure must never fail the
+    user's suggestion request (design §5.4). Failures are logged and
+    swallowed; write methods return None and read methods return empty.
+
+    Placement note (mirrors IAppConfigRepository/IOccasionRepository, per
+    design §2.4): this is a Postgres persistence port, not an AI provider
+    capability, so it lives in adapters/interfaces.py rather than
+    ai/ports/interfaces.py.
+    """
+
+    @abstractmethod
+    async def log_session(
+        self,
+        session: SuggestionSessionLog,
+        impressions: Sequence[SuggestionImpressionLog],
+    ) -> str | None:
+        """Write ONE session row and ALL of its impression rows, then
+        return the new session id (or None on any failure). Session and
+        impressions are one call, not two, so a caller structurally cannot
+        half-log a request. MUST NEVER RAISE."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def log_outcome(self, outcome: SuggestionOutcomeLog) -> str | None:
+        """Append one outcome row; returns its id, or None on failure or on
+        a dedupe_key conflict (an already-recorded action -- not an error).
+        MUST NEVER RAISE."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def recent_impressions(
+        self, *, user_id: str, since: datetime, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Recent impressions for anti-repetition / novelty scoring, newest
+        first. Returns [] on failure -- 'no history' degrades to 'no
+        repetition penalty', never to a failed suggestion request. MUST
+        NEVER RAISE."""
         raise NotImplementedError
 
 
@@ -297,9 +399,7 @@ class ICostLedger(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def breakdown(
-        self, *, user_id: str, since: date, until: date
-    ) -> list[dict[str, Any]]:
+    async def breakdown(self, *, user_id: str, since: date, until: date) -> list[dict[str, Any]]:
         """Reads ``ai_cost_breakdown``. May raise -- this is an
         operator/BI read path, not on any user request path."""
         raise NotImplementedError

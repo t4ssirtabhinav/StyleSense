@@ -517,9 +517,9 @@ def test_normalisation_functions_are_security_definer_with_a_pinned_search_path(
         assert name in rows, f"{name} is missing"
         secdef, config = rows[name]
         assert secdef is True, f"{name} must be SECURITY DEFINER"
-        assert config and any(
-            c.startswith("search_path=") for c in config
-        ), f"{name} must pin search_path"
+        assert config and any(c.startswith("search_path=") for c in config), (
+            f"{name} must pin search_path"
+        )
 
 
 def test_normalisation_maps_aliases_dedupes_and_keeps_unknowns(db_conn: Any) -> None:
@@ -701,3 +701,538 @@ def test_cost_per_wear_still_computes_after_the_table_rewrite(db_conn: Any) -> N
         (cost_per_wear,) = cur.fetchone()
 
     assert cost_per_wear == 250
+
+
+# ==========================================================================
+# SS-033 -- Suggestion Impression & Outcome Logging (013)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available. Every write below is rolled back by
+# the db_conn fixture, so none of them persists against the live project.
+#
+# EXPECTED_SUGGESTION_LOG_TABLES mirrors EXPECTED_OCCASION_TABLES's own
+# precedent (SS-025) rather than folding into the shared EXPECTED_TABLES
+# constant above -- that constant backs test_all_seven_tables_exist's own
+# docstring/name ("all 7 tables exist"), which two more tables would make
+# inaccurate.
+# ==========================================================================
+
+EXPECTED_SUGGESTION_LOG_TABLES = {"suggestion_impressions", "suggestion_outcomes"}
+
+EXPECTED_NEW_SUGGESTION_SESSIONS_COLUMNS = {
+    "engine_version",
+    "effort_tier",
+    "tier",
+    "config_snapshot_hash",
+    "candidate_count",
+    "request_id",
+    "latency_ms",
+    "cost_incurred",
+    "zero_cost_reason",
+}
+
+EXPECTED_NEW_SUGGESTION_SESSIONS_CHECK_CONSTRAINTS = {
+    "suggestion_sessions_effort_tier_check",
+    "suggestion_sessions_tier_shape_check",
+    "suggestion_sessions_candidate_count_check",
+    "suggestion_sessions_latency_check",
+    "suggestion_sessions_zero_cost_reason_check",
+    "suggestion_sessions_cost_marker_consistency_check",
+}
+
+# Every index 013_suggestion_impressions.sql names explicitly (design §7.4
+# says "seven" -- transcribing the migration's actual CREATE INDEX
+# statements yields this larger, exact set; asserting the real set is more
+# faithful to the AC's intent than pinning the design doc's own count).
+EXPECTED_NEW_SUGGESTION_LOG_INDEXES = {
+    "idx_suggestion_impressions_user_created",
+    "idx_suggestion_impressions_user_fingerprint",
+    "idx_suggestion_impressions_session",
+    "idx_suggestion_impressions_item_ids",
+    "uq_suggestion_outcomes_dedupe",
+    "idx_suggestion_outcomes_impression_order",
+    "idx_suggestion_outcomes_user_type_created",
+    "idx_suggestion_sessions_costed_created",
+    "idx_suggestion_sessions_created",
+    "idx_suggestion_sessions_user_created",
+}
+
+
+def _insert_user(cur: Any) -> str:
+    user_id = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO users (id, email) VALUES (%s, %s)",
+        (user_id, f"{user_id}@test.stylesense.invalid"),
+    )
+    return user_id
+
+
+def _insert_session(cur: Any, user_id: str | None) -> str:
+    session_id = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO suggestion_sessions (id, user_id) VALUES (%s, %s)",
+        (session_id, user_id),
+    )
+    return session_id
+
+
+def _insert_impression(
+    cur: Any,
+    session_id: str,
+    *,
+    rank: int = 1,
+    item_ids: list[str] | None = None,
+    fingerprint: str | None = None,
+) -> str:
+    impression_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO suggestion_impressions
+          (id, session_id, rank, item_ids, outfit_fingerprint, total_score)
+        VALUES (%s, %s, %s, %s, %s, 0.5)
+        """,
+        (
+            impression_id,
+            session_id,
+            rank,
+            item_ids or [str(uuid.uuid4())],
+            fingerprint or ("a" * 64),
+        ),
+    )
+    return impression_id
+
+
+def test_suggestion_log_tables_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = ANY(%s)
+            """,
+            (list(EXPECTED_SUGGESTION_LOG_TABLES),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_SUGGESTION_LOG_TABLES
+
+
+def test_new_suggestion_sessions_columns_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'suggestion_sessions'
+              AND column_name = ANY(%s)
+            """,
+            (list(EXPECTED_NEW_SUGGESTION_SESSIONS_COLUMNS),),
+        )
+        rows = {row[0]: row for row in cur.fetchall()}
+
+    assert set(rows) == EXPECTED_NEW_SUGGESTION_SESSIONS_COLUMNS
+    _, is_nullable, default = rows["cost_incurred"]
+    assert is_nullable == "NO"
+    assert default is not None and "true" in default.lower()
+
+
+def test_six_new_check_constraints_exist_by_name(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT conname FROM pg_constraint WHERE conname = ANY(%s)",
+            (list(EXPECTED_NEW_SUGGESTION_SESSIONS_CHECK_CONSTRAINTS),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_NEW_SUGGESTION_SESSIONS_CHECK_CONSTRAINTS
+
+
+def test_cost_marker_consistency_check_rejects_the_contradictory_pair(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        user_id = _insert_user(cur)
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO suggestion_sessions (user_id, cost_incurred, zero_cost_reason) "
+            "VALUES (%s, false, NULL)",
+            (user_id,),
+        )
+
+
+def test_deprecated_columns_carry_a_comment_starting_with_deprecated(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.attname, col_description(a.attrelid, a.attnum)
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            WHERE c.relname = 'suggestion_sessions'
+              AND a.attname IN ('suggestions', 'accepted_outfit_id')
+            """
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows.get("suggestions", "").startswith("DEPRECATED")
+    assert rows.get("accepted_outfit_id", "").startswith("DEPRECATED")
+
+
+def test_rls_enabled_on_both_new_suggestion_log_tables(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relname, c.relrowsecurity
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY(%s)
+            """,
+            (list(EXPECTED_SUGGESTION_LOG_TABLES),),
+        )
+        rls_by_table = dict(cur.fetchall())
+
+    assert set(rls_by_table) == EXPECTED_SUGGESTION_LOG_TABLES
+    disabled = [table for table, enabled in rls_by_table.items() if not enabled]
+    assert not disabled, f"RLS not enabled on: {disabled}"
+
+
+def test_only_select_policies_exist_on_the_suggestion_log_tables(db_conn: Any) -> None:
+    """Absence of a write policy IS the write-protection mechanism (design
+    §3.5). A permissive INSERT/UPDATE/DELETE policy appearing here is a
+    regression, not a fix."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, cmd FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = ANY(%s)",
+            (list(EXPECTED_SUGGESTION_LOG_TABLES),),
+        )
+        policies = {(table, cmd) for table, cmd in cur.fetchall()}
+
+    assert policies == {
+        ("suggestion_impressions", "SELECT"),
+        ("suggestion_outcomes", "SELECT"),
+    }
+
+
+def test_suggestion_sessions_policy_is_narrowed_to_read_only(db_conn: Any) -> None:
+    """The one non-additive statement in 013 actually landed: the shipped
+    FOR ALL user_owns_sessions policy is gone, replaced by a SELECT-only
+    one (design §3.5)."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT policyname, cmd FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = 'suggestion_sessions'"
+        )
+        policies = dict(cur.fetchall())
+
+    assert policies == {"user_reads_own_sessions": "SELECT"}
+    assert "user_owns_sessions" not in policies
+
+
+def test_new_suggestion_log_indexes_exist_and_the_costed_one_is_partial(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexname, indexdef FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = ANY(%s)
+            """,
+            (list(EXPECTED_NEW_SUGGESTION_LOG_INDEXES),),
+        )
+        rows = dict(cur.fetchall())
+
+    assert set(rows) == EXPECTED_NEW_SUGGESTION_LOG_INDEXES
+    assert "where" in rows["idx_suggestion_sessions_costed_created"].lower()
+
+
+def test_user_id_derivation_triggers_are_registered(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tgname FROM pg_trigger WHERE tgname = ANY(%s)",
+            (
+                [
+                    "trg_suggestion_impressions_set_user_id",
+                    "trg_suggestion_outcomes_set_user_id",
+                ],
+            ),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == {
+        "trg_suggestion_impressions_set_user_id",
+        "trg_suggestion_outcomes_set_user_id",
+    }
+
+
+def test_impression_trigger_overrides_a_deliberately_wrong_user_id(db_conn: Any) -> None:
+    """THE leak guard -- the most important assertion in this module (design
+    §7.4). A wrong user_id sent by the writer must be structurally
+    impossible to persist; the BEFORE INSERT trigger must overwrite it with
+    the session's real owner before the row is ever written."""
+    with db_conn.cursor() as cur:
+        real_owner = _insert_user(cur)
+        session_id = _insert_session(cur, real_owner)
+        wrong_user_id = str(uuid.uuid4())
+
+        cur.execute(
+            """
+            INSERT INTO suggestion_impressions
+              (session_id, user_id, rank, item_ids, outfit_fingerprint, total_score)
+            VALUES (%s, %s, 1, %s, %s, 0.5)
+            RETURNING user_id
+            """,
+            (session_id, wrong_user_id, [str(uuid.uuid4())], "a" * 64),
+        )
+        (stored_user_id,) = cur.fetchone()
+
+    assert stored_user_id == real_owner
+    assert stored_user_id != wrong_user_id
+
+
+def test_outcome_trigger_derives_user_id_from_the_impression_owner(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        real_owner = _insert_user(cur)
+        session_id = _insert_session(cur, real_owner)
+        impression_id = _insert_impression(cur, session_id)
+        wrong_user_id = str(uuid.uuid4())
+
+        cur.execute(
+            """
+            INSERT INTO suggestion_outcomes (impression_id, user_id, outcome_type)
+            VALUES (%s, %s, 'saved')
+            RETURNING user_id
+            """,
+            (impression_id, wrong_user_id),
+        )
+        (stored_user_id,) = cur.fetchone()
+
+    assert stored_user_id == real_owner
+    assert stored_user_id != wrong_user_id
+
+
+def test_impression_insert_for_a_session_with_a_null_user_id_raises(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        session_id = str(uuid.uuid4())
+        cur.execute(
+            "INSERT INTO suggestion_sessions (id, user_id) VALUES (%s, NULL)", (session_id,)
+        )
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.RaiseException):
+        cur.execute(
+            """
+            INSERT INTO suggestion_impressions
+              (session_id, rank, item_ids, outfit_fingerprint, total_score)
+            VALUES (%s, 1, %s, %s, 0.5)
+            """,
+            (session_id, [str(uuid.uuid4())], "a" * 64),
+        )
+
+
+def test_suggestion_log_retention_days_defaults_to_180_with_no_config_row(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM app_config WHERE key = 'suggestion_log_retention_days'")
+        cur.execute("SELECT public.suggestion_log_retention_days()")
+        (days,) = cur.fetchone()
+
+    assert days == 180
+
+
+def test_suggestion_log_retention_days_clamps_out_of_range_values(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE app_config SET value = '{\"days\": 5}'::jsonb "
+            "WHERE key = 'suggestion_log_retention_days'"
+        )
+        cur.execute("SELECT public.suggestion_log_retention_days()")
+        (low,) = cur.fetchone()
+
+        cur.execute(
+            "UPDATE app_config SET value = '{\"days\": 5000}'::jsonb "
+            "WHERE key = 'suggestion_log_retention_days'"
+        )
+        cur.execute("SELECT public.suggestion_log_retention_days()")
+        (high,) = cur.fetchone()
+
+    assert low == 30
+    assert high == 730
+
+
+def test_suggestion_log_retention_days_degrades_to_180_on_a_malformed_value(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            'UPDATE app_config SET value = \'{"days": "not-a-number"}\'::jsonb '
+            "WHERE key = 'suggestion_log_retention_days'"
+        )
+        cur.execute("SELECT public.suggestion_log_retention_days()")
+        (days,) = cur.fetchone()
+
+    assert days == 180
+
+
+def test_purge_suggestion_logs_deletes_expired_sessions_and_cascades_as_a_unit(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE app_config SET value = '{\"days\": 30}'::jsonb "
+            "WHERE key = 'suggestion_log_retention_days'"
+        )
+
+        old_owner = _insert_user(cur)
+        old_session_id = str(uuid.uuid4())
+        cur.execute(
+            "INSERT INTO suggestion_sessions (id, user_id, created_at) "
+            "VALUES (%s, %s, now() - interval '40 days')",
+            (old_session_id, old_owner),
+        )
+        old_impression_id = _insert_impression(cur, old_session_id)
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type) "
+            "VALUES (%s, 'saved') RETURNING id",
+            (old_impression_id,),
+        )
+        (old_outcome_id,) = cur.fetchone()
+
+        recent_owner = _insert_user(cur)
+        recent_session_id = _insert_session(cur, recent_owner)
+
+        cur.execute("SELECT sessions_deleted FROM purge_suggestion_logs()")
+        (sessions_deleted,) = cur.fetchone()
+
+        cur.execute("SELECT id FROM suggestion_sessions WHERE id = %s", (old_session_id,))
+        old_session_gone = cur.fetchone() is None
+        cur.execute("SELECT id FROM suggestion_impressions WHERE id = %s", (old_impression_id,))
+        old_impression_gone = cur.fetchone() is None
+        cur.execute("SELECT id FROM suggestion_outcomes WHERE id = %s", (old_outcome_id,))
+        old_outcome_gone = cur.fetchone() is None
+        cur.execute("SELECT id FROM suggestion_sessions WHERE id = %s", (recent_session_id,))
+        recent_session_survives = cur.fetchone() is not None
+
+    assert sessions_deleted >= 1
+    assert old_session_gone, "expired session should have been purged"
+    assert old_impression_gone, "cascade should have removed the expired session's impression"
+    assert old_outcome_gone, "cascade should have removed the expired impression's outcome"
+    assert recent_session_survives, "an in-window session must not be touched by the purge"
+
+
+def test_array_length_check_rejects_an_empty_item_ids_array(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO suggestion_impressions
+              (session_id, rank, item_ids, outfit_fingerprint, total_score)
+            VALUES (%s, 1, %s, %s, 0.5)
+            """,
+            (session_id, [], "a" * 64),
+        )
+
+
+def test_outfit_fingerprint_check_rejects_the_wrong_shape(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO suggestion_impressions
+              (session_id, rank, item_ids, outfit_fingerprint, total_score)
+            VALUES (%s, 1, %s, 'NOT-A-VALID-HASH', 0.5)
+            """,
+            (session_id, [str(uuid.uuid4())]),
+        )
+
+
+def test_unique_session_rank_constraint_rejects_a_duplicate_rank(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+        _insert_impression(cur, session_id, rank=1)
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.UniqueViolation):
+        _insert_impression(cur, session_id, rank=1)
+
+
+def test_dedupe_partial_unique_index_rejects_a_duplicate_key(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+        impression_id = _insert_impression(cur, session_id)
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type, dedupe_key) "
+            "VALUES (%s, 'saved', 'retry-key-1')",
+            (impression_id,),
+        )
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.UniqueViolation):
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type, dedupe_key) "
+            "VALUES (%s, 'saved', 'retry-key-1')",
+            (impression_id,),
+        )
+
+
+def test_dedupe_partial_unique_index_permits_two_null_dedupe_keys(db_conn: Any) -> None:
+    """NULL is unconstrained -- the AC's own 'dismisses then later saves the
+    same outfit' case must not be blocked (design §3.4)."""
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+        impression_id = _insert_impression(cur, session_id)
+
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type) VALUES (%s, 'dismissed')",
+            (impression_id,),
+        )
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type) VALUES (%s, 'saved')",
+            (impression_id,),
+        )
+        cur.execute(
+            "SELECT count(*) FROM suggestion_outcomes WHERE impression_id = %s", (impression_id,)
+        )
+        (count,) = cur.fetchone()
+
+    assert count == 2
+
+
+def test_deleting_a_wardrobe_item_leaves_its_impressions_intact(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+        item_id = str(uuid.uuid4())
+        cur.execute(
+            "INSERT INTO wardrobe_items (id, user_id, image_url, category) "
+            "VALUES (%s, %s, %s, 'western_top')",
+            (item_id, owner, f"https://example.com/{uuid.uuid4()}.jpg"),
+        )
+        impression_id = _insert_impression(cur, session_id, item_ids=[item_id])
+
+        cur.execute("DELETE FROM wardrobe_items WHERE id = %s", (item_id,))
+
+        cur.execute("SELECT item_ids FROM suggestion_impressions WHERE id = %s", (impression_id,))
+        (item_ids,) = cur.fetchone()
+
+    assert item_ids == [item_id], "a deleted wardrobe item must not erase impression history"
+
+
+def test_deleting_an_outfit_nulls_the_outcome_outfit_id_and_keeps_the_row(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        session_id = _insert_session(cur, owner)
+        impression_id = _insert_impression(cur, session_id)
+        outfit_id = str(uuid.uuid4())
+        cur.execute("INSERT INTO outfits (id, user_id) VALUES (%s, %s)", (outfit_id, owner))
+        cur.execute(
+            "INSERT INTO suggestion_outcomes (impression_id, outcome_type, outfit_id) "
+            "VALUES (%s, 'saved', %s) RETURNING id",
+            (impression_id, outfit_id),
+        )
+        (outcome_id,) = cur.fetchone()
+
+        cur.execute("DELETE FROM outfits WHERE id = %s", (outfit_id,))
+
+        cur.execute("SELECT outfit_id FROM suggestion_outcomes WHERE id = %s", (outcome_id,))
+        (stored_outfit_id,) = cur.fetchone()
+
+    assert stored_outfit_id is None, "the saved fact must survive even if the outfit is deleted"
