@@ -1,0 +1,115 @@
+"""SS-034 -- proves "nothing reads the garment types registry yet" rather
+than merely claiming it (design §6.2).
+
+Unlike test_db_schema.py's SS-034 additions, this module needs no live
+Postgres connection -- it is a pure filesystem/text-search test and must
+run in every CI invocation. Do NOT gate it behind SUPABASE_DB_URL.
+
+Scoped narrowly to the registry's own identifiers (table/function names),
+deliberately NOT a generic word search -- "kurta", "saree", etc. already
+appear legitimately as existing `wardrobe_category` ENUM values in shipped
+code and would be false positives (design §6.2).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+# The exact set of objects 014_garment_types_registry.sql creates. Kept
+# here as the single source of truth this module tests against, and
+# cross-checked against the migration file itself below so a future rename
+# fails THIS test loudly instead of the grep silently checking a stale name
+# forever (design §6.2, test_identifier_list_matches_the_migration_file).
+GARMENT_REGISTRY_IDENTIFIERS = frozenset(
+    {
+        "garment_types",
+        "garment_type_aliases",
+        "garment_unknown_types",
+        "garment_set_components",
+        "garment_normalize_one",
+        "garment_normalize_shape",
+        "garment_is_known",
+        "garment_log_unknown",
+    }
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_DIR = REPO_ROOT / "backend"
+MOBILE_DIR = REPO_ROOT / "mobile"
+MIGRATION_FILE = REPO_ROOT / "supabase" / "migrations" / "014_garment_types_registry.sql"
+
+
+def _iter_source_files(root: Path, suffixes: tuple[str, ...], excluded_dirs: tuple[str, ...]) -> list[Path]:
+    excluded = {root / d for d in excluded_dirs}
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix not in suffixes:
+            continue
+        if any(excluded_dir in path.parents or path == excluded_dir for excluded_dir in excluded):
+            continue
+        files.append(path)
+    return files
+
+
+def test_no_backend_source_references_garment_registry_identifiers() -> None:
+    assert BACKEND_DIR.is_dir(), f"expected backend/ at {BACKEND_DIR}"
+
+    offenders: list[str] = []
+    for path in _iter_source_files(
+        BACKEND_DIR,
+        suffixes=(".py",),
+        excluded_dirs=("tests", "scripts"),
+    ):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for identifier in GARMENT_REGISTRY_IDENTIFIERS:
+            if identifier in text:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {identifier}")
+
+    assert not offenders, (
+        "garment registry identifiers must not appear in any backend/ source file "
+        f"outside tests/ or scripts/ yet (SS-034 is additive-only, zero consumers): {offenders}"
+    )
+
+
+def test_no_mobile_source_references_garment_registry_identifiers() -> None:
+    if not MOBILE_DIR.is_dir():
+        # Defensive: this repo always ships mobile/, but do not hard-fail the
+        # whole suite over a checkout-shape assumption in an unrelated area.
+        return
+
+    offenders: list[str] = []
+    for path in _iter_source_files(
+        MOBILE_DIR,
+        suffixes=(".ts", ".tsx"),
+        excluded_dirs=("__tests__",),
+    ):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for identifier in GARMENT_REGISTRY_IDENTIFIERS:
+            if identifier in text:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {identifier}")
+
+    assert not offenders, (
+        "garment registry identifiers must not appear in any mobile/ source file "
+        f"outside __tests__/ yet (SS-034 is additive-only, zero consumers): {offenders}"
+    )
+
+
+def test_identifier_list_matches_the_migration_file() -> None:
+    """Sanity check the other way: every CREATE TABLE/CREATE FUNCTION name
+    in 014_garment_types_registry.sql must be in GARMENT_REGISTRY_IDENTIFIERS
+    above, so a future rename of one of these objects fails this test loudly
+    instead of the grep above silently checking a stale name forever."""
+    assert MIGRATION_FILE.is_file(), f"expected migration file at {MIGRATION_FILE}"
+    sql = MIGRATION_FILE.read_text(encoding="utf-8")
+
+    table_names = set(re.findall(r"CREATE TABLE (\w+)", sql))
+    function_names = set(re.findall(r"CREATE OR REPLACE FUNCTION public\.(\w+)\(", sql))
+
+    found_identifiers = table_names | function_names
+
+    assert found_identifiers, "no CREATE TABLE/CREATE FUNCTION statements found in the migration"
+    assert found_identifiers == set(GARMENT_REGISTRY_IDENTIFIERS), (
+        "the migration file's actual object names diverged from this test's identifier "
+        f"list -- found {found_identifiers}, expected {set(GARMENT_REGISTRY_IDENTIFIERS)}"
+    )
