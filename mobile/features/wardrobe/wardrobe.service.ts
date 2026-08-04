@@ -3,7 +3,10 @@ import { SaveFormat, manipulateAsync } from 'expo-image-manipulator';
 import { EXPO_PUBLIC_BACKEND_URL } from '../../constants/api';
 import { readCachedTaxonomies } from '../../lib/storage';
 import { supabase } from '../../lib/supabase';
-import { normalizeOccasionTags } from '../onboarding/onboarding.occasions';
+import {
+  normalizeOccasionTags,
+  resolveOccasionKey,
+} from '../onboarding/onboarding.occasions';
 import {
   COMPRESS_QUALITY_FLOOR,
   COMPRESS_QUALITY_START,
@@ -402,22 +405,55 @@ export async function fetchWardrobeItemWears(
   return data ?? [];
 }
 
-// One row per item per day (DB UNIQUE (item_id, worn_on), see the
-// migration) -- ON CONFLICT DO NOTHING makes a repeat "Mark Worn" tap for
-// today idempotent rather than erroring. `.select()` after the upsert makes
+// SS-035 -- the application-layer half of the new BL-078 write boundary
+// (boundary 7). Reuses the same shipped helper normalizeOccasionTagsForWrite
+// already wraps for occasion_tags, rather than a new one. A null input stays
+// null (no occasion selected); a non-null input is shape-normalised +
+// alias-resolved against the last-known-good registry snapshot, and an
+// empty/all-punctuation result degrades to null. A slug the cached snapshot
+// does not know is passed through unchanged (shape-normalised) -- the DB's
+// trg_wardrobe_item_wears_normalize_occasion_key trigger resolves or
+// captures it. Never dropped, never a failed write (SS-025 §6.4's contract,
+// applied here).
+async function normalizeWearOccasionKey(
+  occasionKey: string | null,
+): Promise<string | null> {
+  if (occasionKey === null) {
+    return null;
+  }
+  const cached = await readCachedTaxonomies();
+  const resolved = resolveOccasionKey(occasionKey, cached?.payload);
+  return resolved || null;
+}
+
+// One row per item per day per occasion (DB UNIQUE NULLS NOT DISTINCT
+// (item_id, worn_on, occasion_key), see 015_wear_occasion_awareness.sql) --
+// ON CONFLICT DO NOTHING makes a repeat "Mark Worn" tap for today/occasion
+// idempotent rather than erroring. `.select()` after the upsert makes
 // PostgREST return only the rows it actually inserted (empty when the
 // conflict was ignored), so the caller can tell "logged" from
 // "already logged today" (design doc's Edge Cases) without a second query.
+//
+// occasionKey defaults to null so every existing call site (ItemDetailSheet's
+// one-tap Mark Worn) keeps compiling and behaving identically -- writing
+// NULL is a valid state, not a validation error (SS-035 design §5.1).
 export async function logWardrobeItemWear(
   itemId: string,
   userId: string,
   wornOn: string,
+  occasionKey: string | null = null,
 ): Promise<{ alreadyLogged: boolean }> {
+  const normalizedOccasionKey = await normalizeWearOccasionKey(occasionKey);
   const { data, error } = await supabase
     .from('wardrobe_item_wears')
     .upsert(
-      { item_id: itemId, user_id: userId, worn_on: wornOn },
-      { onConflict: 'item_id,worn_on', ignoreDuplicates: true },
+      {
+        item_id: itemId,
+        user_id: userId,
+        worn_on: wornOn,
+        occasion_key: normalizedOccasionKey,
+      },
+      { onConflict: 'item_id,worn_on,occasion_key', ignoreDuplicates: true },
     )
     .select();
   if (error) {
@@ -426,13 +462,19 @@ export async function logWardrobeItemWear(
   return { alreadyLogged: (data ?? []).length === 0 };
 }
 
+// occasionKey has NO default (unlike logWardrobeItemWear's one-tap-friendly
+// default) -- the edit card always has a current occasion value (possibly
+// null) in hand, and defaulting here would risk silently clearing an
+// existing occasion on a caller that forgot to pass it.
 export async function updateWardrobeItemWear(
   wearId: string,
   wornOn: string,
+  occasionKey: string | null,
 ): Promise<void> {
+  const normalizedOccasionKey = await normalizeWearOccasionKey(occasionKey);
   const { error } = await supabase
     .from('wardrobe_item_wears')
-    .update({ worn_on: wornOn })
+    .update({ worn_on: wornOn, occasion_key: normalizedOccasionKey })
     .eq('id', wearId);
   if (error) {
     throw error;

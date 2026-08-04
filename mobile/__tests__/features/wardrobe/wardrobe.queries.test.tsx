@@ -737,15 +737,20 @@ describe('useLogWardrobeItemWear', () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // SS-035: an omitted occasionKey behaves exactly like the pre-SS-035
+    // signature -- the mutation defaults it to null (BL-121's one-tap
+    // default), never leaving it undefined on the wire.
     expect(wardrobeService.logWardrobeItemWear).toHaveBeenCalledWith(
       'item-1',
       'user-1',
       '2026-07-27',
+      null,
     );
     expect(result.current.data).toEqual({
       wearCount: 5,
       costPerWear: 200,
       wornOn: '2026-07-27',
+      occasionKey: null,
       alreadyLogged: false,
     });
   });
@@ -799,12 +804,14 @@ describe('useUpdateWardrobeItemWear / useDeleteWardrobeItemWear', () => {
       wearId: 'wear-1',
       itemId: 'item-1',
       wornOn: '2026-07-20',
+      occasionKey: 'office',
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(wardrobeService.updateWardrobeItemWear).toHaveBeenCalledWith(
       'wear-1',
       '2026-07-20',
+      'office',
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: wardrobeItemWearsQueryKey('item-1'),

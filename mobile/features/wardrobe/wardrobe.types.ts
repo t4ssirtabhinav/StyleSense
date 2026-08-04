@@ -283,5 +283,7 @@ export interface LogWearResult {
   wearCount: number;
   costPerWear: number | null;
   wornOn: string;
+  /** SS-035. null = no occasion selected (the one-tap "Mark Worn" default). */
+  occasionKey: string | null;
   alreadyLogged: boolean;
 }

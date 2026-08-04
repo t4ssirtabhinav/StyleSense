@@ -458,6 +458,11 @@ export interface LogWardrobeItemWearInput {
   itemId: string;
   userId: string;
   wornOn: string;
+  /** SS-035. Optional -- omitted/undefined behaves exactly like the
+   * pre-SS-035 signature (writes null), so ItemDetailSheet's one-tap Mark
+   * Worn call site keeps compiling and behaving identically (BL-121: that
+   * one-tap default staying null is intentional, not a gap to close here). */
+  occasionKey?: string | null;
 }
 
 // Inserts the wear, then reads back the trigger-recomputed wear_count/
@@ -468,17 +473,19 @@ export function useLogWardrobeItemWear() {
   const invalidateGridQueries = useInvalidateWardrobeGridQueries();
 
   return useMutation<LogWearResult, Error, LogWardrobeItemWearInput>({
-    mutationFn: async ({ itemId, userId, wornOn }) => {
+    mutationFn: async ({ itemId, userId, wornOn, occasionKey }) => {
       const { alreadyLogged } = await logWardrobeItemWear(
         itemId,
         userId,
         wornOn,
+        occasionKey ?? null,
       );
       const stats = await fetchWardrobeItemWearStats(itemId);
       return {
         wearCount: stats.wearCount,
         costPerWear: stats.costPerWear,
         wornOn,
+        occasionKey: occasionKey ?? null,
         alreadyLogged,
       };
     },
@@ -495,6 +502,7 @@ export interface UpdateWardrobeItemWearInput {
   wearId: string;
   itemId: string;
   wornOn: string;
+  occasionKey: string | null;
 }
 
 export function useUpdateWardrobeItemWear() {
@@ -502,7 +510,8 @@ export function useUpdateWardrobeItemWear() {
   const invalidateGridQueries = useInvalidateWardrobeGridQueries();
 
   return useMutation<void, Error, UpdateWardrobeItemWearInput>({
-    mutationFn: ({ wearId, wornOn }) => updateWardrobeItemWear(wearId, wornOn),
+    mutationFn: ({ wearId, wornOn, occasionKey }) =>
+      updateWardrobeItemWear(wearId, wornOn, occasionKey),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({
         queryKey: wardrobeItemWearsQueryKey(variables.itemId),

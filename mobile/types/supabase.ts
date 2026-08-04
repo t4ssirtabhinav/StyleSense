@@ -39,6 +39,104 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_cost_ledger: {
+        Row: {
+          attempt: number
+          cache_hit: boolean
+          cost_micropaise: number
+          cost_paise: number | null
+          created_at: string
+          feature: string
+          id: string
+          latency_ms: number | null
+          model: string
+          outcome: string
+          price_effective_from: string | null
+          pricing_status: string
+          provider: string
+          request_id: string
+          tokens_in: number | null
+          tokens_out: number | null
+          unit_price_snapshot: Json
+          user_id: string
+        }
+        Insert: {
+          attempt?: number
+          cache_hit?: boolean
+          cost_micropaise?: number
+          cost_paise?: number | null
+          created_at?: string
+          feature: string
+          id?: string
+          latency_ms?: number | null
+          model: string
+          outcome?: string
+          price_effective_from?: string | null
+          pricing_status?: string
+          provider: string
+          request_id: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          unit_price_snapshot?: Json
+          user_id: string
+        }
+        Update: {
+          attempt?: number
+          cache_hit?: boolean
+          cost_micropaise?: number
+          cost_paise?: number | null
+          created_at?: string
+          feature?: string
+          id?: string
+          latency_ms?: number | null
+          model?: string
+          outcome?: string
+          price_effective_from?: string | null
+          pricing_status?: string
+          provider?: string
+          request_id?: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          unit_price_snapshot?: Json
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_cost_ledger_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      app_config: {
+        Row: {
+          description: string
+          key: string
+          scope: string
+          updated_at: string
+          updated_by: string | null
+          value: Json
+        }
+        Insert: {
+          description: string
+          key: string
+          scope?: string
+          updated_at?: string
+          updated_by?: string | null
+          value: Json
+        }
+        Update: {
+          description?: string
+          key?: string
+          scope?: string
+          updated_at?: string
+          updated_by?: string | null
+          value?: Json
+        }
+        Relationships: []
+      }
       colour_palette: {
         Row: {
           active: boolean
@@ -60,6 +158,172 @@ export type Database = {
           key?: string
           label?: string
           sort_order?: number
+        }
+        Relationships: []
+      }
+      garment_set_components: {
+        Row: {
+          component_key: string
+          is_required: boolean
+          role: string
+          set_key: string
+          sort_order: number
+        }
+        Insert: {
+          component_key: string
+          is_required?: boolean
+          role: string
+          set_key: string
+          sort_order?: number
+        }
+        Update: {
+          component_key?: string
+          is_required?: boolean
+          role?: string
+          set_key?: string
+          sort_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "garment_set_components_component_key_fkey"
+            columns: ["component_key"]
+            isOneToOne: false
+            referencedRelation: "garment_types"
+            referencedColumns: ["key"]
+          },
+          {
+            foreignKeyName: "garment_set_components_set_key_fkey"
+            columns: ["set_key"]
+            isOneToOne: false
+            referencedRelation: "garment_types"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      garment_type_aliases: {
+        Row: {
+          alias: string
+          created_at: string
+          garment_key: string
+        }
+        Insert: {
+          alias: string
+          created_at?: string
+          garment_key: string
+        }
+        Update: {
+          alias?: string
+          created_at?: string
+          garment_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "garment_type_aliases_garment_key_fkey"
+            columns: ["garment_key"]
+            isOneToOne: false
+            referencedRelation: "garment_types"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      garment_types: {
+        Row: {
+          base_formality: number
+          coverage: Json
+          created_at: string
+          culture_scope: string[] | null
+          excludes_with: string[] | null
+          gender_affinity: string[] | null
+          is_active: boolean
+          key: string
+          label: string
+          labels_i18n: Json
+          layer: number
+          pairs_with: string[] | null
+          parent_key: string | null
+          region_scope: string[] | null
+          register: string[]
+          requires_with: string[] | null
+          slot: string
+          sort_order: number
+          styling_rules: Json
+        }
+        Insert: {
+          base_formality: number
+          coverage?: Json
+          created_at?: string
+          culture_scope?: string[] | null
+          excludes_with?: string[] | null
+          gender_affinity?: string[] | null
+          is_active?: boolean
+          key: string
+          label: string
+          labels_i18n?: Json
+          layer: number
+          pairs_with?: string[] | null
+          parent_key?: string | null
+          region_scope?: string[] | null
+          register: string[]
+          requires_with?: string[] | null
+          slot: string
+          sort_order?: number
+          styling_rules?: Json
+        }
+        Update: {
+          base_formality?: number
+          coverage?: Json
+          created_at?: string
+          culture_scope?: string[] | null
+          excludes_with?: string[] | null
+          gender_affinity?: string[] | null
+          is_active?: boolean
+          key?: string
+          label?: string
+          labels_i18n?: Json
+          layer?: number
+          pairs_with?: string[] | null
+          parent_key?: string | null
+          region_scope?: string[] | null
+          register?: string[]
+          requires_with?: string[] | null
+          slot?: string
+          sort_order?: number
+          styling_rules?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "garment_types_parent_key_fkey"
+            columns: ["parent_key"]
+            isOneToOne: false
+            referencedRelation: "garment_types"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      garment_unknown_types: {
+        Row: {
+          first_seen_at: string
+          last_seen_at: string
+          occurrences: number
+          sample_source: string | null
+          sample_user_id: string | null
+          slug: string
+        }
+        Insert: {
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug: string
+        }
+        Update: {
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug?: string
         }
         Relationships: []
       }
@@ -362,36 +626,181 @@ export type Database = {
         }
         Relationships: []
       }
+      suggestion_impressions: {
+        Row: {
+          created_at: string
+          gap_flags: string[]
+          id: string
+          is_exploration: boolean
+          item_ids: string[]
+          outfit_fingerprint: string
+          rank: number
+          rule_scores: Json
+          session_id: string
+          strategy: string | null
+          total_score: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          gap_flags?: string[]
+          id?: string
+          is_exploration?: boolean
+          item_ids: string[]
+          outfit_fingerprint: string
+          rank: number
+          rule_scores?: Json
+          session_id: string
+          strategy?: string | null
+          total_score: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          gap_flags?: string[]
+          id?: string
+          is_exploration?: boolean
+          item_ids?: string[]
+          outfit_fingerprint?: string
+          rank?: number
+          rule_scores?: Json
+          session_id?: string
+          strategy?: string | null
+          total_score?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "suggestion_impressions_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "suggestion_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "suggestion_impressions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      suggestion_outcomes: {
+        Row: {
+          client_occurred_at: string | null
+          created_at: string
+          dedupe_key: string | null
+          id: string
+          impression_id: string
+          metadata: Json
+          outcome_type: string
+          outfit_id: string | null
+          user_id: string
+        }
+        Insert: {
+          client_occurred_at?: string | null
+          created_at?: string
+          dedupe_key?: string | null
+          id?: string
+          impression_id: string
+          metadata?: Json
+          outcome_type: string
+          outfit_id?: string | null
+          user_id: string
+        }
+        Update: {
+          client_occurred_at?: string | null
+          created_at?: string
+          dedupe_key?: string | null
+          id?: string
+          impression_id?: string
+          metadata?: Json
+          outcome_type?: string
+          outfit_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "suggestion_outcomes_impression_id_fkey"
+            columns: ["impression_id"]
+            isOneToOne: false
+            referencedRelation: "suggestion_impressions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "suggestion_outcomes_outfit_id_fkey"
+            columns: ["outfit_id"]
+            isOneToOne: false
+            referencedRelation: "outfits"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "suggestion_outcomes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       suggestion_sessions: {
         Row: {
           accepted_outfit_id: string | null
           cache_key: string | null
+          candidate_count: number | null
+          config_snapshot_hash: string | null
+          cost_incurred: boolean
           created_at: string | null
+          effort_tier: string | null
+          engine_version: string | null
           id: string
+          latency_ms: number | null
           occasion: string | null
+          request_id: string | null
           suggestions: Json | null
+          tier: string | null
           user_id: string | null
           weather_data: Json | null
+          zero_cost_reason: string | null
         }
         Insert: {
           accepted_outfit_id?: string | null
           cache_key?: string | null
+          candidate_count?: number | null
+          config_snapshot_hash?: string | null
+          cost_incurred?: boolean
           created_at?: string | null
+          effort_tier?: string | null
+          engine_version?: string | null
           id?: string
+          latency_ms?: number | null
           occasion?: string | null
+          request_id?: string | null
           suggestions?: Json | null
+          tier?: string | null
           user_id?: string | null
           weather_data?: Json | null
+          zero_cost_reason?: string | null
         }
         Update: {
           accepted_outfit_id?: string | null
           cache_key?: string | null
+          candidate_count?: number | null
+          config_snapshot_hash?: string | null
+          cost_incurred?: boolean
           created_at?: string | null
+          effort_tier?: string | null
+          engine_version?: string | null
           id?: string
+          latency_ms?: number | null
           occasion?: string | null
+          request_id?: string | null
           suggestions?: Json | null
+          tier?: string | null
           user_id?: string | null
           weather_data?: Json | null
+          zero_cost_reason?: string | null
         }
         Relationships: [
           {
@@ -510,6 +919,8 @@ export type Database = {
           created_at: string
           id: string
           item_id: string
+          occasion_key: string | null
+          outfit_id: string | null
           user_id: string
           worn_on: string
         }
@@ -517,6 +928,8 @@ export type Database = {
           created_at?: string
           id?: string
           item_id: string
+          occasion_key?: string | null
+          outfit_id?: string | null
           user_id: string
           worn_on: string
         }
@@ -524,6 +937,8 @@ export type Database = {
           created_at?: string
           id?: string
           item_id?: string
+          occasion_key?: string | null
+          outfit_id?: string | null
           user_id?: string
           worn_on?: string
         }
@@ -533,6 +948,13 @@ export type Database = {
             columns: ["item_id", "user_id"]
             isOneToOne: false
             referencedRelation: "wardrobe_items"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "wardrobe_item_wears_outfit_fk"
+            columns: ["outfit_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "outfits"
             referencedColumns: ["id", "user_id"]
           },
         ]
@@ -628,9 +1050,38 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      ai_cost_breakdown: {
+        Row: {
+          cache_hits: number | null
+          call_count: number | null
+          cost_micropaise: number | null
+          cost_paise: number | null
+          feature: string | null
+          ist_date: string | null
+          model: string | null
+          provider: string | null
+          unpriced_calls: number | null
+          user_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_cost_ledger_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      garment_is_known: { Args: { p_slug: string }; Returns: boolean }
+      garment_log_unknown: {
+        Args: { p_slug: string; p_src: string; p_uid: string }
+        Returns: undefined
+      }
+      garment_normalize_one: { Args: { p_raw: string }; Returns: string }
+      garment_normalize_shape: { Args: { p_raw: string }; Returns: string }
       occasion_is_known: { Args: { p_slug: string }; Returns: boolean }
       occasion_log_unknown: {
         Args: { p_slug: string; p_src: string; p_uid: string }
@@ -642,9 +1093,27 @@ export type Database = {
       }
       occasion_normalize_one: { Args: { p_raw: string }; Returns: string }
       occasion_normalize_shape: { Args: { p_raw: string }; Returns: string }
+      purge_suggestion_logs: {
+        Args: { p_batch_size?: number; p_max_batches?: number }
+        Returns: {
+          cutoff: string
+          retention_days: number
+          sessions_deleted: number
+        }[]
+      }
+      suggestion_log_retention_days: { Args: never; Returns: number }
       sync_wardrobe_item_wear_stats: {
         Args: { target_item_id: string }
         Returns: undefined
+      }
+      wear_recency: {
+        Args: { p_occasion_key?: string; p_user_id: string }
+        Returns: {
+          item_id: string
+          last_worn_on: string
+          last_worn_on_for_occasion: string
+          wears_for_occasion: number
+        }[]
       }
     }
     Enums: {

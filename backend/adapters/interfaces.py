@@ -181,6 +181,56 @@ class ISuggestionLogRepository(ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class WearRecency:
+    """(SS-035) One item's occasion-scoped wear recency, mapped 1:1 from a
+    ``public.wear_recency()`` row. ``last_worn_on_for_occasion`` is ``None``
+    when the item has never been worn for the queried occasion -- SQL's own
+    three-valued logic (``occasion_key = p_occasion_key`` is never true when
+    either side is ``NULL``) makes a backfilled/unknown-occasion row
+    structurally incapable of matching, so this is never a false positive."""
+
+    item_id: str
+    last_worn_on: date | None
+    last_worn_on_for_occasion: date | None  # None means "never worn for this occasion"
+    wears_for_occasion: int
+
+
+class IWearHistoryRepository(ABC):
+    """(SS-035) Read-only occasion-scoped wear recency for novelty scoring.
+
+    RLS-scoped via the caller's JWT (the SupabaseOccasionRepository /
+    SupabaseWardrobeRepository shape), NOT service_role: this is the user's
+    own wardrobe data, read on their behalf, inside their own request.
+
+    MUST NEVER RAISE. 'No history' degrades to 'no novelty penalty', never
+    to a failed suggestion request -- the same posture as
+    ISuggestionLogRepository.recent_impressions.
+
+    Placement note (mirrors IAppConfigRepository/IOccasionRepository/
+    ISuggestionLogRepository, per design §2.4): this is a Postgres
+    persistence port, not an AI provider capability, so it lives in
+    adapters/interfaces.py rather than ai/ports/interfaces.py. A new port
+    rather than three more methods on IWardrobeRepository because the
+    consumer is the styling engine (not the upload/tagging pipeline
+    IWardrobeRepository serves), it is read-only where that port is
+    write-heavy, and SS-033 set the precedent of one port per new
+    read/log surface.
+
+    Nothing in this repo calls fetch_wear_recency yet -- Engine v2 / SS-020
+    owns the wiring (BL-119).
+    """
+
+    @abstractmethod
+    async def fetch_wear_recency(
+        self, *, jwt: str, user_id: str, occasion_key: str | None = None
+    ) -> list[WearRecency]:
+        """One row per item the user has ever worn, newest-first is NOT
+        guaranteed (the caller indexes by item_id). Returns [] on any
+        failure. MUST NEVER RAISE."""
+        raise NotImplementedError
+
+
 class IWardrobeRepository(ABC):
     """Never modify this signature to fit a new caller -- add a new method
     or a new adapter instead (Open/Closed, per CLAUDE.md)."""

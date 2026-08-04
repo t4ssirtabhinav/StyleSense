@@ -674,9 +674,14 @@ describe('fetchWardrobeItemWears', () => {
 describe('logWardrobeItemWear', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockReadCachedTaxonomies.mockResolvedValue({
+      version: 1,
+      fetchedAt: '2026-07-28T00:00:00.000Z',
+      payload: CACHED_TAXONOMIES,
+    });
   });
 
-  it('upserts item_id/user_id/worn_on with ignoreDuplicates on the (item_id, worn_on) unique index', async () => {
+  it('upserts item_id/user_id/worn_on/occasion_key with ignoreDuplicates on the widened unique index', async () => {
     mockUpsertSelect.mockResolvedValue({
       data: [{ id: 'wear-1' }],
       error: null,
@@ -686,10 +691,59 @@ describe('logWardrobeItemWear', () => {
 
     expect(mockFrom).toHaveBeenCalledWith('wardrobe_item_wears');
     expect(mockUpsert).toHaveBeenCalledWith(
-      { item_id: 'item-1', user_id: 'user-1', worn_on: '2026-07-27' },
-      { onConflict: 'item_id,worn_on', ignoreDuplicates: true },
+      {
+        item_id: 'item-1',
+        user_id: 'user-1',
+        worn_on: '2026-07-27',
+        occasion_key: null,
+      },
+      { onConflict: 'item_id,worn_on,occasion_key', ignoreDuplicates: true },
     );
     expect(result).toEqual({ alreadyLogged: false });
+  });
+
+  it('uses the three-column conflict target (item_id,worn_on,occasion_key)', async () => {
+    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+
+    await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'office');
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.any(Object),
+      { onConflict: 'item_id,worn_on,occasion_key', ignoreDuplicates: true },
+    );
+  });
+
+  it('logs a wear with a normalised occasion key', async () => {
+    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+
+    await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'Wedding');
+
+    expect(
+      (mockUpsert.mock.calls[0][0] as { occasion_key: string | null })
+        .occasion_key,
+    ).toBe('wedding_guest');
+  });
+
+  it('passes an unknown slug through rather than dropping it', async () => {
+    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+
+    await logWardrobeItemWear('item-1', 'user-1', '2026-07-27', 'Sangeet Night');
+
+    expect(
+      (mockUpsert.mock.calls[0][0] as { occasion_key: string | null })
+        .occasion_key,
+    ).toBe('sangeet_night');
+  });
+
+  it('omits the occasion (null) when none is selected', async () => {
+    mockUpsertSelect.mockResolvedValue({ data: [{ id: 'wear-1' }], error: null });
+
+    await logWardrobeItemWear('item-1', 'user-1', '2026-07-27');
+
+    expect(
+      (mockUpsert.mock.calls[0][0] as { occasion_key: string | null })
+        .occasion_key,
+    ).toBeNull();
   });
 
   it('reports alreadyLogged=true when the conflict was ignored (empty returned data)', async () => {
@@ -716,14 +770,31 @@ describe('updateWardrobeItemWear', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockEq.mockResolvedValue({ error: null });
+    mockReadCachedTaxonomies.mockResolvedValue({
+      version: 1,
+      fetchedAt: '2026-07-28T00:00:00.000Z',
+      payload: CACHED_TAXONOMIES,
+    });
   });
 
-  it('updates worn_on for the given wear id', async () => {
-    await updateWardrobeItemWear('wear-1', '2026-07-20');
+  it('updates worn_on and occasion_key for the given wear id', async () => {
+    await updateWardrobeItemWear('wear-1', '2026-07-20', null);
 
     expect(mockFrom).toHaveBeenCalledWith('wardrobe_item_wears');
-    expect(mockUpdate).toHaveBeenCalledWith({ worn_on: '2026-07-20' });
+    expect(mockUpdate).toHaveBeenCalledWith({
+      worn_on: '2026-07-20',
+      occasion_key: null,
+    });
     expect(mockEq).toHaveBeenCalledWith('id', 'wear-1');
+  });
+
+  it("updates a wear's occasion, normalising it first", async () => {
+    await updateWardrobeItemWear('wear-1', '2026-07-20', 'Wedding');
+
+    expect(mockUpdate).toHaveBeenCalledWith({
+      worn_on: '2026-07-20',
+      occasion_key: 'wedding_guest',
+    });
   });
 });
 
