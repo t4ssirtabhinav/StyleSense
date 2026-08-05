@@ -1239,11 +1239,367 @@ def test_deleting_an_outfit_nulls_the_outcome_outfit_id_and_keeps_the_row(db_con
 
 
 # ==========================================================================
+# SS-034 -- Garment Types Registry (EXPAND phase only, 014)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available. Every write below is rolled back by
+# the db_conn fixture, so none of them persists against the live project.
+#
+# Nothing in backend/ or mobile/ reads garment_types yet -- that AC is
+# covered by the separate, unconditionally-run
+# test_garment_registry_purely_additive.py, not by anything here.
+# ==========================================================================
+
+EXPECTED_GARMENT_TYPE_TABLES = {
+    "garment_types",
+    "garment_type_aliases",
+    "garment_unknown_types",
+    "garment_set_components",
+}
+
+# The 10 B.2 [VERIFIED] ethnic bottoms (design §3.5 / §6.1).
+EXPECTED_TEN_SOURCED_ETHNIC_BOTTOMS = {
+    "palazzo",
+    "churidar",
+    "sharara",
+    "patiala_salwar",
+    "gharara",
+    "dhoti_pants",
+    "cigarette_pants",
+    "culottes",
+    "leggings",
+    "salwar",
+}
+
+
+def test_garment_registry_tables_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = ANY(%s)
+            """,
+            (list(EXPECTED_GARMENT_TYPE_TABLES),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_GARMENT_TYPE_TABLES
+
+
+def test_garment_types_slot_check_is_closed(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality)
+            VALUES ('bogus_slot_probe', 'Probe', 'bogus', 0, ARRAY['ethnic'], 5)
+            """
+        )
+    db_conn.rollback()
+
+    # 'set' is the 12th value -- prove it actually landed (design §3.1 deviation).
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality)
+            VALUES ('set_slot_probe', 'Probe', 'set', 0, ARRAY['ethnic'], 5)
+            RETURNING slot
+            """
+        )
+        (slot,) = cur.fetchone()
+
+    assert slot == "set"
+
+
+def test_garment_types_parent_key_self_reference_rejected(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute("UPDATE garment_types SET parent_key = key WHERE key = 'kurta'")
+
+
+def test_garment_types_region_and_culture_scope_reject_empty_array(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality, region_scope)
+            VALUES ('empty_region_probe', 'Probe', 'legs', 0, ARRAY['ethnic'], 5, '{}')
+            """
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality, culture_scope)
+            VALUES ('empty_culture_probe', 'Probe', 'legs', 0, ARRAY['ethnic'], 5, '{}')
+            """
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality, region_scope)
+            VALUES ('null_region_probe', 'Probe', 'legs', 0, ARRAY['ethnic'], 5, NULL)
+            RETURNING region_scope
+            """
+        )
+        (region_scope,) = cur.fetchone()
+
+    assert region_scope is None
+
+
+def test_garment_types_register_rejects_empty_array(db_conn: Any) -> None:
+    """The §3.1 deviation from the proposal's DDL sketch: register TEXT[]
+    NOT NULL alone would still permit '{}' (a silent "no register" hole).
+    The added CHECK closes it."""
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            """
+            INSERT INTO garment_types (key, label, slot, layer, register, base_formality)
+            VALUES ('empty_register_probe', 'Probe', 'legs', 0, '{}', 5)
+            """
+        )
+
+
+def test_garment_type_aliases_seeded_and_disjoint_from_garment_keys(db_conn: Any) -> None:
+    """key/alias disjointness has NO cross-table constraint by design -- it
+    is enforced by resolution order (canonical key wins) plus this test."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT alias FROM garment_type_aliases")
+        aliases = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT key FROM garment_types")
+        keys = {row[0] for row in cur.fetchall()}
+
+    assert aliases, "garment_type_aliases seed is empty"
+    assert not (aliases & keys), (
+        f"alias/key collision: {aliases & keys} -- inert by resolution order, "
+        "but it should not exist"
+    )
+
+
+def test_garment_normalize_one_resolves_key_before_alias(db_conn: Any) -> None:
+    """Resolution order is the ONLY thing that makes an alias/key collision
+    inert, since Postgres has no cross-table CHECK. Prove it directly, same
+    as 007's occasion precedent."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO garment_type_aliases (alias, garment_key) VALUES ('palazzo', 'churidar')"
+        )
+        cur.execute("SELECT public.garment_normalize_one('palazzo')")
+        assert cur.fetchone()[0] == "palazzo"
+
+
+def test_garment_normalize_one_maps_known_aliases(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.garment_normalize_one(%s)", ("plazo",))
+        assert cur.fetchone()[0] == "palazzo"
+
+        cur.execute("SELECT public.garment_normalize_one(%s)", ("  Cigarette Pant ",))
+        assert cur.fetchone()[0] == "cigarette_pants"
+
+
+def test_garment_normalize_one_keeps_and_logs_unknown(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.garment_normalize_one(%s)", ("lehenga_skirt_xyz",))
+        (normalized,) = cur.fetchone()
+        assert normalized == "lehenga_skirt_xyz"
+
+        cur.execute(
+            "SELECT occurrences FROM garment_unknown_types WHERE slug = %s",
+            ("lehenga_skirt_xyz",),
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "unknown garment slug was not captured"
+    assert row[0] == 1
+
+
+def test_garment_log_unknown_increments_on_repeat(db_conn: Any) -> None:
+    probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT occurrences FROM garment_unknown_types WHERE slug = %s", (probe_slug,)
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 1, "atomic upsert must never produce two rows for the same slug"
+    assert rows[0][0] == 2
+
+
+def test_garment_normalisation_functions_are_security_definer_with_pinned_search_path(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.proname, p.prosecdef, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname LIKE 'garment_%%'
+            """
+        )
+        rows = {name: (secdef, config) for name, secdef, config in cur.fetchall()}
+
+    for name in (
+        "garment_normalize_one",
+        "garment_is_known",
+        "garment_log_unknown",
+    ):
+        assert name in rows, f"{name} is missing"
+        secdef, config = rows[name]
+        assert secdef is True, f"{name} must be SECURITY DEFINER"
+        assert config and any(c.startswith("search_path=") for c in config), (
+            f"{name} must pin search_path"
+        )
+
+    # garment_normalize_shape touches no table -- NOT SECURITY DEFINER (design §3.3).
+    assert "garment_normalize_shape" in rows
+    shape_secdef, shape_config = rows["garment_normalize_shape"]
+    assert shape_secdef is False
+    assert shape_config and any(c.startswith("search_path=") for c in shape_config)
+
+
+def test_garment_types_seed_covers_the_ten_sourced_ethnic_bottoms(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT key FROM garment_types WHERE key = ANY(%s) AND parent_key = 'ethnic_bottom'",
+            (list(EXPECTED_TEN_SOURCED_ETHNIC_BOTTOMS),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_TEN_SOURCED_ETHNIC_BOTTOMS
+
+
+def test_no_kurti_row_exists(db_conn: Any) -> None:
+    """B.1 finding #2: kurti is a length variant of kurta, not a sibling
+    type. Asserted as a negative so a future ticket cannot silently
+    reintroduce the mistake (design §7 edge case 7)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM garment_types WHERE key = 'kurti'")
+        row = cur.fetchone()
+
+    assert row is None
+
+
+def test_mekhela_and_mundu_two_piece_garments_are_not_full_body(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT key, slot, requires_with FROM garment_types WHERE key IN ('mekhela', 'mundu') "
+            "ORDER BY key"
+        )
+        rows = {key: (slot, requires_with) for key, slot, requires_with in cur.fetchall()}
+
+    assert set(rows) == {"mekhela", "mundu"}
+    for key, (slot, _requires_with) in rows.items():
+        assert slot == "legs", f"{key} must not be modelled as a single full_body type"
+    assert rows["mekhela"][1] == ["sador"]
+    assert rows["mundu"][1] == ["neriyathu"]
+
+
+def test_saree_children_carry_the_correct_length_yards(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT key, styling_rules->>'length_yards' FROM garment_types "
+            "WHERE key IN ('saree', 'nauvari', 'madisar')"
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows["saree"] == "6"
+    assert rows["nauvari"] == "9"
+    assert rows["madisar"] == "9"
+
+
+def test_garment_set_components_resolve_to_seeded_types(db_conn: Any) -> None:
+    """The FK already guarantees this; this test documents the intent (the
+    next test is the free-text array case that has NO such guarantee)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT set_key, component_key FROM garment_set_components")
+        rows = cur.fetchall()
+        cur.execute("SELECT key FROM garment_types")
+        keys = {row[0] for row in cur.fetchall()}
+
+    assert rows, "garment_set_components seed is empty"
+    for set_key, component_key in rows:
+        assert set_key in keys
+        assert component_key in keys
+
+
+def test_unseeded_requires_with_target_is_a_documented_gap_not_a_crash(db_conn: Any) -> None:
+    """saree.requires_with contains 'petticoat', which has no row in
+    garment_types -- a deliberate, documented gap (design §7 edge case 9),
+    not an oversight. Assert the schema permits it by design: no CHECK/FK
+    exists on requires_with's contents."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT requires_with FROM garment_types WHERE key = 'saree'")
+        (requires_with,) = cur.fetchone()
+        cur.execute("SELECT key FROM garment_types WHERE key = 'petticoat'")
+        petticoat_row = cur.fetchone()
+
+    assert requires_with is not None and "petticoat" in requires_with
+    assert petticoat_row is None, "petticoat is deliberately unseeded"
+
+
+def test_rls_enabled_on_all_four_garment_tables(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relname, c.relrowsecurity
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY(%s)
+            """,
+            (list(EXPECTED_GARMENT_TYPE_TABLES),),
+        )
+        rls_by_table = dict(cur.fetchall())
+
+    assert set(rls_by_table) == EXPECTED_GARMENT_TYPE_TABLES
+    disabled = [table for table, enabled in rls_by_table.items() if not enabled]
+    assert not disabled, f"RLS not enabled on: {disabled}"
+
+
+def test_only_select_policies_exist_on_garment_types_aliases_and_set_components(
+    db_conn: Any,
+) -> None:
+    """Absence of a write policy IS the write-protection mechanism (design
+    §3.4). A permissive INSERT/UPDATE/DELETE policy appearing here is a
+    regression, not a fix. garment_unknown_types gets ZERO policies."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, cmd FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = ANY(%s)",
+            (list(EXPECTED_GARMENT_TYPE_TABLES),),
+        )
+        policies = {(table, cmd) for table, cmd in cur.fetchall()}
+
+    assert policies == {
+        ("garment_types", "SELECT"),
+        ("garment_type_aliases", "SELECT"),
+        ("garment_set_components", "SELECT"),
+    }
+
+
+# test_authenticated_cannot_write_garment_types_but_service_role_can is
+# deliberately NOT automated here -- design §6.3 scopes it to QA's manual/
+# live verification (an authenticated-JWT INSERT denied, the same INSERT
+# succeeding with the service_role key), the same posture as this module's
+# other cross-role RLS checks that need two distinct real credentials
+# rather than `SET ROLE` alone.
+
+
+# ==========================================================================
 # SS-035 -- Occasion-Aware Wear History (occasion_key + outfit_id, 015)
 #
 # Like the rest of this module, these are SKIPPED unless psycopg2 and
 # SUPABASE_DB_URL are both available. Every write below is rolled back by
 # the db_conn fixture, so none of them persists against the live project.
+# ==========================================================================
+
+
 # ==========================================================================
 
 
