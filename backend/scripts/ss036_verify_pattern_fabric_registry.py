@@ -102,7 +102,7 @@ def delete_user(client: httpx.Client, user_id: str) -> None:
     # anything ON DELETE CASCADE off it, e.g. wardrobe_items) is orphaned on
     # every run -- confirmed by a real orphaned row left in the live project
     # by this exact script before this fix; see docs/worklog/SS-036.md and
-    # BL-128. attribute_unknown_tags is separately NOT cascaded either way
+    # BL-131. attribute_unknown_tags is separately NOT cascaded either way
     # (no FK at all, deliberately -- design §3.1) and is cleaned up
     # independently in teardown() below.
     client.delete(f"{AUTH_URL}/admin/users/{user_id}", headers=admin_headers())
