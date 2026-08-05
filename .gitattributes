@@ -1,0 +1,8 @@
+# SQL migrations get dollar-quoted function bodies pushed verbatim to Postgres
+# via `supabase db push`. On Windows, core.autocrlf converts checked-out files
+# to CRLF; if a migration is pushed from that checkout, the CRLF gets baked
+# into the live function body text -- byte-identical in meaning but not in
+# bytes to what a Linux CI runner's LF checkout produces, which makes
+# `supabase db diff --linked`'s schema-drift check report false-positive
+# drift on every subsequent PR. Force LF regardless of platform/local config.
+*.sql text eol=lf
