@@ -2114,3 +2114,676 @@ def test_wear_stats_trigger_still_recomputes_after_the_widening(db_conn: Any) ->
     assert after_insert[1] is not None
     assert after_insert[2] == 1000
     assert after_delete == (0, None, 1000)
+
+
+# ==========================================================================
+# SS-036 -- Pattern & Fabric Registries (016)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available. Every write below is rolled back by
+# the db_conn fixture, so none of them persists against the live project.
+#
+# Risk: high -- unlike SS-034's inert garment_types registry, this ticket
+# wires a row trigger onto wardrobe_items (the live write path for SS-012's
+# tagging call, the mobile upload-review/edit saves, and every "Mark Worn"
+# tap via 006's sync_wardrobe_item_wear_stats() UPDATE). The headline AC --
+# "an out-of-vocabulary pattern/fabric string must never fail an otherwise
+# -good write" -- is proven empirically by #19 and #29, not just asserted.
+# ==========================================================================
+
+EXPECTED_ATTRIBUTE_REGISTRY_TABLES = {
+    "patterns",
+    "fabrics",
+    "pattern_aliases",
+    "fabric_aliases",
+    "attribute_unknown_tags",
+}
+
+EXPECTED_PATTERN_KEYS = {
+    "solid",
+    "stripes",
+    "checks",
+    "floral",
+    "block_print",
+    "bandhani",
+    "ikat",
+    "paisley",
+    "polka_dots",
+    "embroidered",
+    "printed",
+}
+
+EXPECTED_FABRIC_KEYS = {
+    "cotton",
+    "silk",
+    "linen",
+    "denim",
+    "wool",
+    "rayon",
+    "polyester",
+    "georgette",
+    "chiffon",
+    "khadi",
+    "chikankari",
+}
+
+
+def test_pattern_fabric_registry_tables_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = ANY(%s)
+            """,
+            (list(EXPECTED_ATTRIBUTE_REGISTRY_TABLES),),
+        )
+        found = {row[0] for row in cur.fetchall()}
+
+    assert found == EXPECTED_ATTRIBUTE_REGISTRY_TABLES
+
+
+def test_pattern_and_fabric_key_shape_check_rejects_bad_slugs(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute("INSERT INTO patterns (key, label) VALUES ('Block Print', 'Probe')")
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute("INSERT INTO patterns (key, label) VALUES ('1solid', 'Probe')")
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO patterns (key, label) VALUES ('probe_ok_shape', 'Probe') RETURNING key"
+        )
+        (key,) = cur.fetchone()
+
+    assert key == "probe_ok_shape"
+
+
+def test_patterns_seeded_with_exactly_the_eleven_bl064_keys(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT key FROM patterns")
+        keys = {row[0] for row in cur.fetchall()}
+
+    assert keys == EXPECTED_PATTERN_KEYS
+
+
+def test_fabrics_seeded_with_exactly_the_eleven_bl064_keys(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT key FROM fabrics")
+        keys = {row[0] for row in cur.fetchall()}
+
+    assert keys == EXPECTED_FABRIC_KEYS
+
+
+def test_pattern_and_fabric_aliases_are_disjoint_from_their_keys(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT alias FROM pattern_aliases")
+        pattern_aliases = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT key FROM patterns")
+        pattern_keys = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT alias FROM fabric_aliases")
+        fabric_aliases = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT key FROM fabrics")
+        fabric_keys = {row[0] for row in cur.fetchall()}
+
+    assert pattern_aliases, "pattern_aliases seed is empty"
+    assert fabric_aliases, "fabric_aliases seed is empty"
+    assert not (pattern_aliases & pattern_keys), (
+        f"pattern alias/key collision: {pattern_aliases & pattern_keys}"
+    )
+    assert not (fabric_aliases & fabric_keys), (
+        f"fabric alias/key collision: {fabric_aliases & fabric_keys}"
+    )
+
+
+def test_fabric_weight_check_is_closed(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute("INSERT INTO fabrics (key, label, weight) VALUES ('probe_weight', 'Probe', 'bogus')")
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO fabrics (key, label, weight) VALUES ('probe_weight_null', 'Probe', NULL) RETURNING weight"
+        )
+        (weight_null,) = cur.fetchone()
+        cur.execute(
+            "INSERT INTO fabrics (key, label, weight) VALUES ('probe_weight_medium', 'Probe', 'medium') RETURNING weight"
+        )
+        (weight_medium,) = cur.fetchone()
+
+    assert weight_null is None
+    assert weight_medium == "medium"
+
+
+def test_fabric_breathability_range_check(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO fabrics (key, label, breathability) VALUES ('probe_breath_high', 'Probe', 11)"
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO fabrics (key, label, breathability) VALUES ('probe_breath_low', 'Probe', -1)"
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO fabrics (key, label, breathability) VALUES ('probe_breath_0', 'Probe', 0) RETURNING breathability"
+        )
+        (b0,) = cur.fetchone()
+        cur.execute(
+            "INSERT INTO fabrics (key, label, breathability) VALUES ('probe_breath_10', 'Probe', 10) RETURNING breathability"
+        )
+        (b10,) = cur.fetchone()
+
+    assert b0 == 0
+    assert b10 == 10
+
+
+def test_fabric_season_affinity_rejects_empty_array_and_the_all_token(db_conn: Any) -> None:
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO fabrics (key, label, season_affinity) VALUES ('probe_season_empty', 'Probe', '{}')"
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO fabrics (key, label, season_affinity) VALUES ('probe_season_all', 'Probe', '{all}')"
+        )
+    db_conn.rollback()
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO fabrics (key, label, season_affinity) VALUES "
+            "('probe_season_ok', 'Probe', '{summer,monsoon}') RETURNING season_affinity"
+        )
+        (season_ok,) = cur.fetchone()
+        cur.execute(
+            "INSERT INTO fabrics (key, label, season_affinity) VALUES "
+            "('probe_season_null', 'Probe', NULL) RETURNING season_affinity"
+        )
+        (season_null,) = cur.fetchone()
+
+    assert sorted(season_ok) == ["monsoon", "summer"]
+    assert season_null is None
+
+
+def test_pattern_canonical_key_wins_over_a_colliding_alias(db_conn: Any) -> None:
+    """Design §6.1 test #9. Renamed from the design doc's literal
+    `test_canonical_key_wins_over_a_colliding_alias` to avoid colliding with
+    007's occasion test of that exact name earlier in this file. Resolution
+    order is the ONLY thing that makes an alias/key collision inert, since
+    Postgres has no cross-table CHECK. Mirrors 007's own test of the same
+    intent for occasions."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO pattern_aliases (alias, pattern_key) VALUES ('solid', 'floral')"
+        )
+        cur.execute("SELECT public.pattern_normalize_one('solid')")
+        assert cur.fetchone()[0] == "solid"
+
+
+def test_pattern_normalize_one_maps_shape_and_aliases(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.pattern_normalize_one(%s)", ("  Block-Print ",))
+        assert cur.fetchone()[0] == "block_print"
+
+        cur.execute("SELECT public.pattern_normalize_one(%s)", ("Bandhej",))
+        assert cur.fetchone()[0] == "bandhani"
+
+        cur.execute("SELECT public.pattern_normalize_one(%s)", ("POLKA DOTS",))
+        assert cur.fetchone()[0] == "polka_dots"
+
+
+def test_fabric_normalize_one_maps_shape_and_aliases(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.fabric_normalize_one(%s)", ("Tussar Silk",))
+        assert cur.fetchone()[0] == "silk"
+
+        cur.execute("SELECT public.fabric_normalize_one(%s)", ("viscose",))
+        assert cur.fetchone()[0] == "rayon"
+
+        cur.execute("SELECT public.fabric_normalize_one(%s)", ("Pure Cotton",))
+        assert cur.fetchone()[0] == "cotton"
+
+
+def test_normalize_one_keeps_an_unknown_slug_and_writes_nothing(db_conn: Any) -> None:
+    """Resolvers are pure; only the trigger logs (design §3.4)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT public.fabric_normalize_one(%s)", ("Handloom Jamdani",))
+        (normalized,) = cur.fetchone()
+        assert normalized == "handloom_jamdani"
+
+        cur.execute(
+            "SELECT count(*) FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = %s",
+            ("handloom_jamdani",),
+        )
+        (count,) = cur.fetchone()
+
+    assert count == 0, "a pure resolver call must never write a capture row"
+
+
+def test_attribute_unknown_tags_key_is_attribute_plus_slug(db_conn: Any) -> None:
+    probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT public.attribute_log_unknown('pattern', %s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT public.attribute_log_unknown('fabric', %s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT attribute, occurrences FROM attribute_unknown_tags WHERE slug = %s ORDER BY attribute",
+            (probe_slug,),
+        )
+        rows = cur.fetchall()
+
+    assert rows == [("fabric", 1), ("pattern", 1)], (
+        "the same slug under two different attributes must be two independent rows"
+    )
+
+
+def test_attribute_log_unknown_increments_on_repeat(db_conn: Any) -> None:
+    probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT public.attribute_log_unknown('fabric', %s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT public.attribute_log_unknown('fabric', %s, 'test', NULL)", (probe_slug,)
+        )
+        cur.execute(
+            "SELECT occurrences FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = %s",
+            (probe_slug,),
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == 1, "atomic upsert must never produce two rows for the same (attribute, slug)"
+    assert rows[0][0] == 2
+
+
+def test_pattern_fabric_functions_are_security_definer_with_a_pinned_search_path(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.proname, p.prosecdef, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname IN (
+              'pattern_normalize_one', 'fabric_normalize_one',
+              'pattern_is_known', 'fabric_is_known',
+              'attribute_log_unknown', 'attribute_normalize_shape',
+              'wardrobe_items_normalize_pattern_fabric_trigger'
+            )
+            """
+        )
+        rows = {name: (secdef, config) for name, secdef, config in cur.fetchall()}
+
+    for name in (
+        "pattern_normalize_one",
+        "fabric_normalize_one",
+        "pattern_is_known",
+        "fabric_is_known",
+        "attribute_log_unknown",
+        "wardrobe_items_normalize_pattern_fabric_trigger",
+    ):
+        assert name in rows, f"{name} is missing"
+        secdef, config = rows[name]
+        assert secdef is True, f"{name} must be SECURITY DEFINER"
+        assert config and any(c.startswith("search_path=") for c in config), (
+            f"{name} must pin search_path"
+        )
+
+    # attribute_normalize_shape touches no table -- NOT SECURITY DEFINER.
+    assert "attribute_normalize_shape" in rows
+    shape_secdef, shape_config = rows["attribute_normalize_shape"]
+    assert shape_secdef is False
+    assert shape_config and any(c.startswith("search_path=") for c in shape_config)
+
+
+def test_normalize_one_functions_are_volatile_not_stable(db_conn: Any) -> None:
+    """§3.4's deliberate divergence from 014's garment_normalize_one, which
+    is mislabelled STABLE while it writes (BL-123)."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT proname, provolatile FROM pg_proc
+            WHERE pronamespace = 'public'::regnamespace
+              AND proname IN ('pattern_normalize_one', 'fabric_normalize_one')
+            """
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows == {"pattern_normalize_one": "v", "fabric_normalize_one": "v"}
+
+
+def test_trigger_normalises_pattern_and_fabric_on_insert(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, pattern, fabric)
+            VALUES (%s, 'western_top', 'Block Print', 'COTTON ')
+            RETURNING pattern, fabric
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (pattern, fabric) = cur.fetchone()
+
+    assert pattern == "block_print"
+    assert fabric == "cotton"
+
+
+def test_trigger_normalises_pattern_and_fabric_on_update(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category)
+            VALUES (%s, 'western_top') RETURNING id
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (item_id,) = cur.fetchone()
+
+        cur.execute(
+            "UPDATE wardrobe_items SET fabric = 'Tussar Silk' WHERE id = %s RETURNING fabric",
+            (item_id,),
+        )
+        (fabric,) = cur.fetchone()
+
+    assert fabric == "silk"
+
+
+def test_out_of_vocabulary_fabric_does_not_fail_the_item_write(db_conn: Any) -> None:
+    """THE ticket's headline AC."""
+    with db_conn.cursor() as cur:
+        owner_id = _insert_user(cur)
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, fabric, user_id)
+            VALUES (%s, 'western_top', 'Handloom Jamdani', %s)
+            RETURNING id, fabric
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg", owner_id),
+        )
+        row = cur.fetchone()
+        assert row is not None, "the write must succeed"
+        item_id, fabric = row
+        assert item_id is not None
+        assert fabric == "handloom_jamdani"
+
+        cur.execute(
+            """
+            SELECT occurrences, sample_source, sample_user_id
+            FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = 'handloom_jamdani'
+            """
+        )
+        capture = cur.fetchone()
+
+    assert capture is not None, "unknown fabric was not captured"
+    occurrences, sample_source, sample_user_id = capture
+    assert occurrences == 1
+    assert sample_source == "wardrobe_items"
+    assert sample_user_id == owner_id
+
+
+def test_null_pattern_and_fabric_stay_null(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, pattern, fabric)
+            VALUES (%s, 'western_top', NULL, NULL)
+            RETURNING pattern, fabric
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (pattern, fabric) = cur.fetchone()
+
+    assert pattern is None
+    assert fabric is None
+
+
+def test_all_punctuation_pattern_becomes_null_and_is_not_captured(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, pattern)
+            VALUES (%s, 'western_top', '***')
+            RETURNING pattern
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (pattern,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT count(*) FROM attribute_unknown_tags WHERE attribute = 'pattern' AND slug IS NULL"
+        )
+        (count,) = cur.fetchone()
+
+    assert pattern is None
+    assert count == 0
+
+
+def test_an_unrelated_update_does_not_reinflate_unknown_occurrences(db_conn: Any) -> None:
+    """Proves the WHEN clause (design §3.4)."""
+    probe_fabric = f"probefabric{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, fabric, brand)
+            VALUES (%s, 'western_top', %s, 'Old Brand')
+            RETURNING id
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg", probe_fabric),
+        )
+        (item_id,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT occurrences FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = %s",
+            (probe_fabric,),
+        )
+        (occurrences_before,) = cur.fetchone()
+
+        cur.execute("UPDATE wardrobe_items SET brand = 'New Brand' WHERE id = %s", (item_id,))
+
+        cur.execute(
+            "SELECT occurrences FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = %s",
+            (probe_fabric,),
+        )
+        (occurrences_after,) = cur.fetchone()
+
+    assert occurrences_before == 1
+    assert occurrences_after == 1, "an unrelated UPDATE must not re-enter the normalisation trigger"
+
+
+def test_wear_stats_sync_update_does_not_re_enter_the_normalisation_trigger(db_conn: Any) -> None:
+    """The concrete hot-path proof from design §2: every 'Mark Worn' tap
+    fires a BEFORE UPDATE on wardrobe_items via 006's
+    sync_wardrobe_item_wear_stats()."""
+    probe_fabric = f"probefabric{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, fabric, user_id)
+            VALUES (%s, 'western_top', %s, %s)
+            RETURNING id, pattern, fabric
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg", probe_fabric, owner),
+        )
+        item_id, pattern_before, fabric_before = cur.fetchone()
+
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+        cur.execute(
+            "SELECT pattern, fabric, wear_count FROM wardrobe_items WHERE id = %s", (item_id,)
+        )
+        pattern_after, fabric_after, wear_count = cur.fetchone()
+
+        cur.execute(
+            "SELECT occurrences FROM attribute_unknown_tags WHERE attribute = 'fabric' AND slug = %s",
+            (probe_fabric,),
+        )
+        (occurrences,) = cur.fetchone()
+
+    assert pattern_after == pattern_before
+    assert fabric_after == fabric_before == probe_fabric
+    assert wear_count == 1
+    assert occurrences == 1, "the wear-stats sync UPDATE must not re-enter the pattern/fabric trigger"
+
+
+def test_occasion_normalisation_still_works_alongside_the_new_triggers(db_conn: Any) -> None:
+    """No regression to SS-025's shipped trigger."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, occasion_tags, pattern)
+            VALUES (%s, 'western_top', %s, 'Block Print')
+            RETURNING occasion_tags, pattern
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg", ["wedding"]),
+        )
+        (occasion_tags, pattern) = cur.fetchone()
+
+    assert occasion_tags == ["wedding_guest"]
+    assert pattern == "block_print"
+
+
+def test_rls_enabled_on_all_five_new_tables(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relname, c.relrowsecurity
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = ANY(%s)
+            """,
+            (list(EXPECTED_ATTRIBUTE_REGISTRY_TABLES),),
+        )
+        rls_by_table = dict(cur.fetchall())
+
+    assert set(rls_by_table) == EXPECTED_ATTRIBUTE_REGISTRY_TABLES
+    disabled = [table for table, enabled in rls_by_table.items() if not enabled]
+    assert not disabled, f"RLS not enabled on: {disabled}"
+
+
+def test_only_select_policies_exist_on_the_four_readable_registry_tables(db_conn: Any) -> None:
+    """Absence of a write policy IS the write-protection mechanism (design
+    §3.1). attribute_unknown_tags gets ZERO policies."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, cmd FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = ANY(%s)",
+            (list(EXPECTED_ATTRIBUTE_REGISTRY_TABLES),),
+        )
+        policies = {(table, cmd) for table, cmd in cur.fetchall()}
+
+    assert policies == {
+        ("patterns", "SELECT"),
+        ("fabrics", "SELECT"),
+        ("pattern_aliases", "SELECT"),
+        ("fabric_aliases", "SELECT"),
+    }
+
+
+def test_no_foreign_key_from_wardrobe_items_pattern_or_fabric(db_conn: Any) -> None:
+    """§3.1's 'never fail a write' guarantee asserted STRUCTURALLY, so a
+    future contributor can't add one silently."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_class ft ON ft.oid = c.confrelid
+            WHERE c.contype = 'f' AND t.relname = 'wardrobe_items'
+              AND ft.relname IN ('patterns', 'fabrics')
+            """
+        )
+        rows = cur.fetchall()
+
+    assert rows == [], f"no FK from wardrobe_items to patterns/fabrics may ever exist, found: {rows}"
+
+
+def test_every_existing_item_value_is_a_key_or_a_captured_unknown(db_conn: Any) -> None:
+    """The standing form of the AC's before/after fixture."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT pattern FROM wardrobe_items WHERE pattern IS NOT NULL")
+        distinct_patterns = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT DISTINCT fabric FROM wardrobe_items WHERE fabric IS NOT NULL")
+        distinct_fabrics = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT key FROM patterns")
+        pattern_keys = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT key FROM fabrics")
+        fabric_keys = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT slug FROM attribute_unknown_tags WHERE attribute = 'pattern'")
+        captured_patterns = {row[0] for row in cur.fetchall()}
+        cur.execute("SELECT slug FROM attribute_unknown_tags WHERE attribute = 'fabric'")
+        captured_fabrics = {row[0] for row in cur.fetchall()}
+
+    unaccounted_patterns = distinct_patterns - pattern_keys - captured_patterns
+    unaccounted_fabrics = distinct_fabrics - fabric_keys - captured_fabrics
+
+    assert not unaccounted_patterns, f"pattern values with no key/capture: {unaccounted_patterns}"
+    assert not unaccounted_fabrics, f"fabric values with no key/capture: {unaccounted_fabrics}"
+
+
+def test_item_write_survives_a_broken_capture_table(db_conn: Any) -> None:
+    """Proves §3.4's EXCEPTION WHEN OTHERS guard EMPIRICALLY instead of by
+    inspection -- breaks the capture table mid-transaction and asserts the
+    item write still succeeds."""
+    with db_conn.cursor() as cur:
+        cur.execute("ALTER TABLE attribute_unknown_tags RENAME TO attribute_unknown_tags_x")
+
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, fabric)
+            VALUES (%s, 'western_top', 'Handloom Jamdani')
+            RETURNING fabric
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (fabric,) = cur.fetchone()
+
+    assert fabric == "handloom_jamdani", (
+        "the item write must survive even when the capture table is broken"
+    )
+    # db_conn fixture rolls back on teardown -- the RENAME is undone too.
+
+
+def test_deactivating_a_registry_row_does_not_orphan_existing_values(db_conn: Any) -> None:
+    """Raw ticket edge case 5, and §3.4's most-likely-to-be-wrongly-'fixed'
+    invariant: is_active is a pick-list/display flag only, never consulted
+    by resolution."""
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE patterns SET is_active = false WHERE key = 'ikat'")
+
+        cur.execute("SELECT public.pattern_normalize_one('ikat')")
+        (resolved,) = cur.fetchone()
+        assert resolved == "ikat"
+
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (image_url, category, pattern)
+            VALUES (%s, 'western_top', 'Ikat')
+            RETURNING pattern
+            """,
+            (f"https://example.com/{uuid.uuid4()}.jpg",),
+        )
+        (stored_pattern,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT count(*) FROM attribute_unknown_tags WHERE attribute = 'pattern' AND slug = 'ikat'"
+        )
+        (capture_count,) = cur.fetchone()
+
+    assert stored_pattern == "ikat"
+    assert capture_count == 0, "a deactivated-but-existing key must never be captured as unknown"

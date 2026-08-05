@@ -137,6 +137,36 @@ export type Database = {
         }
         Relationships: []
       }
+      attribute_unknown_tags: {
+        Row: {
+          attribute: string
+          first_seen_at: string
+          last_seen_at: string
+          occurrences: number
+          sample_source: string | null
+          sample_user_id: string | null
+          slug: string
+        }
+        Insert: {
+          attribute: string
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug: string
+        }
+        Update: {
+          attribute?: string
+          first_seen_at?: string
+          last_seen_at?: string
+          occurrences?: number
+          sample_source?: string | null
+          sample_user_id?: string | null
+          slug?: string
+        }
+        Relationships: []
+      }
       colour_palette: {
         Row: {
           active: boolean
@@ -158,6 +188,68 @@ export type Database = {
           key?: string
           label?: string
           sort_order?: number
+        }
+        Relationships: []
+      }
+      fabric_aliases: {
+        Row: {
+          alias: string
+          created_at: string
+          fabric_key: string
+        }
+        Insert: {
+          alias: string
+          created_at?: string
+          fabric_key: string
+        }
+        Update: {
+          alias?: string
+          created_at?: string
+          fabric_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fabric_aliases_fabric_key_fkey"
+            columns: ["fabric_key"]
+            isOneToOne: false
+            referencedRelation: "fabrics"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      fabrics: {
+        Row: {
+          breathability: number | null
+          created_at: string
+          is_active: boolean
+          key: string
+          label: string
+          labels_i18n: Json
+          season_affinity: string[] | null
+          sort_order: number
+          weight: string | null
+        }
+        Insert: {
+          breathability?: number | null
+          created_at?: string
+          is_active?: boolean
+          key: string
+          label: string
+          labels_i18n?: Json
+          season_affinity?: string[] | null
+          sort_order?: number
+          weight?: string | null
+        }
+        Update: {
+          breathability?: number | null
+          created_at?: string
+          is_active?: boolean
+          key?: string
+          label?: string
+          labels_i18n?: Json
+          season_affinity?: string[] | null
+          sort_order?: number
+          weight?: string | null
         }
         Relationships: []
       }
@@ -497,6 +589,59 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      pattern_aliases: {
+        Row: {
+          alias: string
+          created_at: string
+          pattern_key: string
+        }
+        Insert: {
+          alias: string
+          created_at?: string
+          pattern_key: string
+        }
+        Update: {
+          alias?: string
+          created_at?: string
+          pattern_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pattern_aliases_pattern_key_fkey"
+            columns: ["pattern_key"]
+            isOneToOne: false
+            referencedRelation: "patterns"
+            referencedColumns: ["key"]
+          },
+        ]
+      }
+      patterns: {
+        Row: {
+          created_at: string
+          is_active: boolean
+          key: string
+          label: string
+          labels_i18n: Json
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          is_active?: boolean
+          key: string
+          label: string
+          labels_i18n?: Json
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          is_active?: boolean
+          key?: string
+          label?: string
+          labels_i18n?: Json
+          sort_order?: number
+        }
+        Relationships: []
       }
       shopping_wishlist: {
         Row: {
@@ -1075,6 +1220,18 @@ export type Database = {
       }
     }
     Functions: {
+      attribute_log_unknown: {
+        Args: {
+          p_attribute: string
+          p_slug: string
+          p_src: string
+          p_uid: string
+        }
+        Returns: undefined
+      }
+      attribute_normalize_shape: { Args: { p_raw: string }; Returns: string }
+      fabric_is_known: { Args: { p_slug: string }; Returns: boolean }
+      fabric_normalize_one: { Args: { p_raw: string }; Returns: string }
       garment_is_known: { Args: { p_slug: string }; Returns: boolean }
       garment_log_unknown: {
         Args: { p_slug: string; p_src: string; p_uid: string }
@@ -1093,6 +1250,8 @@ export type Database = {
       }
       occasion_normalize_one: { Args: { p_raw: string }; Returns: string }
       occasion_normalize_shape: { Args: { p_raw: string }; Returns: string }
+      pattern_is_known: { Args: { p_slug: string }; Returns: boolean }
+      pattern_normalize_one: { Args: { p_raw: string }; Returns: string }
       purge_suggestion_logs: {
         Args: { p_batch_size?: number; p_max_batches?: number }
         Returns: {
