@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import {
+  Badge,
   Button,
   Card,
   EmptyState,
@@ -12,15 +13,19 @@ import {
   NO_WEARS_HEADING,
   NO_WEARS_SUBTEXT,
   WEAR_DUPLICATE_DATE_MESSAGE,
+  WEAR_DUPLICATE_DATE_OCCASION_MESSAGE,
+  WEAR_OCCASION_NONE_CHIP_LABEL,
 } from '../wardrobe.constants';
 import {
   useDeleteWardrobeItemWear,
   useLogWardrobeItemWear,
+  useOccasionOptions,
   useUpdateWardrobeItemWear,
   useWardrobeItemWearsQuery,
 } from '../wardrobe.queries';
 import type { WardrobeItemWearRow } from '../wardrobe.types';
 import { WearDateField } from './WearDateField';
+import { WearOccasionField } from './WearOccasionField';
 
 export interface WearHistorySectionProps {
   itemId: string;
@@ -61,21 +66,44 @@ function WearRow({ wear, purchaseDate }: WearRowProps) {
   const [conflictError, setConflictError] = useState<string | undefined>(
     undefined,
   );
+  // SS-035: local draft state so a date edit and an occasion edit can each
+  // be applied independently while the other stays whatever it already was
+  // -- neither write should silently clear the other.
+  //
+  // wear.occasion_key: WardrobeItemWearRow is `Tables<'wardrobe_item_wears'>`
+  // (wardrobe.types.ts) -- a generated type. It picks this column up for
+  // free once mobile/types/supabase.ts is regenerated against the pushed
+  // migration (design §9 Q4, QA's job per §8 step 6); CLAUDE.md forbids
+  // hand-editing the generated file or a local interface to work around it,
+  // so this line does not typecheck until that regeneration happens, by
+  // design (see this ticket's worklog).
+  const [draftOccasionKey, setDraftOccasionKey] = useState<string | null>(
+    wear.occasion_key ?? null,
+  );
   const updateWear = useUpdateWardrobeItemWear();
   const deleteWear = useDeleteWardrobeItemWear();
+  const occasionTaxonomy = useOccasionOptions();
 
   const wornOnLabel = formatWornOn(wear.worn_on);
+  const occasionKey: string | null = wear.occasion_key ?? null;
 
   const handleUpdate = (isoDate: string) => {
     setConflictError(undefined);
     updateWear.mutate(
-      { wearId: wear.id, itemId: wear.item_id, wornOn: isoDate },
+      {
+        wearId: wear.id,
+        itemId: wear.item_id,
+        wornOn: isoDate,
+        occasionKey: draftOccasionKey,
+      },
       {
         onSuccess: () => setEditing(false),
         onError: (error) => {
           setConflictError(
             isUniqueViolation(error)
-              ? WEAR_DUPLICATE_DATE_MESSAGE
+              ? draftOccasionKey
+                ? WEAR_DUPLICATE_DATE_OCCASION_MESSAGE
+                : WEAR_DUPLICATE_DATE_MESSAGE
               : 'Something went wrong. Please try again.',
           );
         },
@@ -103,6 +131,10 @@ function WearRow({ wear, purchaseDate }: WearRowProps) {
           purchaseDate={purchaseDate}
           onChange={handleUpdate}
         />
+        <WearOccasionField
+          value={draftOccasionKey}
+          onChange={setDraftOccasionKey}
+        />
         {conflictError ? (
           <Text variant="caption" color="secondary">
             {conflictError}
@@ -125,7 +157,24 @@ function WearRow({ wear, purchaseDate }: WearRowProps) {
       testID={`wear-row-${wear.id}`}
       className="mb-xs flex-row items-center justify-between"
     >
-      <Text variant="body">{wornOnLabel}</Text>
+      <View className="gap-xs">
+        <Text variant="body">{wornOnLabel}</Text>
+        {occasionKey ? (
+          <Badge
+            testID={`wear-row-occasion-${wear.id}`}
+            label={occasionTaxonomy.label(occasionKey)}
+            occasion={occasionTaxonomy.badgeColor(occasionKey)}
+          />
+        ) : (
+          <Text
+            testID={`wear-row-no-occasion-${wear.id}`}
+            variant="caption"
+            color="secondary"
+          >
+            {WEAR_OCCASION_NONE_CHIP_LABEL}
+          </Text>
+        )}
+      </View>
       <View className="flex-row gap-xs">
         <IconButton
           icon="create-outline"
@@ -157,15 +206,32 @@ export function WearHistorySection({
   const wearsQuery = useWardrobeItemWearsQuery(itemId);
   const logWear = useLogWardrobeItemWear();
   const [addingWear, setAddingWear] = useState(false);
+  // SS-035: optional occasion for the "Add a wear" card. Stays null unless
+  // the user picks one -- the quick path (WearDateField's Today/Yesterday
+  // chips fire onChange immediately) still logs a wear with no occasion in
+  // one tap, matching ItemDetailSheet's own one-tap default (BL-121).
+  const [newWearOccasionKey, setNewWearOccasionKey] = useState<string | null>(
+    null,
+  );
 
   const handleAddWear = (isoDate: string) => {
     if (!userId) {
       return;
     }
     logWear.mutate(
-      { itemId, userId, wornOn: isoDate },
-      { onSuccess: () => setAddingWear(false) },
+      { itemId, userId, wornOn: isoDate, occasionKey: newWearOccasionKey },
+      {
+        onSuccess: () => {
+          setAddingWear(false);
+          setNewWearOccasionKey(null);
+        },
+      },
     );
+  };
+
+  const handleCancelAddWear = () => {
+    setAddingWear(false);
+    setNewWearOccasionKey(null);
   };
 
   return (
@@ -215,10 +281,14 @@ export function WearHistorySection({
             purchaseDate={purchaseDate}
             onChange={handleAddWear}
           />
+          <WearOccasionField
+            value={newWearOccasionKey}
+            onChange={setNewWearOccasionKey}
+          />
           <Button
             variant="secondary"
             accessibilityLabel="Cancel adding a wear"
-            onPress={() => setAddingWear(false)}
+            onPress={handleCancelAddWear}
           >
             Cancel
           </Button>

@@ -1589,3 +1589,528 @@ def test_only_select_policies_exist_on_garment_types_aliases_and_set_components(
 # succeeding with the service_role key), the same posture as this module's
 # other cross-role RLS checks that need two distinct real credentials
 # rather than `SET ROLE` alone.
+
+
+# ==========================================================================
+# SS-035 -- Occasion-Aware Wear History (occasion_key + outfit_id, 015)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available. Every write below is rolled back by
+# the db_conn fixture, so none of them persists against the live project.
+# ==========================================================================
+
+
+# ==========================================================================
+
+
+def _insert_wardrobe_item(cur: Any, user_id: str, purchase_price: int | None = None) -> str:
+    item_id = str(uuid.uuid4())
+    cur.execute(
+        "INSERT INTO wardrobe_items (id, user_id, image_url, category, purchase_price) "
+        "VALUES (%s, %s, %s, 'western_top', %s)",
+        (item_id, user_id, f"https://example.com/{uuid.uuid4()}.jpg", purchase_price),
+    )
+    return item_id
+
+
+def _insert_outfit(cur: Any, user_id: str) -> str:
+    outfit_id = str(uuid.uuid4())
+    cur.execute("INSERT INTO outfits (id, user_id) VALUES (%s, %s)", (outfit_id, user_id))
+    return outfit_id
+
+
+def test_wear_occasion_key_and_outfit_id_columns_exist(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, is_nullable, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'wardrobe_item_wears'
+              AND column_name IN ('occasion_key', 'outfit_id')
+            """
+        )
+        rows = {row[0]: row for row in cur.fetchall()}
+
+    assert set(rows) == {"occasion_key", "outfit_id"}
+    assert rows["occasion_key"][1] == "YES"
+    assert rows["occasion_key"][2] == "text"
+    assert rows["outfit_id"][1] == "YES"
+    assert rows["outfit_id"][2] == "uuid"
+
+
+def test_server_version_is_at_least_15(db_conn: Any) -> None:
+    """The gate this migration's own first statement asserts -- checked
+    directly rather than assumed (design §3.1/§9 Q1)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT current_setting('server_version_num')::int")
+        (version_num,) = cur.fetchone()
+
+    assert version_num >= 150000
+
+
+def test_widened_unique_constraint_exists_and_is_nulls_not_distinct(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.indnullsnotdistinct
+            FROM pg_constraint c
+            JOIN pg_index i ON i.indexrelid = c.conindid
+            WHERE c.conname = 'wardrobe_item_wears_one_per_day_per_occasion'
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "wardrobe_item_wears_one_per_day_per_occasion constraint not found"
+    assert row[0] is True, "NULLS NOT DISTINCT is load-bearing (BL-071) -- see design §3.3"
+
+
+def test_old_one_per_day_constraint_no_longer_exists(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT conname FROM pg_constraint WHERE conname = 'wardrobe_item_wears_one_per_day'"
+        )
+        row = cur.fetchone()
+
+    assert row is None, "the narrowing constraint should have been replaced, not kept alongside"
+
+
+def test_same_item_same_day_two_occasions_both_insert(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'office')",
+            (item_id, owner),
+        )
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'puja')",
+            (item_id, owner),
+        )
+        cur.execute("SELECT count(*) FROM wardrobe_item_wears WHERE item_id = %s", (item_id,))
+        (count,) = cur.fetchone()
+
+    assert count == 2
+
+
+def test_same_item_same_day_same_occasion_second_insert_is_rejected(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'office')",
+            (item_id, owner),
+        )
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.UniqueViolation):
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'office')",
+            (item_id, owner),
+        )
+
+
+def test_same_item_same_day_two_null_occasion_rows_are_rejected(db_conn: Any) -> None:
+    """The BL-071 regression guard: without NULLS NOT DISTINCT, repeat
+    one-tap "Mark Worn" taps (which write occasion_key=NULL) would each
+    insert a new row and silently inflate wear_count."""
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.UniqueViolation):
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+
+def test_wear_count_is_not_inflated_by_a_rejected_duplicate(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+        cur.execute("SAVEPOINT before_dupe")
+        try:
+            cur.execute(
+                "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+                "VALUES (%s, %s, CURRENT_DATE)",
+                (item_id, owner),
+            )
+        except psycopg2.errors.UniqueViolation:
+            cur.execute("ROLLBACK TO SAVEPOINT before_dupe")
+
+        cur.execute("SELECT wear_count FROM wardrobe_items WHERE id = %s", (item_id,))
+        (wear_count,) = cur.fetchone()
+
+    assert wear_count == 1
+
+
+def test_alias_spelling_collapses_onto_the_canonical_key_before_uniqueness(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'work') RETURNING occasion_key",
+            (item_id, owner),
+        )
+        (stored,) = cur.fetchone()
+        assert stored == "office"
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.UniqueViolation):
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'office')",
+            (item_id, owner),
+        )
+
+
+def test_unknown_slug_is_stored_and_captured_not_dropped(db_conn: Any) -> None:
+    probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, %s) RETURNING occasion_key",
+            (item_id, owner, probe_slug),
+        )
+        (stored,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT occurrences, sample_source FROM occasion_unknown_tags WHERE slug = %s",
+            (probe_slug,),
+        )
+        row = cur.fetchone()
+
+    assert stored == probe_slug, "an unknown occasion must never be dropped"
+    assert row is not None, "unknown slug was not captured"
+    assert row[0] == 1
+    assert row[1] == "wardrobe_item_wears"
+
+
+def test_malformed_slug_is_normalised_not_rejected(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'Wedding Guest!!') RETURNING occasion_key",
+            (item_id, owner),
+        )
+        (stored,) = cur.fetchone()
+
+    assert stored == "wedding_guest"
+
+
+def test_all_punctuation_slug_becomes_null(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, '!!!') RETURNING occasion_key",
+            (item_id, owner),
+        )
+        (stored,) = cur.fetchone()
+
+    assert stored is None
+
+
+def test_occasion_key_shape_check_rejects_an_empty_string_written_by_service_role(
+    db_conn: Any,
+) -> None:
+    """The normalisation trigger always turns '' into NULL before the CHECK
+    ever sees it, so this disables the trigger to exercise the CHECK
+    directly -- the backstop it is designed to be (design §3.4)."""
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "ALTER TABLE wardrobe_item_wears "
+            "DISABLE TRIGGER trg_wardrobe_item_wears_normalize_occasion_key"
+        )
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, '')",
+            (item_id, owner),
+        )
+
+
+def test_deleting_an_outfit_nulls_outfit_id_and_leaves_the_wear_row(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        outfit_id = _insert_outfit(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, outfit_id) "
+            "VALUES (%s, %s, CURRENT_DATE, %s) RETURNING id",
+            (item_id, owner, outfit_id),
+        )
+        (wear_id,) = cur.fetchone()
+
+        cur.execute("DELETE FROM outfits WHERE id = %s", (outfit_id,))
+
+        cur.execute("SELECT outfit_id FROM wardrobe_item_wears WHERE id = %s", (wear_id,))
+        (stored_outfit_id,) = cur.fetchone()
+
+    assert stored_outfit_id is None, "the wear row must survive an outfit delete"
+
+
+def test_deleting_an_outfit_does_not_change_wear_count_or_cost_per_wear(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner, purchase_price=1000)
+        outfit_id = _insert_outfit(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, outfit_id) "
+            "VALUES (%s, %s, CURRENT_DATE, %s)",
+            (item_id, owner, outfit_id),
+        )
+        cur.execute(
+            "SELECT wear_count, cost_per_wear FROM wardrobe_items WHERE id = %s", (item_id,)
+        )
+        before = cur.fetchone()
+
+        cur.execute("DELETE FROM outfits WHERE id = %s", (outfit_id,))
+
+        cur.execute(
+            "SELECT wear_count, cost_per_wear FROM wardrobe_items WHERE id = %s", (item_id,)
+        )
+        after = cur.fetchone()
+
+    assert before == after, "outfit deletion must never move wear_count/cost_per_wear"
+
+
+def test_outfit_fk_rejects_an_outfit_belonging_to_another_user(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        other = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        other_outfit_id = _insert_outfit(cur, other)
+
+    with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.ForeignKeyViolation):
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, outfit_id) "
+            "VALUES (%s, %s, CURRENT_DATE, %s)",
+            (item_id, owner, other_outfit_id),
+        )
+
+
+def test_wear_recency_reports_last_worn_overall_and_for_the_occasion_distinctly(
+    db_conn: Any,
+) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, '2026-07-20', 'office')",
+            (item_id, owner),
+        )
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, '2026-07-25', 'puja')",
+            (item_id, owner),
+        )
+
+        cur.execute("SELECT * FROM public.wear_recency(%s, 'office')", (owner,))
+        row = cur.fetchone()
+
+    assert row is not None
+    result_item_id, last_worn_on, last_worn_on_for_occasion, wears_for_occasion = row
+    assert result_item_id == item_id
+    assert str(last_worn_on) == "2026-07-25"
+    assert str(last_worn_on_for_occasion) == "2026-07-20"
+    assert wears_for_occasion == 1
+
+
+def test_wear_recency_never_matches_a_null_occasion_row(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+        cur.execute("SELECT * FROM public.wear_recency(%s, 'office')", (owner,))
+        row = cur.fetchone()
+
+    assert row is not None
+    _, _, last_worn_on_for_occasion, wears_for_occasion = row
+    assert last_worn_on_for_occasion is None
+    assert wears_for_occasion == 0
+
+
+def test_wear_recency_with_a_null_occasion_argument_matches_nothing(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on, occasion_key) "
+            "VALUES (%s, %s, CURRENT_DATE, 'office')",
+            (item_id, owner),
+        )
+
+        cur.execute("SELECT * FROM public.wear_recency(%s, NULL)", (owner,))
+        row = cur.fetchone()
+
+    assert row is not None
+    _, _, last_worn_on_for_occasion, wears_for_occasion = row
+    assert last_worn_on_for_occasion is None
+    assert wears_for_occasion == 0
+
+
+def test_wear_recency_is_rls_scoped_and_not_security_definer(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        other = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE)",
+            (item_id, owner),
+        )
+
+        cur.execute(
+            """
+            SELECT p.prosecdef
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'wear_recency'
+            """
+        )
+        (prosecdef,) = cur.fetchone()
+
+        cur.execute("SET ROLE authenticated")
+        try:
+            cur.execute(
+                "SET request.jwt.claims = %s",
+                (f'{{"sub": "{other}", "role": "authenticated"}}',),
+            )
+            # Explicitly pass the OWNER's id -- p_user_id is a filter IN
+            # ADDITION to RLS, not instead of it (design §3.7). If RLS were
+            # not in force, this would still (wrongly) return the owner's row.
+            cur.execute("SELECT * FROM public.wear_recency(%s)", (owner,))
+            rows_visible_to_other = cur.fetchall()
+        finally:
+            cur.execute("RESET ROLE")
+
+    assert prosecdef is False, "wear_recency must be SECURITY INVOKER, not DEFINER"
+    assert rows_visible_to_other == []
+
+
+def test_normalisation_trigger_is_security_definer_with_a_pinned_search_path(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.prosecdef, p.proconfig
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'wear_occasion_key_normalize_trigger'
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "wear_occasion_key_normalize_trigger is missing"
+    secdef, config = row
+    assert secdef is True
+    assert config and any(c.startswith("search_path=") for c in config)
+
+
+def test_new_indexes_exist_and_the_outfit_one_is_partial(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexname, indexdef FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = ANY(%s)
+            """,
+            (["idx_item_wears_user_occasion_worn", "idx_item_wears_outfit_id"],),
+        )
+        rows = dict(cur.fetchall())
+
+    assert set(rows) == {"idx_item_wears_user_occasion_worn", "idx_item_wears_outfit_id"}
+    assert "where" in rows["idx_item_wears_outfit_id"].lower()
+
+
+def test_outfits_id_user_id_unique_constraint_exists(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT conname FROM pg_constraint WHERE conname = 'outfits_id_user_id_key'")
+        row = cur.fetchone()
+
+    assert row is not None, "outfits_id_user_id_key prerequisite for the composite FK is missing"
+
+
+def test_new_columns_and_constraint_carry_comments(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.attname, col_description(a.attrelid, a.attnum)
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            WHERE c.relname = 'wardrobe_item_wears' AND a.attname IN ('occasion_key', 'outfit_id')
+            """
+        )
+        col_comments = dict(cur.fetchall())
+
+        cur.execute(
+            "SELECT obj_description(oid) FROM pg_constraint "
+            "WHERE conname = 'wardrobe_item_wears_one_per_day_per_occasion'"
+        )
+        row = cur.fetchone()
+        constraint_comment = row[0] if row else None
+
+    assert col_comments.get("occasion_key"), "occasion_key is missing its COMMENT"
+    assert col_comments.get("outfit_id"), "outfit_id is missing its COMMENT"
+    assert constraint_comment, "the widened constraint is missing its COMMENT"
+
+
+def test_wear_stats_trigger_still_recomputes_after_the_widening(db_conn: Any) -> None:
+    """008/006's trigger-maintained caches (wear_count/last_worn_at/
+    cost_per_wear) must be unchanged in shape and behaviour under the
+    widened constraint (AC #5, BL-004)."""
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        item_id = _insert_wardrobe_item(cur, owner, purchase_price=1000)
+        cur.execute(
+            "INSERT INTO wardrobe_item_wears (item_id, user_id, worn_on) "
+            "VALUES (%s, %s, CURRENT_DATE) RETURNING id",
+            (item_id, owner),
+        )
+        (wear_id,) = cur.fetchone()
+
+        cur.execute(
+            "SELECT wear_count, last_worn_at, cost_per_wear FROM wardrobe_items WHERE id = %s",
+            (item_id,),
+        )
+        after_insert = cur.fetchone()
+
+        cur.execute("DELETE FROM wardrobe_item_wears WHERE id = %s", (wear_id,))
+        cur.execute(
+            "SELECT wear_count, last_worn_at, cost_per_wear FROM wardrobe_items WHERE id = %s",
+            (item_id,),
+        )
+        after_delete = cur.fetchone()
+
+    assert after_insert[0] == 1
+    assert after_insert[1] is not None
+    assert after_insert[2] == 1000
+    assert after_delete == (0, None, 1000)

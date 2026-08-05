@@ -242,3 +242,15 @@ export const WEAR_INVALID_DATE_MESSAGE = 'Enter a valid date as DD/MM/YYYY';
 
 export const NO_WEARS_HEADING = 'Never worn';
 export const NO_WEARS_SUBTEXT = 'Log a wear to start tracking cost per wear.';
+
+// --- SS-035 (Occasion-Aware Wear History) ---
+// Per docs/tickets/SS-035-design.md §4's "Concrete values" -- transcribed
+// verbatim, matching the tone of the WEAR_* block above.
+
+export const WEAR_OCCASION_FIELD_LABEL = 'Occasion (optional)';
+export const WEAR_OCCASION_NONE_LABEL = 'No occasion';
+export const WEAR_OCCASION_NONE_CHIP_LABEL = 'Any occasion';
+export const WEAR_DUPLICATE_DATE_OCCASION_MESSAGE =
+  'A wear is already logged for that date and occasion';
+export const WEAR_OCCASIONS_UNAVAILABLE_MESSAGE =
+  "Couldn't load occasions. You can still log this wear without one.";
