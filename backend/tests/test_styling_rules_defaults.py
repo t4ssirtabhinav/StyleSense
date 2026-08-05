@@ -49,3 +49,24 @@ def test_category_slot_values_are_one_of_the_six_known_slots() -> None:
 def test_category_formality_values_within_0_to_10_range() -> None:
     for value in CATEGORY_FORMALITY.values():
         assert 0 <= value <= 10
+
+
+# ---------------------------------------------------------------------------
+# SS-037 Bug 3 -- dupatta attachability data change
+# ---------------------------------------------------------------------------
+
+
+def test_ceremony_festival_religious_preferred_accessories_include_ethnic_dupatta() -> None:
+    for kind in ("ceremony", "festival", "religious"):
+        categories = DEFAULT_STYLING_RULES_BY_KIND[kind].preferred_accessory_categories
+        assert categories is not None
+        assert "accessory_jewellery" in categories
+        assert "ethnic_dupatta" in categories
+
+
+def test_other_kinds_preferred_accessories_unchanged() -> None:
+    """Regression guard: the 6 kinds untouched by SS-037's Bug 3 fix keep
+    preferred_accessory_categories unset (None)."""
+    untouched_kinds = ("everyday", "travel", "social", "milestone", "professional", "sport")
+    for kind in untouched_kinds:
+        assert DEFAULT_STYLING_RULES_BY_KIND[kind].preferred_accessory_categories is None

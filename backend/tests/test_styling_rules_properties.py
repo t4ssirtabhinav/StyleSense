@@ -92,7 +92,14 @@ _white_item_strategy = st.builds(
     WardrobeItemInput,
     id=st.uuids().map(str),
     category=st.sampled_from(_HERO_CATEGORIES),
-    color_primary=st.sampled_from(["#FFFFFF", "#FFFEFE", "#FEFEFE", "#FFFFFE"]),
+    # SS-037: mixed hex-near-white and named/unparsable colour strings --
+    # both must be excluded at wedding_guest (fail-closed, see
+    # _item_is_hard_excluded_white). "white"/"off white"/"ivory"/"snow" are
+    # exactly the kind of named-colour value 001_initial.sql:52 documents as
+    # a legal color_primary value ("hex or named colour").
+    color_primary=st.sampled_from(
+        ["#FFFFFF", "#FFFEFE", "#FEFEFE", "#FFFFFE", "white", "off white", "ivory", "snow"]
+    ),
     wear_count=st.integers(min_value=0, max_value=10),
 )
 
@@ -106,6 +113,11 @@ _all_white_wardrobe_strategy = st.lists(
 def test_property_wedding_guest_white_rule_holds_across_random_colors(
     wardrobe: list[WardrobeItemInput],
 ) -> None:
+    """SS-037: _white_item_strategy now generates a mix of hex-near-white AND
+    named/unparsable colour strings ("white", "off white", "ivory", "snow")
+    -- this property holding across that mixed input space is the property-
+    test equivalent of the fixed-example
+    test_wedding_guest_excludes_named_colour_string_literal_white."""
     occasion = OccasionStylingInput(key="wedding_guest", kind="ceremony", formality=9)
     result = generate_candidates(wardrobe, occasion, as_of=_AS_OF)
     hero_ids = {item.id for item in wardrobe if item.category in _HERO_CATEGORIES}
