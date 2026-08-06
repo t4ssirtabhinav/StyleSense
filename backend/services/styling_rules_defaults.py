@@ -90,6 +90,15 @@ assert set(CATEGORY_FORMALITY) == set(_WARDROBE_CATEGORIES), (
 # A literal, exhaustive dict over the 9 `kind` values -- not a function, so a
 # missing kind is a KeyError at import time / a test failure, not a silent
 # runtime default.
+#
+# SS-037: no kind below sets `outerwear_required`. Deciding which occasion
+# kinds genuinely "expect a layer" (travel? professional in a cold-weather
+# context?) is real product/stylist judgment this fix-pass deliberately does
+# not invent wholesale -- same posture BL-097 already takes toward authoring
+# real per-occasion styling_rules content (tracked as BL-129). The field and
+# its gap-flag/completeness-score wiring in styling_rules_engine.py are fully
+# functional today via an explicit override; only the live defaults are
+# unset.
 DEFAULT_STYLING_RULES_BY_KIND: dict[str, StylingRulesOverride] = {
     "everyday": StylingRulesOverride(
         required_base="either", footwear_required=True, formality_tolerance=3
@@ -119,21 +128,21 @@ DEFAULT_STYLING_RULES_BY_KIND: dict[str, StylingRulesOverride] = {
         required_base="either",
         footwear_required=True,
         preferred_footwear_categories=["footwear_ethnic", "footwear_formal"],
-        preferred_accessory_categories=["accessory_jewellery"],
+        preferred_accessory_categories=["accessory_jewellery", "ethnic_dupatta"],
         formality_tolerance=1,
     ),
     "festival": StylingRulesOverride(
         required_base="either",
         footwear_required=True,
         preferred_footwear_categories=["footwear_ethnic", "footwear_formal"],
-        preferred_accessory_categories=["accessory_jewellery"],
+        preferred_accessory_categories=["accessory_jewellery", "ethnic_dupatta"],
         formality_tolerance=1,
     ),
     "religious": StylingRulesOverride(
         required_base="either",
         footwear_required=True,
         preferred_footwear_categories=["footwear_ethnic", "footwear_formal"],
-        preferred_accessory_categories=["accessory_jewellery"],
+        preferred_accessory_categories=["accessory_jewellery", "ethnic_dupatta"],
         formality_tolerance=1,
     ),
 }

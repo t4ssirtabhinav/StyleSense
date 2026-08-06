@@ -101,6 +101,7 @@ class StylingRulesOverride(BaseModel):
 
     required_base: RequiredBase | None = None
     footwear_required: bool | None = None
+    outerwear_required: bool | None = None
     preferred_footwear_categories: list[str] | None = None
     preferred_accessory_categories: list[str] | None = None
     excluded_color_families: list[str] | None = None

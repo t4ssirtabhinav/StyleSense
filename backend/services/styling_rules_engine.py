@@ -28,6 +28,35 @@ Colour harmony (`_hue_distance_score`) and formality-distance scoring are
 v1 heuristics -- an inference, not a verified colour-theory/stylist standard.
 Real quality validation is tracked by `BL-077` (Epic 3's unrun AI eval), not
 this ticket's to run.
+
+SS-037 (v0 fix pass) closed the "which outfits are even expressible" half of
+SS-027's known holes (named-colour white guard, outerwear assembly, dupatta
+attachability). The following gaps are DELIBERATELY left unfixed here --
+named so a future reader does not re-derive them as new findings:
+
+- Footwear/accessory (and now outerwear) selection is a function of the item
+  alone, never of the base -- the same shoe/jacket/accessory can appear on
+  every candidate. Fixed by Engine v2 stage (2) (wide search) + stage (4)
+  (MMR portfolio diversity).
+- Colour is absent from the per-slot capping formula (`MAX_ITEMS_PER_SLOT`
+  capping happens before `_colour_harmony_score` is ever called). Fixed by
+  Engine v2 stage (2).
+- `_colour_harmony_score` is star-topology (everything compared to
+  `colored[0]`, order-dependent). Fixed by Engine v2 stage (3).
+- `_hue_distance_score`'s flat `0.75` fallback for a named/unparsable colour
+  degrades general colour-harmony scoring for such items at *any* occasion
+  (distinct from the `wedding_guest` hard-exclusion guard, which SS-037 does
+  fix) -- needs the same hex-to-colour-family binning work as `BL-064`/
+  `BL-079`'s open colour half, deliberately not built here (tracked as
+  `BL-128`).
+- The near-white HSV threshold (`value >= 0.92, saturation <= 0.12`) is
+  untouched -- cream/ivory/gold-cream banarasi may be over-excluded at
+  `wedding_guest`; a cultural/product decision, not a threshold-tuning
+  exercise (`BL-111`).
+- No occasion kind currently sets the new `outerwear_required` flag, so the
+  "missing_outerwear" gap-flag path is real code but currently reachable
+  only via an explicit `styling_rules` override, never a live default
+  (tracked as `BL-129`).
 """
 
 from __future__ import annotations
@@ -146,15 +175,36 @@ def generate_candidates(
             # gap flag (raw ticket's own edge case).
             gap_flags.append("missing_footwear")
 
+        outerwear_options = ranked_slots["outerwear"]
+        if outerwear_options:
+            # Mirrors the footwear pattern directly above: attach the top-ranked
+            # item whenever the wardrobe has one, unconditionally -- exactly like
+            # footwear is attached regardless of footwear_required. The flag only
+            # gates the ABSENCE case below, matching footwear_required's existing
+            # role. ranked_slots["outerwear"] is already sorted by rank_key (item
+            # alone) at line 119, so [0] is deterministic; it carries the same
+            # known non-determinism as footwear/accessory selection across bases
+            # (Engine v2's job -- see module docstring), not a new gap.
+            items.append(outerwear_options[0])
+        elif rules.outerwear_required:
+            gap_flags.append("missing_outerwear")
+
         if preferred_accessory:
-            accessory_options = [
-                i for i in ranked_slots["accessory"] if i.category in preferred_accessory
-            ]
-            if accessory_options:
-                best_accessory = sorted(
-                    accessory_options, key=lambda i: (-accessory_key(i), i.id)
-                )[0]
-                items.append(best_accessory)
+            for category in sorted(preferred_accessory):
+                # One best item per preferred category, not one overall -- lets a
+                # ceremony/festival/religious candidate carry a dupatta AND
+                # jewellery simultaneously (raw ticket AC). sorted() over the set
+                # gives deterministic category iteration order; the accessory_key
+                # tiebreak within each category (score desc, id asc) is already
+                # deterministic.
+                category_options = [
+                    i for i in ranked_slots["accessory"] if i.category == category
+                ]
+                if category_options:
+                    best_in_category = sorted(
+                        category_options, key=lambda i: (-accessory_key(i), i.id)
+                    )[0]
+                    items.append(best_in_category)
 
         assembled.append((items, gap_flags))
 
@@ -438,6 +488,12 @@ def _category_completeness_score(
             components.append(0.2)
     else:
         components.append(1.0 if footwear_present else 0.9)
+    if rules.outerwear_required:
+        outerwear_present = any(
+            item.category is not None and CATEGORY_SLOT[item.category] == "outerwear"
+            for item in items
+        )
+        components.append(1.0 if outerwear_present else 0.2)
     return sum(components) / len(components)
 
 
@@ -487,8 +543,19 @@ def _is_near_white(hex_color: str) -> bool:
 
 
 def _item_is_hard_excluded_white(item: WardrobeItemInput) -> bool:
+    """Fails CLOSED, not open (SS-037): an item whose colour cannot be
+    parsed as 3/6-digit hex -- a named colour such as "white", "off
+    white", "ivory", or any other unparsable string -- is excluded
+    rather than silently passed through. This function is only ever
+    called when the occasion already applies a hard colour exclusion
+    (see generate_candidates's "white" in effective_excluded gate), so
+    an unknown colour here means "cannot rule out white," not "assume
+    not white." A hex colour is still excluded only by the real
+    near-white HSV test."""
     if item.color_primary is None:
         return False
+    if _hex_to_hsv(item.color_primary) is None:
+        return True
     return _is_near_white(item.color_primary)
 
 
