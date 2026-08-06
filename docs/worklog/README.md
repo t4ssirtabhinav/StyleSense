@@ -4,6 +4,18 @@ Each ticket run through the 4-phase pipeline (architect → developer → qa →
 
 **Keep entries tight.** A worklog is a pointer to the durable artifacts (the design doc, the git diff, the PR body), not a re-narration of them. Each phase logs: its verdict, the load-bearing decisions and any deviations, and backlog deltas (`BL-XXX` added/resolved) — a handful of lines, not a file-by-file walkthrough. The full detail already lives in the design doc (Architect), the diff + PR (Developer/DevOps), and QA's AC table. Don't duplicate it here. Note the ticket's `Risk:` lane (from the design doc) in the Architect entry so a reader knows whether it ran full-lane or fast-lane.
 
+## Checkpoint markers — how an interrupted phase resumes
+
+A phase cut off mid-run (usually a usage limit) used to lose everything: files sat on disk with no commit and no worklog entry, so the next `/ticket` run treated the phase as never-started and redid it. Phases now leave a **checkpoint marker** behind while they work, and remove it when they finish. **A marker still present in a worklog means that phase was interrupted and needs resuming — not that it's done.**
+
+| Marker | Written by | Means |
+|--------|-----------|-------|
+| `### Developer — IN PROGRESS (date)` + unit checklist | Developer, at phase start | Ticked units are built and committed as `wip(SS-XXX): ...`. Resume from the first unticked item. |
+| `### QA — GATES (date, HEAD=<sha>)` | QA, right after its gate run | Those gate results are valid as long as `HEAD` still matches — a resumed QA reuses them instead of re-running the whole suite. |
+| `<!-- IN PROGRESS -->` in `docs/tickets/SS-XXX-design.md` | Architect, at first write | The design doc is incomplete; sections are appended as they're finished. Resume by appending, don't rewrite. |
+
+Each phase **replaces its own marker with its final entry** on completion, so a finished ticket's worklog carries no markers. DevOps refuses to run if it finds one dangling — that state means an earlier phase never finished. `git log --oneline` on the feature branch is the cross-check: it shows what actually landed, versus what the worklog says was reported.
+
 | Ticket | Title                                  | Architect | Developer | QA        | DevOps              |
 |--------|-----------------------------------------|-----------|-----------|-----------|----------------------|
 | SS-008 | Design System Foundation (UI Kit)       | done — deps + colour gaps flagged | done — all checks green | PASS (manual verification done, 2 bugs found+fixed) | merged (PR #9) |
