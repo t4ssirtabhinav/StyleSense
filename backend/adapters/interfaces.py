@@ -231,6 +231,94 @@ class IWearHistoryRepository(ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class GarmentTypeRow:
+    """(SS-034/SS-038) One raw ``garment_types`` row, as fetched -- the
+    adapter layer's shape, not the pure-scoring layer's. ``GarmentRegistryAdapter``
+    (``services/garment_registry_adapter.py``) maps this onto
+    ``engine_v2_types.GarmentAttributes`` (which folds in the 6-value
+    ``assembly_slot`` and pulls ``volume_class`` out of ``styling_rules``)."""
+
+    key: str
+    slot: str
+    layer: int
+    register: tuple[str, ...]
+    base_formality: int
+    pairs_with: tuple[str, ...]
+    requires_with: tuple[str, ...]
+    excludes_with: tuple[str, ...]
+    styling_rules: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GarmentRegistrySnapshot:
+    """(SS-034/SS-038) An immutable point-in-time read of the
+    ``garment_types``/``garment_type_aliases`` registry. ``rows`` is keyed by
+    ``garment_types.key``; ``aliases`` maps ``garment_type_aliases.alias ->
+    garment_key``. Only ``is_active`` rows are ever fetched."""
+
+    rows: dict[str, GarmentTypeRow] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
+
+
+class IGarmentRegistryRepository(ABC):
+    """(SS-038) ALWAYS uses ``service_role`` -- see
+    ``adapters/garment_registry_repository.py``'s module docstring for why
+    this deliberately breaks the "never service_role" pattern most other
+    repositories in this file follow (mirrors ``IAppConfigRepository``'s
+    precedent): ``garment_types`` is non-user-owned reference data, its RLS
+    policy requires only ``auth.role() = 'authenticated'`` (no per-user
+    ownership), and ``GarmentRegistryAdapter.get_garment_attributes`` must be
+    callable with no ``jwt`` in hand, inside the hot scoring loop.
+
+    Raises on transport failure -- ``GarmentRegistryAdapter`` owns the
+    stale-or-empty-serving fallback policy (mirrors
+    ``OccasionNormalizer.get_registry``)."""
+
+    @abstractmethod
+    async def fetch_registry(self) -> GarmentRegistrySnapshot:
+        """Read every active ``garment_types`` row plus every
+        ``garment_type_aliases`` row. No ``jwt`` parameter -- see class
+        docstring."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class FabricAttributes:
+    """(SS-036/SS-038) One ``fabrics`` row's Engine v2-relevant attributes.
+    ``season_affinity is None`` means "no seasonal opinion" (true today for
+    ``silk``/``khadi``, ``BL-125``'s flagged rows) -- never treat that as
+    "matches no season", see ``engine_v2_attribute_scoring.fabric_weather_score``.
+
+    Defined here (not ``engine_v2_types.py``) so ``IFabricRegistryRepository``
+    below can reference it without ``adapters/`` importing from ``services/``
+    -- this repo's established import direction is ``services -> adapters``,
+    never the reverse. ``engine_v2_types.py`` re-exports this name so callers
+    in ``services/`` never need to know it physically lives here."""
+
+    key: str
+    weight: str | None
+    breathability: int | None
+    season_affinity: tuple[str, ...] | None
+
+
+class IFabricRegistryRepository(ABC):
+    """(SS-038) ALWAYS uses ``service_role`` -- same justification as
+    ``IGarmentRegistryRepository`` above (non-user-owned reference data,
+    ``authenticated_read_fabrics`` RLS policy has no per-user ownership).
+
+    Raises on transport failure -- callers (``engine_v2.py``) degrade this to
+    an empty dict on failure, since a per-request plain fetch (not
+    TTL-cached, unlike the garment registry -- see
+    ``adapters/fabric_registry_repository.py``'s module docstring) is cheap
+    enough to just retry next request."""
+
+    @abstractmethod
+    async def fetch_all(self) -> dict[str, FabricAttributes]:
+        """Return {key: FabricAttributes} for every active ``fabrics`` row."""
+        raise NotImplementedError
+
+
 class IWardrobeRepository(ABC):
     """Never modify this signature to fit a new caller -- add a new method
     or a new adapter instead (Open/Closed, per CLAUDE.md)."""

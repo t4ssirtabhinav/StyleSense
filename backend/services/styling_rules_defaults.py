@@ -214,3 +214,82 @@ RULE_WEIGHTS: dict[str, float] = {
 }
 
 assert abs(sum(RULE_WEIGHTS.values()) - 1.0) < 1e-9, "RULE_WEIGHTS must sum to 1.0"
+
+# ---------------------------------------------------------------------------
+# SS-038 -- Engine v2 constants
+# ---------------------------------------------------------------------------
+
+# `garment_types.slot` (12 CLOSED structural values, transcribed verbatim
+# from supabase/migrations/014_garment_types_registry.sql's `slot` CHECK)
+# mapped onto the engine's existing 6-value assembly vocabulary
+# (top/bottom/one_piece/outerwear/footwear/accessory). An Architect
+# inference (the proposal never specifies this mapping), flagged as such --
+# `set` -> `one_piece` is the conservative choice pending BL-116's undecided
+# item-level set-representation.
+GARMENT_SLOT_TO_ASSEMBLY_SLOT: dict[str, str] = {
+    "torso_base": "top",
+    "legs": "bottom",
+    "full_body": "one_piece",
+    "set": "one_piece",
+    "torso_mid": "outerwear",
+    "feet": "footwear",
+    "drape": "accessory",
+    "head": "accessory",
+    "neck": "accessory",
+    "waist": "accessory",
+    "wrist": "accessory",
+    "carry": "accessory",
+}
+
+_GARMENT_SLOTS: tuple[str, ...] = (
+    "head",
+    "torso_base",
+    "torso_mid",
+    "legs",
+    "full_body",
+    "feet",
+    "neck",
+    "waist",
+    "wrist",
+    "carry",
+    "drape",
+    "set",
+)
+assert set(GARMENT_SLOT_TO_ASSEMBLY_SLOT) == set(_GARMENT_SLOTS), (
+    "GARMENT_SLOT_TO_ASSEMBLY_SLOT must cover every garment_types.slot CHECK value exactly"
+)
+
+# Search-breadth constants (design doc's "Concrete values" -- top of the
+# ticket's own stated 3-5 range for top_n_per_remaining_slot, more
+# exploration bias, cheap given Python's speed at this scale).
+CANDIDATE_SEARCH_TOP_K_BASES = 200
+CANDIDATE_SEARCH_TOP_N_PER_REMAINING_SLOT = 5
+CANDIDATE_SEARCH_COLOUR_WEIGHT = 0.20
+
+# Portfolio constants. Plain module constants (not app_config) so SS-039's
+# effort dial can supersede them with app_config reads without touching call
+# sites -- named exactly this way so SS-039's Architect pass can find them
+# by name.
+DEFAULT_MMR_LAMBDA = 0.75
+DEFAULT_SCORE_FLOOR = 0.5
+DEFAULT_PORTFOLIO_SIZE_RANGE: tuple[int, int] = (5, 8)
+DEFAULT_MAX_EXPLORATION = 2
+
+# Architect-assigned, unvalidated -- same flag as v0's RULE_WEIGHTS, folds
+# into BL-077's future eval; must sum to 1.0.
+ENGINE_V2_RULE_WEIGHTS: dict[str, float] = {
+    "formality_fit": 0.20,
+    "category_completeness": 0.12,
+    "colour_harmony": 0.15,
+    "volume_balance": 0.08,
+    "register_coherence": 0.08,
+    "fabric_weather": 0.05,
+    "wear_recency": 0.08,
+    "novelty": 0.12,
+    "occasion_tag_bonus": 0.08,
+    "season_fit": 0.04,
+}
+
+assert abs(sum(ENGINE_V2_RULE_WEIGHTS.values()) - 1.0) < 1e-9, (
+    "ENGINE_V2_RULE_WEIGHTS must sum to 1.0"
+)
