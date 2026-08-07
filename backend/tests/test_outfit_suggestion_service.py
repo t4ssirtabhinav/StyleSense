@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -36,6 +37,16 @@ class _FakeProvider(IStylingProvider):
             is_personalized=preferences.styles is not None,
             source="mock",
         )
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, object]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        return NarratedPortfolioResult(narrations=[], language="en", source="rules_only")
 
 
 class _AlwaysAllowRateLimiter(RateLimiter):

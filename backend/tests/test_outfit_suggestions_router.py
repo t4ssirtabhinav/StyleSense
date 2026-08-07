@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from ai.adapters.mock_styling_adapter import MockStylingAdapter
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -52,6 +53,16 @@ class _FakeCallTrackingProvider(IStylingProvider):
             is_personalized=True,
             source="mock",
         )
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, object]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        return NarratedPortfolioResult(narrations=[], language="en", source="rules_only")
 
 
 def teardown_function() -> None:
@@ -129,6 +140,18 @@ class _CallCountingMockAdapter(IStylingProvider):
     ) -> OutfitSuggestionResult:
         self.call_count += 1
         return await self._delegate.suggest_outfits(preferences, max_suggestions=max_suggestions)
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, object]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        return await self._delegate.narrate_candidates(
+            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+        )
 
 
 def test_mock_provider_invoked_exactly_once_after_request_completes() -> None:

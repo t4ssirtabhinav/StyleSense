@@ -14,9 +14,13 @@ design.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
-from ai.ports.interfaces import OutfitSuggestionResult, StylePreferencesInput
+from ai.ports.interfaces import (
+    NarratedPortfolioResult,
+    OutfitSuggestionResult,
+    StylePreferencesInput,
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,15 @@ class MeteredStylingProvider(Protocol):
         *,
         max_suggestions: int = 5,
     ) -> tuple[OutfitSuggestionResult, StylingCallMetrics]: ...
+
+    async def narrate_candidates_with_metrics(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]: ...
 
 
 def is_effectively_empty(preferences: StylePreferencesInput) -> bool:

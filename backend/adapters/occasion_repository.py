@@ -43,7 +43,12 @@ class SupabaseOccasionRepository(IOccasionRepository):
 
         occasions_response = (
             await client.table("occasions")
-            .select("key, label, badge_color, kind, parent_key, sort_order")
+            # (SS-020) widened to include kind/formality/styling_rules --
+            # no schema change, these columns already exist (SS-025). Needed
+            # because nothing shipped before this ticket could turn "an
+            # occasion key" into the kind/formality/styling_rules triple
+            # OccasionStylingInput requires.
+            .select("key, label, badge_color, kind, formality, styling_rules, parent_key, sort_order")
             .eq("is_active", True)
             .order("sort_order", desc=False)
             .execute()
@@ -60,4 +65,9 @@ class SupabaseOccasionRepository(IOccasionRepository):
             aliases={str(row["alias"]): str(row["occasion_key"]) for row in alias_rows},
             labels={str(row["key"]): str(row["label"]) for row in occasion_rows},
             badge_colors={str(row["key"]): str(row["badge_color"]) for row in occasion_rows},
+            kinds={str(row["key"]): str(row["kind"]) for row in occasion_rows},
+            formalities={str(row["key"]): int(row["formality"]) for row in occasion_rows},
+            styling_rules={
+                str(row["key"]): dict(row.get("styling_rules") or {}) for row in occasion_rows
+            },
         )

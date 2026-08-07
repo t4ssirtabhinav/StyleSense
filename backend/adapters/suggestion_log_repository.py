@@ -254,3 +254,36 @@ class SupabaseSuggestionLogRepository(ISuggestionLogRepository):
                 extra={"user_id": user_id, "error": str(exc)},
             )
             return []
+
+    async def update_session_outcome(
+        self,
+        *,
+        session_id: str,
+        cost_incurred: bool,
+        request_id: str | None,
+        latency_ms: int | None,
+    ) -> None:
+        """(SS-020) Best-effort update of a session row already written by
+        ``EngineV2._log_session`` -- reflects the narration leg's real
+        outcome (cache hit / LLM call / degrade) without reopening Engine
+        v2's own "no AI provider calls" boundary. MUST NEVER RAISE."""
+        try:
+            client = await _client()
+            payload: dict[str, Any] = {"cost_incurred": cost_incurred}
+            if request_id is not None:
+                payload["request_id"] = request_id
+            if latency_ms is not None:
+                payload["latency_ms"] = latency_ms
+            if cost_incurred:
+                # cost_incurred=True clears the earlier rules_only reason --
+                # the CHECK constraint pairing cost_incurred/zero_cost_reason
+                # (design §6.3) requires this, not just good hygiene.
+                payload["zero_cost_reason"] = None
+            await client.table("suggestion_sessions").update(payload).eq(
+                "id", session_id
+            ).execute()
+        except Exception as exc:
+            logger.warning(
+                "suggestion_session_outcome_update_failed",
+                extra={"session_id": session_id, "error": str(exc)},
+            )

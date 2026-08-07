@@ -131,6 +131,13 @@ class _FakeRepository(IWardrobeRepository):
             self.deleted_item_ids.append(item_id)
         return self.delete_returns
 
+    # SS-020 mechanical addition: same ABC-extension trap as above.
+    async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        return []
+
+    async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
 
 class _FakeRateLimiter:
     def __init__(self, allowed: bool = True) -> None:

@@ -44,6 +44,15 @@ class OccasionRegistrySnapshot:
     aliases: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
     badge_colors: dict[str, str] = field(default_factory=dict)
+    # (SS-020) Additive -- nothing shipped before this ticket could turn "an
+    # occasion key" into the kind/formality/styling_rules triple
+    # OccasionStylingInput requires. Backward-compatible (default_factory
+    # dict, no existing caller reads them so none breaks). Keyed by
+    # occasion key, populated from occasions.kind/formality/styling_rules
+    # (columns that already exist -- SS-025 -- no schema change).
+    kinds: dict[str, str] = field(default_factory=dict)
+    formalities: dict[str, int] = field(default_factory=dict)
+    styling_rules: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class IOccasionRepository(ABC):
@@ -178,6 +187,25 @@ class ISuggestionLogRepository(ABC):
         first. Returns [] on failure -- 'no history' degrades to 'no
         repetition penalty', never to a failed suggestion request. MUST
         NEVER RAISE."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_session_outcome(
+        self,
+        *,
+        session_id: str,
+        cost_incurred: bool,
+        request_id: str | None,
+        latency_ms: int | None,
+    ) -> None:
+        """(SS-020) ``EngineV2._log_session`` always writes
+        ``cost_incurred=False, zero_cost_reason='rules_only'`` (correct for
+        Engine v2's own scope, since it never calls an AI provider) --
+        SS-020's narration call, when it happens, is real spend that the
+        same session row should reflect. Called once the narration outcome
+        (cache hit / LLM call / degrade) is known, rather than reopening
+        Engine v2's "no AI provider calls" boundary. MUST NEVER RAISE, same
+        posture as every other method on this port."""
         raise NotImplementedError
 
 
@@ -462,6 +490,28 @@ class IWardrobeRepository(ABC):
         no separate call needed."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        """(SS-020) RLS-scoped via the caller's own JWT (mirrors every
+        other method on this port). Selects ``id, category, color_primary,
+        color_secondary, pattern, fabric, occasion_tags, season_tags,
+        wear_count, last_worn_at`` for the caller's own rows -- fetches ALL
+        rows regardless of ``processing_status`` (Open Question #7): Engine
+        v2's own eligibility stage already excludes items missing
+        ``category``/``color_primary``, counting them in the gap report, so
+        including untagged items is safe (excluded downstream, not silently
+        dropped) and the gap-report count becomes a useful "how much of your
+        wardrobe isn't tagged yet" signal."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
+        """(SS-020) Selects ``users.style_preferences``, RLS-scoped, mirrors
+        ``get_plan_tier``'s existing shape. Returns ``None`` when the row/
+        column is absent -- caller degrades to empty preferences, never
+        raises."""
+        raise NotImplementedError
+
 
 # ---------------------------------------------------------------------------
 # SS-029 -- IRateLimiter / ICostLedger.
@@ -552,4 +602,59 @@ class ICostLedger(ABC):
     async def breakdown(self, *, user_id: str, since: date, until: date) -> list[dict[str, Any]]:
         """Reads ``ai_cost_breakdown``. May raise -- this is an
         operator/BI read path, not on any user request path."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# SS-020 -- ISuggestionNarrationCacheRepository.
+#
+# The combination-signature cache (design §3/§4): a NARRATION-ONLY cache --
+# Engine v2's own per-user personalisation is never cached, only the LLM's
+# prose for a coarsened, salted, cross-user-shareable candidate-attribute
+# signature. No user_id/item-id column at all, by construction (the
+# structural half of "not reversible into another user's wardrobe" -- the
+# other half is compute_narration_signature never hashing raw item
+# attributes or ids).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CachedNarration:
+    """One cache hit's payload. ``narrations_by_signature_index`` maps the
+    candidate's position in the (sorted, order-independent) signature array
+    to its cached rationale string -- never item ids, never user_id."""
+
+    narrations_by_signature_index: dict[int, str]
+    language: str
+
+
+class ISuggestionNarrationCacheRepository(ABC):
+    """ALWAYS uses ``service_role`` (mirrors ``IAppConfigRepository``/
+    ``ISuggestionLogRepository`` precedent) -- this table has no per-user
+    ownership at all, by design (that's the point, not a shortcut: see
+    ``suggestion_narration_cache_repository.py``'s module docstring).
+
+    Both methods MUST NEVER RAISE -- a cache failure degrades to "always
+    call the LLM," never to a failed request."""
+
+    @abstractmethod
+    async def get(self, *, signature_hash: str) -> CachedNarration | None:
+        """Returns ``None`` on a cache miss OR any failure -- the caller
+        cannot distinguish the two, by design (both degrade identically:
+        call the LLM). MUST NEVER RAISE."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def put(
+        self,
+        *,
+        signature_hash: str,
+        occasion_key: str,
+        engine_version: str,
+        narrations_by_signature_index: dict[int, str],
+        language: str,
+        ttl_seconds: int,
+    ) -> None:
+        """Best-effort write -- never blocks the caller's response on a
+        cache-write failure. MUST NEVER RAISE."""
         raise NotImplementedError

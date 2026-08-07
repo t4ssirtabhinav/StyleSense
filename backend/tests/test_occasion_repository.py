@@ -20,6 +20,8 @@ OCCASION_ROWS = [
         "label": "Office",
         "badge_color": "office",
         "kind": "professional",
+        "formality": 6,
+        "styling_rules": {},
         "parent_key": None,
         "sort_order": 1,
     },
@@ -28,6 +30,8 @@ OCCASION_ROWS = [
         "label": "Casual",
         "badge_color": "casual",
         "kind": "everyday",
+        "formality": 2,
+        "styling_rules": {"footwear_required": True},
         "parent_key": None,
         "sort_order": 2,
     },
@@ -157,6 +161,9 @@ async def test_maps_rows_into_a_snapshot_preserving_sort_order(
     assert snapshot.aliases == {"wedding": "wedding_guest", "date": "date_night"}
     assert snapshot.labels == {"office": "Office", "casual": "Casual"}
     assert snapshot.badge_colors == {"office": "office", "casual": "casual"}
+    assert snapshot.kinds == {"office": "professional", "casual": "everyday"}
+    assert snapshot.formalities == {"office": 6, "casual": 2}
+    assert snapshot.styling_rules == {"office": {}, "casual": {"footwear_required": True}}
 
 
 async def test_zero_rows_resolve_to_an_empty_snapshot_not_an_error(

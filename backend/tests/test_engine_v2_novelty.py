@@ -47,6 +47,11 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
             return []  # degrades, per the port contract -- never raises
         return self._impressions
 
+    async def update_session_outcome(
+        self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
+    ) -> None:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # compute_novelty_score

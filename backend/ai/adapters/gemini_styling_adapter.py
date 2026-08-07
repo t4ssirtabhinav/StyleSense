@@ -54,9 +54,16 @@ from ai.adapters.styling_call import (
     StylingCallMetrics,
     is_effectively_empty,
 )
-from ai.adapters.styling_prompt import StylingPromptBuilder, build_styling_prompt
+from ai.adapters.styling_prompt import (
+    NarrationPromptBuilder,
+    StylingPromptBuilder,
+    build_narration_prompt,
+    build_styling_prompt,
+)
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedCandidate,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -67,6 +74,10 @@ logger = logging.getLogger(__name__)
 
 class _SuggestionsPayload(BaseModel):
     suggestions: list[OutfitSuggestionItem]
+
+
+class _NarrationsPayload(BaseModel):
+    narrations: list[NarratedCandidate]
 
 
 class GeminiStylingAdapter(IStylingProvider):
@@ -82,12 +93,14 @@ class GeminiStylingAdapter(IStylingProvider):
         timeout_seconds: float = 30.0,
         prompt_builder: StylingPromptBuilder = build_styling_prompt,
         fallback_model: str | None = None,
+        narration_prompt_builder: NarrationPromptBuilder = build_narration_prompt,
     ) -> None:
         self._model = model
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._prompt_builder = prompt_builder
         self._fallback_model = fallback_model
+        self._narration_prompt_builder = narration_prompt_builder
 
     def _get_client(self) -> Any:
         # Lazily constructed, never at import -- CI's dummy env stays
@@ -138,6 +151,155 @@ class GeminiStylingAdapter(IStylingProvider):
                 continue
         assert last_error is not None  # models_to_try is never empty
         raise last_error
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        result, _ = await self.narrate_candidates_with_metrics(
+            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+        )
+        return result
+
+    async def narrate_candidates_with_metrics(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]:
+        prompt = self._narration_prompt_builder(candidates, occasion, preferences, max_suggestions)
+
+        models_to_try = [self._model]
+        if self._fallback_model and self._fallback_model != self._model:
+            models_to_try.append(self._fallback_model)
+
+        last_error: Exception | None = None
+        for model_id in models_to_try:
+            try:
+                return await self._attempt_narration_once(model_id, prompt, max_suggestions)
+            except (
+                ProviderTransientError,
+                ProviderQuotaExhaustedError,
+                ProviderPermanentError,
+                ProviderParseError,
+                ProviderTimeoutError,
+            ) as exc:
+                last_error = exc
+                continue
+        assert last_error is not None  # models_to_try is never empty
+        raise last_error
+
+    async def _attempt_narration_once(
+        self, model_id: str, prompt: str, max_suggestions: int
+    ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]:
+        start = time.perf_counter()
+        try:
+            client = self._get_client()
+        except KeyError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.error(
+                "gemini_narration_missing_api_key",
+                extra={"model": model_id, "latency_ms": latency_ms},
+            )
+            raise ProviderPermanentError("gemini_api_key_missing") from exc
+
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=model_id,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=_NarrationsPayload,
+                    ),
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except TimeoutError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.warning(
+                "gemini_narration_timeout", extra={"model": model_id, "latency_ms": latency_ms}
+            )
+            raise ProviderTimeoutError(
+                f"gemini narration call timed out after {self._timeout_seconds}s"
+            ) from exc
+        except errors.ServerError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.warning(
+                "gemini_narration_server_error",
+                extra={"model": model_id, "latency_ms": latency_ms, "code": exc.code},
+            )
+            raise ProviderTransientError(f"gemini server_error:{exc.code}") from exc
+        except errors.ClientError as exc:
+            latency_ms = _elapsed_ms(start)
+            if exc.code == 429:
+                logger.warning(
+                    "gemini_narration_quota_exhausted",
+                    extra={"model": model_id, "latency_ms": latency_ms},
+                )
+                raise ProviderQuotaExhaustedError(f"gemini client_error:{exc.code}") from exc
+            logger.error(
+                "gemini_narration_client_error",
+                extra={"model": model_id, "latency_ms": latency_ms, "code": exc.code},
+            )
+            raise ProviderPermanentError(f"gemini client_error:{exc.code}") from exc
+
+        latency_ms = _elapsed_ms(start)
+        text = getattr(response, "text", None)
+        if not text:
+            logger.warning(
+                "gemini_narration_empty_response",
+                extra={"model": model_id, "latency_ms": latency_ms},
+            )
+            raise ProviderParseError("empty_or_blocked_response")
+
+        try:
+            payload = json.loads(text)
+            parsed = _NarrationsPayload.model_validate(payload)
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "gemini_narration_parse_failed",
+                extra={"model": model_id, "latency_ms": latency_ms, "error": str(exc)},
+            )
+            raise ProviderParseError("parse_error") from exc
+
+        narrations = parsed.narrations[: max(max_suggestions, 0)]
+        if not narrations:
+            logger.warning(
+                "gemini_narration_zero_narrations",
+                extra={"model": model_id, "latency_ms": latency_ms},
+            )
+            raise ProviderParseError("zero_narrations_after_slicing")
+
+        usage = getattr(response, "usage_metadata", None)
+        tokens_in = int(getattr(usage, "prompt_token_count", 0) or 0)
+        tokens_out = int(getattr(usage, "candidates_token_count", 0) or 0)
+
+        logger.info(
+            "gemini_narration_call_success",
+            extra={
+                "model": model_id,
+                "latency_ms": latency_ms,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+            },
+        )
+
+        result = NarratedPortfolioResult(narrations=narrations, language="en", source="gemini")
+        metrics = StylingCallMetrics(
+            provider="gemini",
+            model=model_id,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+        )
+        return result, metrics
 
     async def _attempt_once(
         self,

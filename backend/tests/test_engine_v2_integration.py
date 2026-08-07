@@ -88,6 +88,11 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
     ) -> list[dict]:
         return []
 
+    async def update_session_outcome(
+        self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
+    ) -> None:
+        return None
+
 
 class _FailingSuggestionLogRepo(ISuggestionLogRepository):
     async def log_session(self, session, impressions):  # type: ignore[no-untyped-def]
@@ -100,6 +105,11 @@ class _FailingSuggestionLogRepo(ISuggestionLogRepository):
         self, *, user_id: str, since: datetime, limit: int = 200
     ) -> list[dict]:
         return []
+
+    async def update_session_outcome(
+        self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
+    ) -> None:
+        return None
 
 
 def _item(id: str, *, category: str = "western_top", color: str = "#8B0000") -> WardrobeItemInput:

@@ -134,3 +134,18 @@ ENGINE_V2_EFFORT_TIER_SPEC: ConfigSpec[EngineV2EffortTierConfig] = ConfigSpec(
     model=EngineV2EffortTierConfig,
     default=EngineV2EffortTierConfig(),
 )
+
+
+class SuggestionNarrationCacheTtlConfig(BaseModel):
+    """(SS-020) TTL for ``suggestion_narration_cache`` rows -- 6h coded
+    default, same "missing/malformed row degrades to a safe default" posture
+    as every other spec in this module."""
+
+    seconds: int = 21600  # 6 hours
+
+
+SUGGESTION_NARRATION_CACHE_TTL_SPEC: ConfigSpec[SuggestionNarrationCacheTtlConfig] = ConfigSpec(
+    key="suggestion_narration_cache_ttl_seconds",
+    model=SuggestionNarrationCacheTtlConfig,
+    default=SuggestionNarrationCacheTtlConfig(),
+)

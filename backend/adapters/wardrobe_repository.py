@@ -175,3 +175,28 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
         client = await _client_for(jwt)
         response = await client.table("wardrobe_items").delete().eq("id", item_id).execute()
         return bool(response.data)
+
+    async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        """(SS-020) Fetches ALL rows regardless of ``processing_status`` --
+        see the port's own docstring for why (Open Question #7)."""
+        client = await _client_for(jwt)
+        response = (
+            await client.table("wardrobe_items")
+            .select(
+                "id, category, color_primary, color_secondary, pattern, "
+                "fabric, occasion_tags, season_tags, wear_count, last_worn_at"
+            )
+            .execute()
+        )
+        return cast(list[dict[str, Any]], response.data or [])
+
+    async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
+        client = await _client_for(jwt)
+        response = (
+            await client.table("users").select("style_preferences").limit(1).execute()
+        )
+        if not response.data:
+            return None
+        first_row = cast(dict[str, Any], response.data[0])
+        prefs = first_row.get("style_preferences")
+        return cast(dict[str, Any] | None, prefs)

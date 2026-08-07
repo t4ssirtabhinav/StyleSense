@@ -14,6 +14,7 @@ from ai.adapters.styling_call import (
 )
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -202,6 +203,19 @@ class _FakeFallback(IStylingProvider):
         if self.raises:
             raise RuntimeError("fallback broke")
         return _fake_result("mock")
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("fallback broke")
+        return NarratedPortfolioResult(narrations=[], language="en", source="rules_only")
 
 
 def _table(failover: dict[str, list[str]] | None = None) -> RoutingTableConfig:
