@@ -78,6 +78,25 @@ class OutfitSuggestionResult(BaseModel):
     source: Literal["mock", "gemini", "claude"] = "mock"
 
 
+class NarratedCandidate(BaseModel):
+    """(SS-020) One LLM-narrated Engine v2 candidate. ``outfit_fingerprint``
+    ties back to ``engine_v2_portfolio.compute_outfit_fingerprint`` -- this
+    is the ONLY way a caller re-associates a narration with its own
+    candidate, never trusting the LLM's own ordering."""
+
+    outfit_fingerprint: str  # ties back to engine_v2_portfolio.compute_outfit_fingerprint
+    rationale: str           # English or Hindi prose, per AC #2
+    rank: int | None = None  # LLM's own re-ranking within the supplied set, if it re-ranks; None = kept input order
+
+
+class NarratedPortfolioResult(BaseModel):
+    """(SS-020) ``IStylingProvider.narrate_candidates``'s return shape."""
+
+    narrations: list[NarratedCandidate]
+    language: Literal["en", "hi"] = "en"
+    source: Literal["mock", "gemini", "claude", "rules_only"] = "rules_only"
+
+
 class IStylingProvider(ABC):
     """Never modify this signature to fit a new provider -- add a new adapter
     class instead (Open/Closed, per CLAUDE.md)."""
@@ -91,6 +110,27 @@ class IStylingProvider(ABC):
     ) -> OutfitSuggestionResult:
         """Must degrade gracefully (generic suggestions, is_personalized=False)
         when preferences is effectively empty, rather than raise."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],  # engine_v2_types.render_candidate_for_prompt(...) output, one dict per candidate, UNCHANGED shape
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        """(SS-020, additive port capability -- same class of change SS-039
+        made to ``IRateLimiter.peek()``) MUST NEVER invent an item id/
+        category not present in ``candidates`` -- this is what makes
+        SS-020's 'no hallucinated item IDs' AC structurally provable (same
+        posture Engine v2 already gives ``ScoredCandidate.item_ids``). MUST
+        NEVER raise -- any SDK/parse/timeout failure is caught and mapped
+        to ``StylingCall``'s existing ``ProviderXxxError`` hierarchy exactly
+        like ``suggest_outfits_with_metrics`` does, so ``StylingRouter``'s
+        chain/failover/degrade logic (unmodified) works identically for
+        this method."""
         raise NotImplementedError
 
 

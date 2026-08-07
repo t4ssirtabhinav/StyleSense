@@ -67,9 +67,16 @@ from ai.adapters.styling_call import (
     StylingCallMetrics,
     is_effectively_empty,
 )
-from ai.adapters.styling_prompt import StylingPromptBuilder, build_styling_prompt
+from ai.adapters.styling_prompt import (
+    NarrationPromptBuilder,
+    StylingPromptBuilder,
+    build_narration_prompt,
+    build_styling_prompt,
+)
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedCandidate,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -98,9 +105,33 @@ _TOOL_INPUT_SCHEMA: dict[str, Any] = {
     "required": ["suggestions"],
 }
 
+_NARRATION_TOOL_NAME = "return_narrated_candidates"
+_NARRATION_TOOL_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "narrations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "outfit_fingerprint": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "rank": {"type": ["integer", "null"]},
+                },
+                "required": ["outfit_fingerprint", "rationale"],
+            },
+        }
+    },
+    "required": ["narrations"],
+}
+
 
 class _SuggestionsPayload(BaseModel):
     suggestions: list[OutfitSuggestionItem]
+
+
+class _NarrationsPayload(BaseModel):
+    narrations: list[NarratedCandidate]
 
 
 class ClaudeStylingAdapter(IStylingProvider):
@@ -116,12 +147,14 @@ class ClaudeStylingAdapter(IStylingProvider):
         timeout_seconds: float = 30.0,
         prompt_builder: StylingPromptBuilder = build_styling_prompt,
         max_tokens: int = 1024,
+        narration_prompt_builder: NarrationPromptBuilder = build_narration_prompt,
     ) -> None:
         self._model = model
         self._client = client
         self._timeout_seconds = timeout_seconds
         self._prompt_builder = prompt_builder
         self._max_tokens = max_tokens
+        self._narration_prompt_builder = narration_prompt_builder
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -277,6 +310,158 @@ class ClaudeStylingAdapter(IStylingProvider):
             is_personalized=not is_effectively_empty(preferences),
             source="claude",
         )
+        metrics = StylingCallMetrics(
+            provider="claude",
+            model=self._model,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+        )
+        return result, metrics
+
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        result, _ = await self.narrate_candidates_with_metrics(
+            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+        )
+        return result
+
+    async def narrate_candidates_with_metrics(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]:
+        prompt = self._narration_prompt_builder(candidates, occasion, preferences, max_suggestions)
+        start = time.perf_counter()
+        try:
+            client = self._get_client()
+        except KeyError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.error(
+                "claude_narration_missing_api_key",
+                extra={"model": self._model, "latency_ms": latency_ms},
+            )
+            raise ProviderPermanentError("claude_api_key_missing") from exc
+
+        try:
+            response = await asyncio.wait_for(
+                client.messages.create(
+                    model=self._model,
+                    max_tokens=self._max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[
+                        {
+                            "name": _NARRATION_TOOL_NAME,
+                            "description": "Return structured narrated outfit candidates as JSON.",
+                            "input_schema": _NARRATION_TOOL_INPUT_SCHEMA,
+                        }
+                    ],
+                    tool_choice={"type": "tool", "name": _NARRATION_TOOL_NAME},
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except TimeoutError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.warning(
+                "claude_narration_timeout",
+                extra={"model": self._model, "latency_ms": latency_ms},
+            )
+            raise ProviderTimeoutError(
+                f"claude narration call timed out after {self._timeout_seconds}s"
+            ) from exc
+        except anthropic.RateLimitError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.warning(
+                "claude_narration_quota_exhausted",
+                extra={"model": self._model, "latency_ms": latency_ms},
+            )
+            raise ProviderQuotaExhaustedError(f"claude status:{exc.status_code}") from exc
+        except anthropic.APIStatusError as exc:
+            latency_ms = _elapsed_ms(start)
+            if exc.status_code >= 500:
+                logger.warning(
+                    "claude_narration_server_error",
+                    extra={
+                        "model": self._model,
+                        "latency_ms": latency_ms,
+                        "status_code": exc.status_code,
+                    },
+                )
+                raise ProviderTransientError(f"claude status:{exc.status_code}") from exc
+            logger.error(
+                "claude_narration_client_error",
+                extra={
+                    "model": self._model,
+                    "latency_ms": latency_ms,
+                    "status_code": exc.status_code,
+                },
+            )
+            raise ProviderPermanentError(f"claude status:{exc.status_code}") from exc
+        except anthropic.APIConnectionError as exc:
+            latency_ms = _elapsed_ms(start)
+            logger.warning(
+                "claude_narration_connection_error",
+                extra={"model": self._model, "latency_ms": latency_ms, "error": str(exc)},
+            )
+            raise ProviderTransientError("claude connection_error") from exc
+
+        latency_ms = _elapsed_ms(start)
+
+        tool_input: dict[str, Any] | None = None
+        for block in getattr(response, "content", None) or []:
+            if getattr(block, "type", None) == "tool_use":
+                tool_input = block.input
+                break
+
+        if tool_input is None:
+            logger.warning(
+                "claude_narration_no_tool_use_block",
+                extra={"model": self._model, "latency_ms": latency_ms},
+            )
+            raise ProviderParseError("no_tool_use_block")
+
+        try:
+            parsed = _NarrationsPayload.model_validate(tool_input)
+        except ValidationError as exc:
+            logger.warning(
+                "claude_narration_parse_failed",
+                extra={"model": self._model, "latency_ms": latency_ms, "error": str(exc)},
+            )
+            raise ProviderParseError("parse_error") from exc
+
+        narrations = parsed.narrations[: max(max_suggestions, 0)]
+        if not narrations:
+            logger.warning(
+                "claude_narration_zero_narrations",
+                extra={"model": self._model, "latency_ms": latency_ms},
+            )
+            raise ProviderParseError("zero_narrations_after_slicing")
+
+        usage = getattr(response, "usage", None)
+        tokens_in = int(getattr(usage, "input_tokens", 0) or 0)
+        tokens_out = int(getattr(usage, "output_tokens", 0) or 0)
+
+        logger.info(
+            "claude_narration_call_success",
+            extra={
+                "model": self._model,
+                "latency_ms": latency_ms,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+            },
+        )
+
+        result = NarratedPortfolioResult(narrations=narrations, language="en", source="claude")
         metrics = StylingCallMetrics(
             provider="claude",
             model=self._model,

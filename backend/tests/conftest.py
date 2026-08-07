@@ -67,3 +67,7 @@ def _baseline_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLOUDFLARE_R2_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("CLOUDFLARE_R2_SECRET_KEY", "test-secret-key")
     monkeypatch.setenv("CLOUDFLARE_R2_BUCKET", "test-bucket")
+    # (SS-020) compute_narration_signature's required HMAC key -- same
+    # "missing env var KeyErrors in CI, not locally" class this fixture
+    # already guards against for the vars above.
+    monkeypatch.setenv("SUGGESTION_CACHE_SALT", "test-cache-salt-do-not-use-in-prod")

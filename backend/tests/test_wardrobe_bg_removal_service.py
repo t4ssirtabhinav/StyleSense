@@ -148,6 +148,13 @@ class _FakeRepository(IWardrobeRepository):
     async def delete_item(self, *, jwt: str, item_id: str) -> bool:
         return True
 
+    # SS-020 mechanical addition: same ABC-extension trap as above.
+    async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        return []
+
+    async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
 
 class _FakeStorage:
     def __init__(self, original_bytes: bytes, fail_put: bool = False) -> None:

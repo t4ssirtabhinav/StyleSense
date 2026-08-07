@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from ai.adapters.mock_styling_adapter import MockStylingAdapter
 from ai.adapters.styling_call import (
@@ -38,7 +38,12 @@ from ai.adapters.styling_call import (
     ProviderTransientError,
     StylingCallMetrics,
 )
-from ai.ports.interfaces import IStylingProvider, OutfitSuggestionResult, StylePreferencesInput
+from ai.ports.interfaces import (
+    IStylingProvider,
+    NarratedPortfolioResult,
+    OutfitSuggestionResult,
+    StylePreferencesInput,
+)
 from services.ai_routing_specs import RouterPolicyConfig, RoutingTableConfig
 from services.provider_quota import estimate_tokens
 
@@ -320,6 +325,171 @@ class StylingRouter(IStylingProvider):
 
         return await self._degrade(preferences, max_suggestions, decision)
 
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        result, _decision = await self.narrate_candidates_with_decision(
+            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+        )
+        return result
+
+    async def narrate_candidates_with_decision(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> tuple[NarratedPortfolioResult, RoutingDecision]:
+        """Reuses the exact chain/failover/quota/timeout/degrade structure
+        ``suggest_outfits_with_decision`` uses -- ``_build_chain``,
+        ``_deadline_exceeded``, ``_log_and_record`` all shared, unchanged."""
+        decision = resolve_route(self._routing_table, self._context)
+        chain = self._build_chain(decision.provider)
+        provider_model = self._provider_model_map()
+
+        start = self._clock()
+        attempt = 0
+        estimated_tokens = estimate_tokens(_estimate_prompt_len(preferences) + len(str(candidates)))
+
+        for provider in chain:
+            if self._deadline_exceeded(start):
+                break
+
+            model = provider_model.get(provider)
+            if model is None:
+                attempt += 1
+                self._log_and_record(
+                    decision=decision,
+                    attempt=attempt,
+                    provider=provider,
+                    model="unknown",
+                    outcome="permanent",
+                    routing_reason=f"{decision.reason}:unknown_provider_in_table",
+                    latency_ms=0,
+                    level=logging.ERROR,
+                )
+                continue
+
+            adapter = self._registry.get(provider, model)
+            if adapter is None:
+                attempt += 1
+                self._log_and_record(
+                    decision=decision,
+                    attempt=attempt,
+                    provider=provider,
+                    model=model,
+                    outcome="permanent",
+                    routing_reason=f"{decision.reason}:unknown_provider",
+                    latency_ms=0,
+                    level=logging.ERROR,
+                )
+                continue
+
+            parse_retries_used = 0
+            while True:
+                if self._deadline_exceeded(start):
+                    return await self._degrade_narration(
+                        candidates, occasion, preferences, max_suggestions, decision
+                    )
+
+                reserved = await self._quota.try_reserve(
+                    provider, estimated_tokens=estimated_tokens
+                )
+                attempt += 1
+                if not reserved:
+                    self._log_and_record(
+                        decision=decision,
+                        attempt=attempt,
+                        provider=provider,
+                        model=model,
+                        outcome="quota",
+                        routing_reason=f"{decision.reason}:quota_exhausted",
+                        latency_ms=0,
+                    )
+                    break  # next provider in chain
+
+                call_start = self._clock()
+                try:
+                    result, metrics = await asyncio.wait_for(
+                        adapter.narrate_candidates_with_metrics(
+                            candidates,
+                            occasion=occasion,
+                            preferences=preferences,
+                            max_suggestions=max_suggestions,
+                        ),
+                        timeout=self._policy.attempt_timeout_seconds,
+                    )
+                except TimeoutError:
+                    latency_ms = int((self._clock() - call_start) * 1000)
+                    self._log_and_record(
+                        decision=decision,
+                        attempt=attempt,
+                        provider=provider,
+                        model=model,
+                        outcome="timeout",
+                        routing_reason=decision.reason,
+                        latency_ms=latency_ms,
+                    )
+                    break  # next provider
+                except ProviderParseError:
+                    latency_ms = int((self._clock() - call_start) * 1000)
+                    self._log_and_record(
+                        decision=decision,
+                        attempt=attempt,
+                        provider=provider,
+                        model=model,
+                        outcome="parse_error",
+                        routing_reason=decision.reason,
+                        latency_ms=latency_ms,
+                    )
+                    parse_retries_used += 1
+                    if parse_retries_used <= self._policy.parse_retry_attempts:
+                        continue  # same-provider retry
+                    break  # next provider
+                except ProviderCallError as exc:
+                    latency_ms = int((self._clock() - call_start) * 1000)
+                    outcome = _OUTCOME_BY_ERROR.get(type(exc), "transient")
+                    level = logging.ERROR if outcome == "permanent" else logging.INFO
+                    self._log_and_record(
+                        decision=decision,
+                        attempt=attempt,
+                        provider=provider,
+                        model=model,
+                        outcome=outcome,
+                        routing_reason=decision.reason,
+                        latency_ms=latency_ms,
+                        level=level,
+                    )
+                    break  # next provider
+                else:
+                    await self._quota.record_usage(
+                        provider, tokens_in=metrics.tokens_in, tokens_out=metrics.tokens_out
+                    )
+                    self._log_and_record(
+                        decision=decision,
+                        attempt=attempt,
+                        provider=provider,
+                        model=metrics.model,
+                        outcome="success",
+                        routing_reason=decision.reason,
+                        latency_ms=metrics.latency_ms,
+                        tokens_in=metrics.tokens_in,
+                        tokens_out=metrics.tokens_out,
+                    )
+                    if self._on_call is not None:
+                        self._on_call(metrics, decision)
+                    return result, decision
+
+        return await self._degrade_narration(
+            candidates, occasion, preferences, max_suggestions, decision
+        )
+
     def _deadline_exceeded(self, start: float) -> bool:
         elapsed = self._clock() - start
         return elapsed + self._policy.attempt_timeout_seconds > self._policy.total_deadline_seconds
@@ -387,6 +557,46 @@ class StylingRouter(IStylingProvider):
                 source="mock",
             )
             return empty_result, decision
+
+    async def _degrade_narration(
+        self,
+        candidates: list[dict[str, Any]],
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+        decision: RoutingDecision,
+    ) -> tuple[NarratedPortfolioResult, RoutingDecision]:
+        """Narration sibling of ``_degrade`` -- calls
+        ``self._fallback.narrate_candidates(...)`` (``MockStylingAdapter`` by
+        default), whose implementation is the rule-based degrade described
+        in ``mock_styling_adapter.py``. This satisfies the AC's "never a
+        hard error to the user" for the narration leg by construction, the
+        same way ``_degrade`` already does for ``suggest_outfits``."""
+        self._log_and_record(
+            decision=decision,
+            attempt=0,
+            provider="none",
+            model="none",
+            outcome="degraded",
+            routing_reason="degraded_all_providers_failed",
+            latency_ms=0,
+            degraded=True,
+            level=logging.WARNING,
+        )
+        try:
+            result = await self._fallback.narrate_candidates(
+                candidates,
+                occasion=occasion,
+                preferences=preferences,
+                max_suggestions=max_suggestions,
+            )
+            return result, decision
+        except Exception:  # noqa: BLE001 - the degrade path itself must never raise
+            logger.exception(
+                "ai_narration_fallback_failed",
+                extra={"request_id": self._context.request_id, "user_id": self._context.user_id},
+            )
+            return NarratedPortfolioResult(narrations=[], language="en", source="rules_only"), decision
 
     def _log_and_record(
         self,

@@ -10,10 +10,13 @@ weighting/reordering pass over what's left.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from ai.adapters.styling_call import is_effectively_empty as _is_effectively_empty
 from ai.ports.interfaces import (
     IStylingProvider,
+    NarratedCandidate,
+    NarratedPortfolioResult,
     OutfitSuggestionItem,
     OutfitSuggestionResult,
     StylePreferencesInput,
@@ -236,6 +239,31 @@ class MockStylingAdapter(IStylingProvider):
             is_personalized=True,
             source="mock",
         )
+
+    async def narrate_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        occasion: str,
+        preferences: StylePreferencesInput,
+        max_suggestions: int,
+    ) -> NarratedPortfolioResult:
+        """Deterministic, offline: builds ``rationale`` directly from each
+        candidate dict's ``explanation`` string (``render_candidate_for_prompt``'s
+        output already has it -- no new logic needed, just a pass-through).
+        This is the literal implementation of the AC's "degrade to
+        deterministic candidates with rule-based reasoning" path and of E0's
+        ``llm_candidate_count=None`` tier. Never invents an id/category not
+        present in ``candidates`` -- it never invents anything at all."""
+        narrations = [
+            NarratedCandidate(
+                outfit_fingerprint=str(candidate.get("outfit_fingerprint", "")),
+                rationale=str(candidate.get("explanation") or "A solid pick for this occasion."),
+                rank=None,
+            )
+            for candidate in candidates[: max(max_suggestions, 0)]
+        ]
+        return NarratedPortfolioResult(narrations=narrations, language="en", source="rules_only")
 
 
 def _build_rationale(item: dict[str, object], preferences: StylePreferencesInput) -> str:

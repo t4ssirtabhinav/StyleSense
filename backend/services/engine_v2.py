@@ -98,6 +98,7 @@ from services.engine_v2_portfolio import compute_outfit_fingerprint
 from services.engine_v2_types import EngineV2Result, PortfolioCandidate
 from services.garment_registry_adapter import GarmentRegistryAdapter, garment_registry_adapter
 from services.styling_rules_defaults import (
+    CANDIDATE_SEARCH_TOP_K_BASES,
     DEFAULT_MAX_EXPLORATION,
     DEFAULT_MMR_LAMBDA,
     DEFAULT_PORTFOLIO_SIZE_RANGE,
@@ -143,9 +144,24 @@ class EngineV2:
         style_preferences: StylePreferencesInput | None = None,
         portfolio_size_range: tuple[int, int] = DEFAULT_PORTFOLIO_SIZE_RANGE,
         max_exploration: int = DEFAULT_MAX_EXPLORATION,
+        search_pool_size: int = CANDIDATE_SEARCH_TOP_K_BASES,
+        mmr_lambda: float = DEFAULT_MMR_LAMBDA,
+        effort_tier: str | None = None,
+        tier: str | None = None,
+        request_id: str | None = None,
     ) -> EngineV2Result:
         """The only async/I/O boundary in the whole pipeline -- see module
-        docstring for the exact sequence."""
+        docstring for the exact sequence.
+
+        (SS-020) Additive-only signature widening: ``search_pool_size``/
+        ``mmr_lambda`` are new optional kwargs, forwarded to
+        ``search_candidates(top_k_bases=...)``/``select_portfolio(lambda_=...)``
+        respectively -- previously hardcoded to the module default and not
+        forwarded at all, so SS-039's effort dial had no way to actually
+        reach the engine. ``effort_tier``/``tier``/``request_id`` are
+        forwarded into ``SuggestionSessionLog`` for cost-accounting/
+        observability. Every new kwarg's default matches today's hardcoded
+        behaviour, so every existing SS-038 test keeps passing unmodified."""
         await self._garment_registry.refresh()
 
         try:
@@ -180,6 +196,7 @@ class EngineV2:
             as_of=as_of,
             season=season,
             style_preferences=style_preferences,
+            top_k_bases=search_pool_size,
         )
 
         scored = [
@@ -204,7 +221,7 @@ class EngineV2:
         portfolio_result = engine_v2_portfolio.select_portfolio(
             scored,
             score_floor=DEFAULT_SCORE_FLOOR,
-            lambda_=DEFAULT_MMR_LAMBDA,
+            lambda_=mmr_lambda,
             gap_report=gap_report,
             portfolio_size_range=portfolio_size_range,
             max_exploration=max_exploration,
@@ -215,6 +232,9 @@ class EngineV2:
             occasion=occasion,
             candidate_count=len(scored),
             portfolio=portfolio_result.portfolio,
+            effort_tier=effort_tier,
+            tier=tier,
+            request_id=request_id,
         )
 
         return EngineV2Result(
@@ -232,6 +252,9 @@ class EngineV2:
         occasion: OccasionStylingInput,
         candidate_count: int,
         portfolio: list[PortfolioCandidate],
+        effort_tier: str | None = None,
+        tier: str | None = None,
+        request_id: str | None = None,
     ) -> str | None:
         """Best-effort log -- wrapped in its own try/except even though both
         underlying port methods already contractually never raise (design
@@ -247,6 +270,9 @@ class EngineV2:
                 candidate_count=candidate_count,
                 cost_incurred=False,
                 zero_cost_reason="rules_only",
+                effort_tier=effort_tier,
+                tier=tier,
+                request_id=request_id,
             )
             impressions = [
                 SuggestionImpressionLog(
