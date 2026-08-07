@@ -106,6 +106,13 @@ class StylingRulesOverride(BaseModel):
     preferred_accessory_categories: list[str] | None = None
     excluded_color_families: list[str] | None = None
     formality_tolerance: int | None = None
+    # SS-038 (resolves BL-111): per-occasion override of the near-white HSV
+    # exclusion thresholds (app_config key "near_white_threshold" supplies
+    # the global default -- see app_config_specs.NEAR_WHITE_THRESHOLD_SPEC).
+    # Either field may be set independently; an unset field falls back to
+    # the app_config value, not to the other field's value.
+    near_white_value_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    near_white_saturation_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @classmethod
     def parse_lenient(cls, raw: dict[str, Any] | None) -> StylingRulesOverride:

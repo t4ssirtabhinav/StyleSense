@@ -2787,3 +2787,62 @@ def test_deactivating_a_registry_row_does_not_orphan_existing_values(db_conn: An
 
     assert stored_pattern == "ikat"
     assert capture_count == 0, "a deactivated-but-existing key must never be captured as unknown"
+
+
+# ==========================================================================
+# SS-038 -- Engine v2 near-white config seed (017) + service_role deviation
+# sanity-check on garment_types/garment_type_aliases/fabrics RLS
+#
+# Like the rest of this module, SKIPPED unless psycopg2 and SUPABASE_DB_URL
+# are both available. Migration 017 is data-only (one INSERT into the
+# already-live app_config table, no DDL) -- these tests verify the ROW,
+# not any schema change (there isn't one).
+# ==========================================================================
+
+
+def test_near_white_threshold_config_row_seeded_with_coded_default_values(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT value, scope, updated_by FROM app_config WHERE key = 'near_white_threshold'"
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "017's seed row is missing"
+    value, scope, updated_by = row
+    assert value == {"value_threshold": 0.92, "saturation_threshold": 0.12}
+    assert scope == "server"
+    assert updated_by == "migration:017_seed_engine_v2_near_white_config"
+
+
+def test_near_white_threshold_config_row_is_not_client_visible(db_conn: Any) -> None:
+    """scope='server' (not 'client_visible') -- this threshold is a
+    server-side scoring parameter, never meant to be readable by an
+    authenticated client directly (mirrors every other seeded app_config
+    row's default scope)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT scope FROM app_config WHERE key = 'near_white_threshold'")
+        (scope,) = cur.fetchone()
+    assert scope == "server"
+
+
+def test_garment_types_and_fabrics_rls_grant_no_per_user_ownership(db_conn: Any) -> None:
+    """Sanity-check for the design doc's own flagged open question #3: the
+    live RLS policies on garment_types/garment_type_aliases/fabrics require
+    only auth.role() = 'authenticated' (no auth.uid()-based ownership
+    predicate) -- confirming GarmentRegistryAdapter/FabricRegistryRepository's
+    service_role choice is convenience (a jwt-free hot-path signature), not
+    strict necessity; a future caller-JWT-scoped alternative (matching
+    IOccasionRepository's own precedent for a structurally identical RLS
+    shape) would work equally well against this live policy."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tablename, qual FROM pg_policies "
+            "WHERE schemaname = 'public' AND tablename = ANY(%s) AND cmd = 'SELECT'",
+            (["garment_types", "garment_type_aliases", "fabrics"],),
+        )
+        quals = dict(cur.fetchall())
+
+    assert set(quals) == {"garment_types", "garment_type_aliases", "fabrics"}
+    for table, qual in quals.items():
+        assert "auth.uid()" not in (qual or ""), f"{table}'s SELECT policy unexpectedly scopes by owner"
+        assert "authenticated" in (qual or ""), f"{table}'s SELECT policy does not mention 'authenticated'"
