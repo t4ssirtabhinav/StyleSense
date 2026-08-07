@@ -33,7 +33,14 @@ This triage is provisional and mechanical — it only decides which model *reaso
 ## 1. Determine current state
 
 - Read `docs/worklog/SS-XXX.md` if it exists. If it doesn't, this ticket hasn't started — begin at Architect.
-- The worklog file's phase sections tell you what's already done. Find the first phase that is missing or incomplete: Architect → Developer → QA → DevOps.
+- Also run `git log --oneline -10` on the ticket's `feature/*` branch. The worklog says what phases *reported* done; git says what work actually landed. You need both, because a phase interrupted by a usage-limit cutoff has committed work but no completion entry.
+- **Check for a dangling checkpoint marker first** (see `docs/worklog/README.md` for the convention). A phase that was interrupted leaves one behind:
+  - `### Developer — IN PROGRESS` in the worklog, with a partially-ticked unit checklist,
+  - `### QA — GATES` in the worklog with no verdict after it,
+  - or `<!-- IN PROGRESS -->` still present in `docs/tickets/SS-XXX-design.md`.
+
+  If you find one, **re-invoke that same phase to continue it — do not treat it as not-started and do not advance past it.** Pass into the subagent's prompt: the marker's checklist with what's already ticked, the relevant `wip(SS-XXX)` commits from `git log`, and an explicit instruction to resume from the first incomplete item rather than redo finished work. This is the whole point of the markers; skipping this check throws away the phase's progress.
+- Otherwise the worklog's completed phase sections tell you what's done. Find the first phase that is missing: Architect → Developer → QA → DevOps.
 - If QA's last verdict was BLOCKED, the next phase is Developer again (a fix pass), not DevOps.
 - If QA's last verdict was PASS PENDING MANUAL VERIFICATION, stop and ask the user to confirm they've run `/run` or `/verify` against the flagged visual/UX acceptance criteria. Do not invoke DevOps until they confirm — this state exists because QA's tools (Read/Bash/Grep only) cannot render a screen, so a human has to close that gap.
 
@@ -69,8 +76,11 @@ After the phase completes:
 - After any phase, confirm nothing backlog-worthy got dropped (see step 3) — but this is a check on the phase's *report*, not a re-scan of the table.
 - If the user explicitly says to defer something ("let's think about X later"), log it yourself immediately (Active if a near ticket will hit it, else Parked) rather than assuming a future subagent will catch it.
 
-## Running independent tickets in parallel — the default for a solo sprint
+## Running independent tickets in parallel — fast lane parallel, heavy tickets serial
 
-**Parallelize by default; serialize only true dependencies.** The gates are per ticket, not global — they never require the whole sprint to run serially, and for a solo dev running back-to-back tickets, concurrency is the actual throughput lever (this is how you get several tickets done in a day, not shaving tokens). Check `docs/worklog/README.md`'s dependency note first. If two tickets have no file/folder overlap and no dependency relationship (e.g. SS-005 Home Shell vs. SS-009 Error Monitoring), run them at the same time in separate git worktrees, each on its own `feature/SS-XXX-slug` branch, rather than finishing one before starting the next.
+Concurrency is the real throughput lever for a solo sprint (this is how several tickets ship in a day, not token-shaving), but it isn't free: parallel tickets burn the usage window several times faster, and a mid-flight cutoff strands *every* running ticket mid-phase instead of one. So parallelize by lane, not blanket:
 
-This composes with the two lanes: several **fast-lane** tickets in parallel worktrees, each auto-chaining Architect→Developer→QA and converging on their own PR gates, is the normal fast path. Parallelizing doesn't change a lane's gates — it just lets independent tickets progress concurrently instead of queueing. When in doubt about overlap, serialize.
+- **Fast lane (`Risk: low`/`med`) — parallelize.** Short phases, cheap to redo, and now individually resumable from their checkpoints. Check `docs/worklog/README.md`'s dependency note; if two tickets have no file/folder overlap and no dependency relationship (e.g. SS-005 Home Shell vs. SS-009 Error Monitoring), run them at the same time in separate git worktrees, each on its own `feature/SS-XXX-slug` branch.
+- **`Risk: high`, or any large ticket — serialize.** A cutoff should strand at most one expensive phase. Full-lane tickets also want the human gates one at a time anyway, so there's nothing to gain from overlapping them.
+
+Several **fast-lane** tickets in parallel worktrees, each auto-chaining Architect→Developer→QA and converging on their own PR gates, is the normal fast path. Parallelizing doesn't change a lane's gates — it just lets independent tickets progress concurrently instead of queueing. When in doubt about overlap, or about how much usage window is left, serialize.

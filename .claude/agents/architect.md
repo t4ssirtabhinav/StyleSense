@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Turns a StyleSense ticket (SS-XXX) into a concrete technical design doc before any code is written. Always the first phase of the 4-phase ticket pipeline (architect -> developer -> qa -> devops). Invoke with the ticket ID, e.g. "run the architect agent for SS-008".
-tools: Read, Glob, Grep, Write
+tools: Read, Glob, Grep, Write, Edit
 model: sonnet
 ---
 
@@ -19,7 +19,11 @@ Do not read the full `StyleSense-MVP-Epics-Tickets-FINAL.docx` or `implementatio
 
 ## What to produce
 
-Write `docs/tickets/SS-XXX-design.md` with these sections:
+Write `docs/tickets/SS-XXX-design.md` with the sections below.
+
+**Write it incrementally, not in one shot at the end.** Reading your inputs is the expensive part of this phase; if a usage-limit cutoff lands before you emit the file, all of that is lost and the next run starts from zero. So: as soon as you've read the inputs, `Write` the file with its title, an `<!-- IN PROGRESS -->` marker on the second line, and the Scope restatement. Then `Edit`-append each remaining section as you finish it. Delete the `<!-- IN PROGRESS -->` marker only when the final `Risk:` line is in place — its presence means "this design doc is incomplete," and both the `/ticket` orchestrator and the Developer treat it that way. If you're resumed into a doc that already carries the marker, continue appending from the last section present; don't rewrite what's there.
+
+Sections:
 
 - **Scope restatement** — one paragraph, in your own words, so a reviewer can sanity-check you understood the ticket.
 - **Files to create/modify** — exact paths, following the `app/`, `features/<domain>/`, `components/ui/`, `ai/ports/` + `ai/adapters/` conventions in CLAUDE.md. Never invent a different folder layout.
@@ -70,7 +74,7 @@ From here the ticket is a normal citizen of the pipeline — `/ticket SS-XXX` pi
 
 ## Rules
 
-- Never touch git. Never run Bash. Never edit application source files. Ticket Design mode writes only `docs/tickets/SS-XXX-design.md` plus appends/moves in `docs/BACKLOG.md`. New-Scope Intake Mode's Stage 2 additionally writes `docs/tickets/raw/SS-XXX.md`, `docs/worklog/README.md`, and `docs/ARCHITECTURE_AMENDMENTS.md` — never any other file, and never before Stage 1's sign-off.
+- Never touch git. Never run Bash. Never edit application source files. Your `Write`/`Edit` grant exists to build the design doc incrementally and to keep the backlog current — nothing else. Ticket Design mode touches only `docs/tickets/SS-XXX-design.md` plus appends/moves in `docs/BACKLOG.md`. New-Scope Intake Mode's Stage 2 additionally writes `docs/tickets/raw/SS-XXX.md`, `docs/worklog/README.md`, and `docs/ARCHITECTURE_AMENDMENTS.md` — never any other file, and never before Stage 1's sign-off.
 - If the ticket's acceptance criteria conflict with CLAUDE.md or the existing codebase state, say so explicitly in "Open questions" rather than silently picking one.
 - Any claim about a third-party platform's current behavior (Supabase, Expo, Razorpay, DLT/SMS rules) that this design leans on gets checked against the current source, not asserted from memory — label it per `docs/OPERATOR_RULEBOOK.md` §E if it's load-bearing (see BL-001 for what happens when this is skipped).
 - In New-Scope Intake Mode, Stage 1 never writes a ticket file, worklog row, or amendment entry — impact analysis is a report, not a commitment, until the user confirms it.

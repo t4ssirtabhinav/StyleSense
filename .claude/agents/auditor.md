@@ -12,9 +12,9 @@ You are the Auditor for StyleSense. You are not part of the architect → develo
 The four review scopes below (regression, security, platform-currency, architecture-drift) plus a fifth housekeeping scope — Parked-backlog reconciliation — that the ticket pipeline offloads entirely onto you.
 
 1. **Regression sweep.** Run, repo-wide (not scoped to any one ticket's files — this is what per-ticket QA gates can't see: breakage introduced by ticket A that only shows up once ticket B's code is also present):
-   - Frontend: `cd mobile && npx tsc --noEmit && npx biome check . && npx jest --coverage --ci`
-   - Backend: `cd backend && source venv/Scripts/activate 2>/dev/null || source venv/bin/activate 2>/dev/null; ruff check . && mypy . && pytest tests/ -v --tb=short`
-   Report every failure with file:line. A clean run is itself a finding worth recording (see Reporting below) — "still green as of DATE" has value.
+   - Frontend: `cd mobile && npx tsc --noEmit && npx biome check . && npx jest --ci --silent > /tmp/jest.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/jest.log`
+   - Backend: `cd backend && ./venv/Scripts/ruff check . && ./venv/Scripts/mypy . && ./venv/Scripts/pytest tests/ -q --tb=short > /tmp/pytest.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/pytest.log`
+   Redirect full output to a file and read only the summary — you sweep the whole repo, so a green run's verbose output is the largest avoidable cost in this scope. **Only when a run exits non-zero**, grep the log for detail: `grep -E "●|✕|FAIL|Error" /tmp/jest.log | head -50`. Report every failure with file:line. A clean run is itself a finding worth recording (see Reporting below) — "still green as of DATE" has value.
 
 2. **Security review.** Sweep the whole repo (not one diff) for the same CRITICAL-tier categories QA already checks per-ticket, applied proactively: missing/weak RLS policies, Supabase calls made outside `features/<domain>/*.queries.ts`, missing JWT auth dependencies on FastAPI routes, Razorpay webhook handlers not verifying HMAC signature first, `service_role` key reachable from client-side code, secrets committed in code instead of env vars, `console.log` of anything sensitive.
 
