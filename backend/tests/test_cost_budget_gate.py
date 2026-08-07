@@ -46,6 +46,14 @@ class _FakeAtomicLimiter(IRateLimiter):
         self.adjust_calls.append({"key": key, "delta": delta})
         self.counters[key] = self.counters.get(key, 0) + delta
 
+    async def peek(self, *, key: str) -> int | None:
+        """(SS-039) Trivial in-memory read, no mutation. ``None`` when the
+        fake is configured to simulate infra failure or the key hasn't been
+        touched yet."""
+        if self._fail:
+            return None
+        return self.counters.get(key)
+
 
 class _FakeConfigRepository(IAppConfigRepository):
     def __init__(self, values: dict[str, Any] | None = None, *, fail: bool = False) -> None:
@@ -413,6 +421,83 @@ async def test_reconcile_failure_is_logged_and_swallowed(caplog: pytest.LogCaptu
         await gate.reconcile(reservation=decision.reservation, actual_micropaise=2000)  # must not raise
 
     assert any(r.message == "budget_reconcile_failed" for r in caplog.records)
+
+
+# --- budget_status() (SS-039) -------------------------------------------
+
+
+async def test_budget_status_near_ceiling_true_above_ratio() -> None:
+    limiter = _FakeAtomicLimiter()
+    service = await _config_service({"ai_cost_budgets": _budgets_value(daily_paise=1000)})
+    snapshot = await _snapshot(service)
+    gate = CostBudgetGate(limiter, service)
+
+    from services.ist_window import ist_day_key
+
+    daily_key = f"stylesense:cost:daily:u1:{ist_day_key()}"
+    # Daily ceiling is 1000 paise = 1_000_000_000 micropaise; seed the
+    # counter at 95% of it.
+    limiter.counters[daily_key] = 950_000_000
+
+    status = await gate.budget_status(user_id="u1", tier="free", config_snapshot=snapshot)
+
+    assert status.near_ceiling is True
+    assert status.daily_ratio is not None
+    assert status.daily_ratio >= 0.9
+
+
+async def test_budget_status_near_ceiling_false_below_ratio() -> None:
+    limiter = _FakeAtomicLimiter()
+    service = await _config_service({"ai_cost_budgets": _budgets_value(daily_paise=1000)})
+    snapshot = await _snapshot(service)
+    gate = CostBudgetGate(limiter, service)
+
+    from services.ist_window import ist_day_key
+
+    daily_key = f"stylesense:cost:daily:u1:{ist_day_key()}"
+    limiter.counters[daily_key] = 100_000_000  # 10% of ceiling
+
+    status = await gate.budget_status(user_id="u1", tier="free", config_snapshot=snapshot)
+
+    assert status.near_ceiling is False
+
+
+async def test_budget_status_unenforced_tier_never_near_ceiling() -> None:
+    limiter = _FakeAtomicLimiter()
+    service = await _config_service({"ai_cost_budgets": _budgets_value(enforce=False)})
+    snapshot = await _snapshot(service)
+    gate = CostBudgetGate(limiter, service)
+
+    status = await gate.budget_status(user_id="u1", tier="free", config_snapshot=snapshot)
+
+    assert status.near_ceiling is False
+    assert status.daily_ratio is None
+    assert status.monthly_ratio is None
+
+
+async def test_budget_status_peek_failure_degrades_to_none_not_zero() -> None:
+    limiter = _FakeAtomicLimiter(fail=True)
+    service = await _config_service({"ai_cost_budgets": _budgets_value()})
+    snapshot = await _snapshot(service)
+    gate = CostBudgetGate(limiter, service)
+
+    status = await gate.budget_status(user_id="u1", tier="free", config_snapshot=snapshot)
+
+    assert status.daily_ratio is None
+    assert status.monthly_ratio is None
+    assert status.near_ceiling is False
+
+
+async def test_budget_status_never_calls_check_and_consume_or_adjust() -> None:
+    limiter = _FakeAtomicLimiter()
+    service = await _config_service({"ai_cost_budgets": _budgets_value()})
+    snapshot = await _snapshot(service)
+    gate = CostBudgetGate(limiter, service)
+
+    await gate.budget_status(user_id="u1", tier="free", config_snapshot=snapshot)
+
+    assert limiter.check_calls == []
+    assert limiter.adjust_calls == []
 
 
 async def test_enforcement_disabled_allows_without_touching_redis() -> None:

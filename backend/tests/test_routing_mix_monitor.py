@@ -134,6 +134,47 @@ def test_a_single_success_resets_the_outage_streak() -> None:
     assert outage_alerts == []
 
 
+# --- provider_is_down() (SS-039) ---------------------------------------
+
+
+def test_provider_is_down_false_before_threshold() -> None:
+    monitor, _, clock = _make_monitor(provider_outage_alert_seconds=900.0)
+    decision = _FakeDecision(provider="gemini", cost_class="everyday")
+
+    monitor.record(decision, "transient")
+    clock.advance(899.0)
+
+    assert monitor.provider_is_down("gemini") is False
+
+
+def test_provider_is_down_true_at_threshold() -> None:
+    monitor, _, clock = _make_monitor(provider_outage_alert_seconds=900.0)
+    decision = _FakeDecision(provider="gemini", cost_class="everyday")
+
+    monitor.record(decision, "transient")
+    clock.advance(900.0)
+
+    assert monitor.provider_is_down("gemini") is True
+
+
+def test_provider_is_down_clears_on_success() -> None:
+    monitor, _, clock = _make_monitor(provider_outage_alert_seconds=900.0)
+    decision = _FakeDecision(provider="gemini", cost_class="everyday")
+
+    monitor.record(decision, "transient")
+    clock.advance(1000.0)
+    assert monitor.provider_is_down("gemini") is True
+
+    monitor.record(decision, "success")
+    assert monitor.provider_is_down("gemini") is False
+
+
+def test_provider_is_down_false_on_fresh_monitor() -> None:
+    monitor, _, _ = _make_monitor()
+    assert monitor.provider_is_down("gemini") is False
+    assert monitor.provider_is_down("claude") is False
+
+
 def test_notifications_go_through_the_injected_notifier_never_real_sentry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

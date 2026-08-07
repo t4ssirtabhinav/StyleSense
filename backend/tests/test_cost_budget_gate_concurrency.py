@@ -71,6 +71,14 @@ class _ForcedInterleavingLimiter(IRateLimiter):
         self.command_log.append(("DECRBY" if delta < 0 else "INCRBY", key))
         self.counters[key] = self.counters.get(key, 0) + delta
 
+    async def peek(self, *, key: str) -> int | None:
+        """(SS-039) Trivial in-memory read, no mutation, not part of this
+        module's own atomicity proof (that's ``check_and_consume``/
+        ``adjust``'s job)."""
+        await asyncio.sleep(0)
+        self.command_log.append(("GET", key))
+        return self.counters.get(key)
+
 
 def _budgets(daily_paise: int, monthly_paise: int = 100_000) -> dict[str, Any]:
     tier = {

@@ -509,6 +509,18 @@ class IRateLimiter(ABC):
         decision."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def peek(self, *, key: str) -> int | None:
+        """(SS-039) Advisory-only, NON-mutating read of a counter's current
+        value (``None`` on a missing key or any infra failure -- never
+        raises). NEVER used for an allow/deny decision:
+        ``check_and_consume``'s atomic ``INCRBY`` remains the ONLY
+        enforcement path in this codebase. This method exists solely so a
+        caller can ask "roughly how close is this user to their ceiling
+        right now" (``CostBudgetGate.budget_status()``) without perturbing
+        the ceiling itself."""
+        raise NotImplementedError
+
 
 @dataclass(frozen=True)
 class CostLedgerEntry:
