@@ -144,6 +144,23 @@ class RoutingMixMonitor:
             },
         )
 
+    def provider_is_down(self, provider: str, *, now: float | None = None) -> bool:
+        """(SS-039) True iff ``provider``'s current failure streak (tracked
+        by ``record()``, cleared on any success) has lasted
+        ``>= self._provider_outage_alert_seconds`` -- reuses the EXACT same
+        state/threshold that already drives the existing Sentry
+        ``ai_routing_provider_outage`` alert (design SS-028 §7), so "down"
+        here is literally what an operator is already paged for, not a new
+        definition invented for this ticket. A freshly-constructed monitor
+        (no ``record()`` calls yet) has an empty ``_first_failure_at``, so
+        this returns ``False`` for every provider -- a cold-started process
+        never spuriously resolves to E0."""
+        first_failure_at = self._first_failure_at.get(provider)
+        if first_failure_at is None:
+            return False
+        current_time = now if now is not None else self._clock()
+        return (current_time - first_failure_at) >= self._provider_outage_alert_seconds
+
     def _check_outage(self, provider: str, now: float) -> None:
         first_failure_at = self._first_failure_at.get(provider)
         if first_failure_at is None:

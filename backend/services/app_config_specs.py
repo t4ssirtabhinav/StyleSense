@@ -24,6 +24,20 @@ is the real consumer; see ``supabase/migrations/017_seed_engine_v2_near_white_co
 for the seeded row and ``styling_rules_types.StylingRulesOverride``'s
 ``near_white_value_threshold``/``near_white_saturation_threshold`` fields for
 the per-occasion override path.
+
+``ENGINE_V2_EFFORT_TIER_SPEC`` (SS-039) wires the proposal's §6 tuning-dial
+table's E0/E1/E2 rows into one ``app_config`` row. UNLIKE
+``NEAR_WHITE_THRESHOLD_SPEC``'s "identical to today" posture, its coded
+default is NOT a transcription of any pre-existing constant -- it is the
+raw ticket's own literal E0-E2 table values, separately hardcoded here so a
+missing/malformed row still degrades to that documented floor (AC #2), not
+to ``styling_rules_defaults``'s pre-dial ``DEFAULT_MMR_LAMBDA``/
+``DEFAULT_MAX_EXPLORATION`` constants. ``services/engine_v2_effort_dial.py``
+is the real consumer (tier RESOLUTION only -- no live caller wires a
+resolved tier into ``engine_v2_candidate_search``/``engine_v2_portfolio``
+yet; that is SS-020's job). See
+``supabase/migrations/018_seed_engine_v2_effort_dial_config.sql`` for the
+seeded row.
 """
 
 from __future__ import annotations
@@ -59,4 +73,64 @@ NEAR_WHITE_THRESHOLD_SPEC: ConfigSpec[NearWhiteThresholdConfig] = ConfigSpec(
     key="near_white_threshold",
     model=NearWhiteThresholdConfig,
     default=NearWhiteThresholdConfig(),
+)
+
+
+class EffortTierParams(BaseModel):
+    """One effort tier's dial parameters -- the literal keyword arguments
+    ``engine_v2_candidate_search.search_candidates()``/
+    ``engine_v2_portfolio.select_portfolio()`` already accept. ``colour_mode``
+    is documented metadata only -- see ``docs/tickets/SS-039-design.md``
+    Open Question #3 (``BL-135``): no live stage reads it to select a
+    colour-scoring algorithm."""
+
+    search_pool_size: int  # -> search_candidates(top_k_bases=...)
+    colour_mode: str  # documentation-only today -- NOT wired to any stage call (BL-135)
+    mmr_lambda: float  # -> select_portfolio(lambda_=...)
+    max_exploration: int  # -> select_portfolio(max_exploration=...)
+    llm_candidate_count: int | None  # -> IStylingProvider.suggest_outfits(max_suggestions=...); None = no LLM call (E0)
+
+
+class EngineV2EffortTierConfig(BaseModel):
+    """Validates ``app_config.engine_v2_effort_tiers``. Values transcribed
+    VERBATIM from the raw ticket's own E0-E2 table -- do not alter without
+    product sign-off (docs/tickets/raw/SS-039.md)."""
+
+    e0: EffortTierParams = EffortTierParams(
+        search_pool_size=500,
+        colour_mode="star",
+        mmr_lambda=0.9,
+        max_exploration=0,
+        llm_candidate_count=None,
+    )
+    e1: EffortTierParams = EffortTierParams(
+        search_pool_size=1500,
+        colour_mode="pairwise",
+        mmr_lambda=0.85,
+        max_exploration=0,
+        llm_candidate_count=5,
+    )
+    e2: EffortTierParams = EffortTierParams(
+        search_pool_size=5000,
+        colour_mode="pairwise_plus_volume",
+        mmr_lambda=0.75,
+        max_exploration=1,
+        llm_candidate_count=6,
+    )
+    # Additive-only forward compat for a future E3/E4 ticket (AC #5's
+    # "design note showing the planned shape"): that ticket adds
+    #   e3: EffortTierParams | None = None
+    #   e4: EffortTierParams | None = None
+    # here -- Pydantic optional-field-with-default means every row already
+    # seeded (this ticket's `018` included) still validates unchanged; no
+    # migration, no AppConfigService.read() change, no existing consumer
+    # breaks. EffortTierKey (engine_v2_effort_dial.py) only widens to
+    # include "E3"/"E4" once that future ticket also adds the code path
+    # that can return them.
+
+
+ENGINE_V2_EFFORT_TIER_SPEC: ConfigSpec[EngineV2EffortTierConfig] = ConfigSpec(
+    key="engine_v2_effort_tiers",
+    model=EngineV2EffortTierConfig,
+    default=EngineV2EffortTierConfig(),
 )

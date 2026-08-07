@@ -138,3 +138,36 @@ class UpstashRateLimiter(IRateLimiter):
                     "upstash_rate_limiter_adjust_error",
                     extra={"key": key, "delta": delta, "error": str(exc)},
                 )
+
+    async def peek(self, *, key: str) -> int | None:
+        """(SS-039) ``GET {url}/get/{key}`` -- the one GET this class makes,
+        deliberately kept out of ``check_and_consume``'s atomic-``INCRBY``
+        path (that method's own docstring's "no GET anywhere in this class"
+        invariant is about the enforcement path specifically; this is a
+        separate, clearly-labelled advisory method). Missing env vars, HTTP
+        error, non-integer body, or a key that doesn't exist yet (Upstash
+        returns ``{"result": null}``) all degrade to ``None`` -- caller
+        treats ``None`` as "unknown," never as 0."""
+        url = os.getenv("UPSTASH_REDIS_REST_URL")
+        token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+        if not url or not token:
+            logger.warning("upstash_rate_limiter_peek_env_unset", extra={"key": key})
+            return None
+
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                response = await client.get(f"{url}/get/{key}", headers=headers)
+                response.raise_for_status()
+                body = response.json()
+                if body.get("error"):
+                    raise httpx.HTTPError(f"Upstash GET error: {body['error']}")
+                result = body.get("result")
+                if result is None:
+                    return None
+                return int(result)
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "upstash_rate_limiter_peek_error", extra={"key": key, "error": str(exc)}
+                )
+                return None

@@ -70,6 +70,18 @@ class GateDecision:
     reservation: Reservation | None  # present iff allowed
 
 
+@dataclass(frozen=True)
+class BudgetStatus:
+    """(SS-039) Read-only snapshot of how close a caller is to their
+    budget ceiling -- distinct from ``GateDecision``, which is only ever
+    produced by the mutating ``reserve()``. Never itself an allow/deny
+    decision; the real enforcement still happens at ``reserve()``."""
+
+    near_ceiling: bool
+    daily_ratio: float | None  # None if unenforced for this tier, or peek() failed
+    monthly_ratio: float | None
+
+
 class CostBudgetGate:
     def __init__(self, limiter: IRateLimiter, config_service: AppConfigService) -> None:
         self._limiter = limiter
@@ -176,6 +188,55 @@ class CostBudgetGate:
                 monthly_ceiling=tier_budget.monthly_micropaise,
                 touched_redis=True,
             ),
+        )
+
+    async def budget_status(
+        self,
+        *,
+        user_id: str,
+        tier: str | None,
+        config_snapshot: AppConfigSnapshot,
+        near_ceiling_ratio: float = 0.9,
+    ) -> BudgetStatus:
+        """(SS-039) Read-only -- two ``peek()`` calls, never
+        ``check_and_consume``/``reserve``. A tier with ``enforce=False``
+        always reports ``near_ceiling=False``, matching ``reserve()``'s own
+        unenforced-tier short-circuit (no ``peek()`` call made). A
+        ``peek()`` failure (``None``) is excluded from the near-ceiling
+        computation, not treated as 0 or as over-ceiling -- an advisory
+        signal degrading safely toward the richer tier (E2), since the REAL
+        enforcement decision still happens later, atomically, at the actual
+        ``reserve()`` call this method never makes."""
+        tier_norm = normalize_tier(tier)
+        daily_key = f"{_KEY_PREFIX_DAILY}:{user_id}:{ist_day_key()}"
+        monthly_key = f"{_KEY_PREFIX_MONTHLY}:{user_id}:{ist_month_key()}"
+
+        budgets_config = self._config_service.read(config_snapshot, AI_COST_BUDGETS_SPEC)
+        tier_budget = budgets_config.for_tier(tier_norm)
+
+        if not tier_budget.enforce:
+            return BudgetStatus(near_ceiling=False, daily_ratio=None, monthly_ratio=None)
+
+        daily_current = await self._limiter.peek(key=daily_key)
+        monthly_current = await self._limiter.peek(key=monthly_key)
+
+        daily_ratio = (
+            daily_current / tier_budget.daily_micropaise
+            if daily_current is not None and tier_budget.daily_micropaise > 0
+            else None
+        )
+        monthly_ratio = (
+            monthly_current / tier_budget.monthly_micropaise
+            if monthly_current is not None and tier_budget.monthly_micropaise > 0
+            else None
+        )
+
+        near_ceiling = (daily_ratio is not None and daily_ratio >= near_ceiling_ratio) or (
+            monthly_ratio is not None and monthly_ratio >= near_ceiling_ratio
+        )
+
+        return BudgetStatus(
+            near_ceiling=near_ceiling, daily_ratio=daily_ratio, monthly_ratio=monthly_ratio
         )
 
     async def reconcile(self, *, reservation: Reservation, actual_micropaise: int) -> None:
