@@ -65,6 +65,9 @@ class _FakeRepository(ISuggestionLogRepository):
     ) -> None:
         return None
 
+    async def find_impression(self, *, session_id: str, rank: int):  # type: ignore[no-untyped-def]
+        return None
+
 
 def _candidate(item_ids: list[str], score: float = 0.8) -> ScoredCandidate:
     return ScoredCandidate(

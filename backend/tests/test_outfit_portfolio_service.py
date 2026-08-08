@@ -17,6 +17,7 @@ from adapters.interfaces import (
     GarmentRegistrySnapshot,
     IFabricRegistryRepository,
     IGarmentRegistryRepository,
+    ImpressionRef,
     IOccasionRepository,
     IRateLimiter,
     ISuggestionLogRepository,
@@ -147,6 +148,9 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
                 "latency_ms": latency_ms,
             }
         )
+
+    async def find_impression(self, *, session_id: str, rank: int) -> ImpressionRef | None:
+        return None
 
 
 class _FakeNarrationCacheRepo(ISuggestionNarrationCacheRepository):
@@ -558,3 +562,173 @@ async def test_update_session_outcome_called_exactly_once_and_never_blocks_on_ra
     )
     assert "portfolio" in result
     assert log_repo.outcome_updates == []  # raised, so nothing recorded -- but no exception propagated
+
+
+# ---------------------------------------------------------------------------
+# SS-023 -- additive response fields + exclude_fingerprints forwarding.
+# ---------------------------------------------------------------------------
+
+
+async def test_response_carries_session_id_occasion_key_and_per_item_rank_fingerprint() -> None:
+    log_repo = _FakeSuggestionLogRepo()
+    service = _build_service(
+        wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
+        suggestion_log_repo=log_repo,
+        narration_cache_repo=_FakeNarrationCacheRepo(),
+        styling_provider=_FakeStylingProvider([]),
+        rate_limiter=_FakeRateLimiter(),
+    )
+    result = await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+    )
+    assert result["session_id"] == "session-1"  # from _FakeSuggestionLogRepo.log_session
+    assert result["occasion_key"] == "office"
+    assert result["portfolio"]
+    for idx, item in enumerate(result["portfolio"], start=1):
+        assert item["rank"] == idx
+        assert len(item["outfit_fingerprint"]) == 64
+
+
+async def test_per_item_rank_matches_the_rank_logged_to_suggestion_impressions() -> None:
+    """The join key /outfit-suggestions/outcome resolves on must be
+    PROVABLY identical, not coincidentally aligned (test plan item 2)."""
+    log_repo = _FakeSuggestionLogRepo()
+    service = _build_service(
+        wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
+        suggestion_log_repo=log_repo,
+        narration_cache_repo=_FakeNarrationCacheRepo(),
+        styling_provider=_FakeStylingProvider([]),
+        rate_limiter=_FakeRateLimiter(),
+    )
+    result = await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+    )
+    _, logged_impressions = log_repo.logged_sessions[0]
+    rank_by_fingerprint = {imp.outfit_fingerprint: imp.rank for imp in logged_impressions}
+    for item in result["portfolio"]:
+        assert rank_by_fingerprint[item["outfit_fingerprint"]] == item["rank"]
+
+
+async def test_session_id_none_when_log_repo_degraded_still_returns_full_portfolio() -> None:
+    class _DegradedLogRepo(_FakeSuggestionLogRepo):
+        async def log_session(self, session, impressions):  # type: ignore[no-untyped-def]
+            return None
+
+    log_repo = _DegradedLogRepo()
+    service = _build_service(
+        wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
+        suggestion_log_repo=log_repo,
+        narration_cache_repo=_FakeNarrationCacheRepo(),
+        styling_provider=_FakeStylingProvider([]),
+        rate_limiter=_FakeRateLimiter(),
+    )
+    result = await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+    )
+    assert result["session_id"] is None
+    assert result["portfolio"]  # a None session must still render suggestions
+
+
+async def test_exclude_fingerprints_forwarded_truncated_at_60() -> None:
+    captured: dict[str, Any] = {}
+
+    class _CapturingEngine(EngineV2):
+        async def generate_portfolio(self, *args: Any, **kwargs: Any) -> Any:
+            captured["exclude_fingerprints"] = kwargs.get("exclude_fingerprints")
+            return await super().generate_portfolio(*args, **kwargs)
+
+    log_repo = _FakeSuggestionLogRepo()
+    occasion_normalizer = OccasionNormalizer(_FakeOccasionRepo(_occasion_snapshot()))
+    engine = _CapturingEngine(
+        garment_registry=GarmentRegistryAdapter(_FakeGarmentRegistryRepo()),
+        fabric_repo=_FakeFabricRepo(),
+        wear_history_repo=_FakeWearHistoryRepo(),
+        suggestion_log_repo=log_repo,
+        app_config=_dummy_app_config(),
+    )
+    app_config = _dummy_app_config()
+    service = OutfitPortfolioService(
+        wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
+        occasion_normalizer=occasion_normalizer,
+        engine=engine,
+        app_config=app_config,
+        routing_mix_monitor=RoutingMixMonitor(),
+        cost_budget_gate=CostBudgetGate(_FakeRateLimiter(), app_config),
+        provider_registry=_FakeRegistry(_FakeStylingProvider([])),
+        provider_quota=ProviderQuotaTracker(),
+        narration_cache=NarrationCacheOrchestrator(_FakeNarrationCacheRepo()),
+        suggestion_log_repo=log_repo,
+    )
+    over_cap = [f"{i:064x}" for i in range(75)]
+    await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+        exclude_fingerprints=over_cap,
+    )
+    assert captured["exclude_fingerprints"] == frozenset(over_cap[:60])
+
+
+async def test_empty_exclude_fingerprints_forwarded_as_none() -> None:
+    captured: dict[str, Any] = {}
+
+    class _CapturingEngine(EngineV2):
+        async def generate_portfolio(self, *args: Any, **kwargs: Any) -> Any:
+            captured["exclude_fingerprints"] = kwargs.get("exclude_fingerprints")
+            return await super().generate_portfolio(*args, **kwargs)
+
+    log_repo = _FakeSuggestionLogRepo()
+    occasion_normalizer = OccasionNormalizer(_FakeOccasionRepo(_occasion_snapshot()))
+    engine = _CapturingEngine(
+        garment_registry=GarmentRegistryAdapter(_FakeGarmentRegistryRepo()),
+        fabric_repo=_FakeFabricRepo(),
+        wear_history_repo=_FakeWearHistoryRepo(),
+        suggestion_log_repo=log_repo,
+        app_config=_dummy_app_config(),
+    )
+    app_config = _dummy_app_config()
+    service = OutfitPortfolioService(
+        wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
+        occasion_normalizer=occasion_normalizer,
+        engine=engine,
+        app_config=app_config,
+        routing_mix_monitor=RoutingMixMonitor(),
+        cost_budget_gate=CostBudgetGate(_FakeRateLimiter(), app_config),
+        provider_registry=_FakeRegistry(_FakeStylingProvider([])),
+        provider_quota=ProviderQuotaTracker(),
+        narration_cache=NarrationCacheOrchestrator(_FakeNarrationCacheRepo()),
+        suggestion_log_repo=log_repo,
+    )
+    await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+        exclude_fingerprints=[],
+    )
+    assert captured["exclude_fingerprints"] is None

@@ -108,6 +108,9 @@ def _valid_response_payload() -> dict[str, Any]:
                 "rationale_language": "en",
                 "is_exploration": False,
                 "gap_flags": [],
+                # (SS-023) additive fields
+                "rank": 1,
+                "outfit_fingerprint": "a" * 64,
             }
         ],
         "limited_options": False,
@@ -116,6 +119,9 @@ def _valid_response_payload() -> dict[str, Any]:
         "effort_tier": "E2",
         "cache_hit": False,
         "generated_at": "2026-08-07T00:00:00+00:00",
+        # (SS-023) additive fields
+        "session_id": "session-1",
+        "occasion_key": "office",
     }
 
 

@@ -108,3 +108,38 @@ export async function clearCachedTaxonomies(): Promise<void> {
     // Same posture as writeCachedTaxonomies.
   }
 }
+
+// SS-023 — generic per-user "fire once ever" flag, backing
+// first_suggestion_viewed/first_outfit_saved (design §5's "Fire-once
+// semantics are per user, persisted via lib/storage.ts, not per app
+// session" — a component-state guard would re-fire on every cold start).
+// Deliberately total, same posture as the taxonomy cache above: a storage
+// failure degrades to "not yet fired" (an event may fire again in the rare
+// failure case) rather than ever throwing and breaking the screen.
+function onceEventKey(userId: string, eventKey: string): string {
+  return `stylesense.once.${eventKey}.${userId}`;
+}
+
+export async function hasFiredOnceEvent(
+  userId: string,
+  eventKey: string,
+): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(onceEventKey(userId, eventKey));
+    return raw === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function markOnceEventFired(
+  userId: string,
+  eventKey: string,
+): Promise<void> {
+  try {
+    await AsyncStorage.setItem(onceEventKey(userId, eventKey), '1');
+  } catch {
+    // A failed write just means this event might fire again next time —
+    // acceptable, never a thrown error (same posture as writeCachedTaxonomies).
+  }
+}

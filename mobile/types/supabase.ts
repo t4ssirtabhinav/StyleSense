@@ -540,13 +540,19 @@ export type Database = {
           ai_reasoning: string | null
           avatar_image_url: string | null
           created_at: string | null
+          effort_tier: string | null
+          engine_version: string | null
           id: string
           item_ids: string[] | null
+          items_snapshot: Json
           last_worn_at: string | null
           name: string | null
           occasion: string | null
+          outfit_fingerprint: string | null
+          reasoning_language: string | null
           season: string | null
-          user_id: string | null
+          session_id: string | null
+          user_id: string
           user_rating: number | null
           worn_count: number | null
         }
@@ -555,13 +561,19 @@ export type Database = {
           ai_reasoning?: string | null
           avatar_image_url?: string | null
           created_at?: string | null
+          effort_tier?: string | null
+          engine_version?: string | null
           id?: string
           item_ids?: string[] | null
+          items_snapshot?: Json
           last_worn_at?: string | null
           name?: string | null
           occasion?: string | null
+          outfit_fingerprint?: string | null
+          reasoning_language?: string | null
           season?: string | null
-          user_id?: string | null
+          session_id?: string | null
+          user_id: string
           user_rating?: number | null
           worn_count?: number | null
         }
@@ -570,17 +582,30 @@ export type Database = {
           ai_reasoning?: string | null
           avatar_image_url?: string | null
           created_at?: string | null
+          effort_tier?: string | null
+          engine_version?: string | null
           id?: string
           item_ids?: string[] | null
+          items_snapshot?: Json
           last_worn_at?: string | null
           name?: string | null
           occasion?: string | null
+          outfit_fingerprint?: string | null
+          reasoning_language?: string | null
           season?: string | null
-          user_id?: string | null
+          session_id?: string | null
+          user_id?: string
           user_rating?: number | null
           worn_count?: number | null
         }
         Relationships: [
+          {
+            foreignKeyName: "outfits_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "suggestion_sessions"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "outfits_user_id_fkey"
             columns: ["user_id"]

@@ -2846,3 +2846,120 @@ def test_garment_types_and_fabrics_rls_grant_no_per_user_ownership(db_conn: Any)
     for table, qual in quals.items():
         assert "auth.uid()" not in (qual or ""), f"{table}'s SELECT policy unexpectedly scopes by owner"
         assert "authenticated" in (qual or ""), f"{table}'s SELECT policy does not mention 'authenticated'"
+
+
+# ==========================================================================
+# SS-023 -- outfits first writer (020)
+#
+# Like the rest of this module, SKIPPED unless psycopg2 and SUPABASE_DB_URL
+# are both available. Every write below is rolled back by the db_conn
+# fixture, so none of them persists against the live project.
+# ==========================================================================
+
+
+def test_outfits_has_the_six_new_columns_with_documented_types(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'outfits'
+              AND column_name IN (
+                'session_id', 'outfit_fingerprint', 'engine_version',
+                'effort_tier', 'reasoning_language', 'items_snapshot'
+              )
+            """
+        )
+        rows = dict(cur.fetchall())
+
+    assert rows == {
+        "session_id": "uuid",
+        "outfit_fingerprint": "text",
+        "engine_version": "text",
+        "effort_tier": "text",
+        "reasoning_language": "text",
+        "items_snapshot": "jsonb",
+    }
+
+
+def test_uq_outfits_user_fingerprint_exists_and_is_partial(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_outfits_user_fingerprint'"
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "uq_outfits_user_fingerprint is missing"
+    indexdef = row[0].lower()
+    assert "unique" in indexdef
+    assert "where" in indexdef and "outfit_fingerprint is not null" in indexdef
+
+
+def test_outfits_user_id_is_not_null(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'outfits' AND column_name = 'user_id'"
+        )
+        (is_nullable,) = cur.fetchone()
+
+    assert is_nullable == "NO"
+
+
+def test_user_owns_outfits_is_still_for_all_unchanged_by_this_ticket(db_conn: Any) -> None:
+    """Pin (design §3's rejected-alternative note): SS-023 deliberately does
+    NOT repeat 013's write-policy removal on `outfits` -- it stays a
+    JWT-scoped, RLS-enforced FOR ALL policy, unlike `suggestion_outcomes`."""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT cmd FROM pg_policies WHERE schemaname = 'public' "
+            "AND tablename = 'outfits' AND policyname = 'user_owns_outfits'"
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "user_owns_outfits policy is missing"
+    assert row[0] == "ALL"
+
+
+def test_trg_outfits_normalize_occasion_still_exists_and_fires_on_insert(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT tgname FROM pg_trigger WHERE tgname = 'trg_outfits_normalize_occasion' "
+            "AND NOT tgisinternal"
+        )
+        row = cur.fetchone()
+        assert row is not None, "trg_outfits_normalize_occasion is missing"
+
+        owner = _insert_user(cur)
+        outfit_id = str(uuid.uuid4())
+        cur.execute(
+            "INSERT INTO outfits (id, user_id, occasion) VALUES (%s, %s, %s)",
+            (outfit_id, owner, "Wedding Guest"),
+        )
+        cur.execute("SELECT occasion FROM outfits WHERE id = %s", (outfit_id,))
+        (normalised,) = cur.fetchone()
+
+    # Normalises to a canonical slug -- callers must not assert byte-identity
+    # with the raw input (008's own warning, reaffirmed).
+    assert normalised != "Wedding Guest"
+    assert normalised == normalised.lower()
+
+
+def test_outfits_item_ids_nonempty_check_rejects_empty_array(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        with pytest.raises(Exception):  # noqa: B017,PT011 -- any DB-raised error is the assertion
+            cur.execute(
+                "INSERT INTO outfits (id, user_id, item_ids) VALUES (%s, %s, %s)",
+                (str(uuid.uuid4()), owner, []),
+            )
+
+
+def test_outfits_fingerprint_shape_check_rejects_non_hex(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        owner = _insert_user(cur)
+        with pytest.raises(Exception):  # noqa: B017,PT011
+            cur.execute(
+                "INSERT INTO outfits (id, user_id, outfit_fingerprint) VALUES (%s, %s, %s)",
+                (str(uuid.uuid4()), owner, "not-a-valid-fingerprint"),
+            )

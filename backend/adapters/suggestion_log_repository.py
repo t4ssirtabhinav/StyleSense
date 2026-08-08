@@ -39,6 +39,7 @@ from typing import Any, cast
 from supabase import AsyncClient, acreate_client
 
 from adapters.interfaces import (
+    ImpressionRef,
     ISuggestionLogRepository,
     SuggestionImpressionLog,
     SuggestionOutcomeLog,
@@ -287,3 +288,48 @@ class SupabaseSuggestionLogRepository(ISuggestionLogRepository):
                 "suggestion_session_outcome_update_failed",
                 extra={"session_id": session_id, "error": str(exc)},
             )
+
+    async def find_impression(self, *, session_id: str, rank: int) -> ImpressionRef | None:
+        """(SS-023) Resolves the ``(session_id, rank)`` UNIQUE constraint via
+        an embedded PostgREST select that also pulls the parent
+        ``suggestion_sessions.occasion`` in the same round-trip (the FK
+        ``suggestion_impressions.session_id -> suggestion_sessions.id``
+        makes the embed resolvable). MUST NEVER RAISE -- not-found and any
+        transport/parse failure both degrade to ``None``, indistinguishable
+        by contract (the caller must 404 identically for both, design §3)."""
+        try:
+            client = await _client()
+            response = (
+                await client.table("suggestion_impressions")
+                .select(
+                    "id,user_id,session_id,rank,item_ids,outfit_fingerprint,total_score,"
+                    "is_exploration,suggestion_sessions(occasion)"
+                )
+                .eq("session_id", session_id)
+                .eq("rank", rank)
+                .limit(1)
+                .execute()
+            )
+            rows = cast(list[dict[str, Any]], response.data or [])
+            if not rows:
+                return None
+            row = rows[0]
+            session_row = row.get("suggestion_sessions") or {}
+            occasion = session_row.get("occasion") if isinstance(session_row, dict) else None
+            return ImpressionRef(
+                impression_id=str(row["id"]),
+                user_id=str(row["user_id"]),
+                session_id=str(row["session_id"]),
+                rank=int(row["rank"]),
+                item_ids=list(row.get("item_ids") or []),
+                outfit_fingerprint=str(row["outfit_fingerprint"]),
+                total_score=float(row["total_score"]),
+                is_exploration=bool(row.get("is_exploration", False)),
+                occasion=occasion,
+            )
+        except Exception as exc:
+            logger.warning(
+                "suggestion_find_impression_failed",
+                extra={"session_id": session_id, "rank": rank, "error": str(exc)},
+            )
+            return None

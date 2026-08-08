@@ -149,6 +149,7 @@ class EngineV2:
         effort_tier: str | None = None,
         tier: str | None = None,
         request_id: str | None = None,
+        exclude_fingerprints: frozenset[str] | None = None,
     ) -> EngineV2Result:
         """The only async/I/O boundary in the whole pipeline -- see module
         docstring for the exact sequence.
@@ -161,7 +162,14 @@ class EngineV2:
         reach the engine. ``effort_tier``/``tier``/``request_id`` are
         forwarded into ``SuggestionSessionLog`` for cost-accounting/
         observability. Every new kwarg's default matches today's hardcoded
-        behaviour, so every existing SS-038 test keeps passing unmodified."""
+        behaviour, so every existing SS-038 test keeps passing unmodified.
+
+        (SS-023) ``exclude_fingerprints`` is a further additive-only
+        widening -- forwarded verbatim to
+        ``engine_v2_portfolio.select_portfolio``, which drops any scored
+        candidate whose fingerprint is in the set BEFORE MMR selection
+        (design §4, the regenerate mechanism). Default ``None`` reproduces
+        pre-SS-023 output byte-for-byte."""
         await self._garment_registry.refresh()
 
         try:
@@ -225,6 +233,7 @@ class EngineV2:
             gap_report=gap_report,
             portfolio_size_range=portfolio_size_range,
             max_exploration=max_exploration,
+            exclude_fingerprints=exclude_fingerprints,
         )
 
         session_id = await self._log_session(
