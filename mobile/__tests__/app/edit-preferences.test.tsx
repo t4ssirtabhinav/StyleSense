@@ -1,15 +1,25 @@
-import { cleanup, render } from '@testing-library/react-native';
+import { cleanup, fireEvent, render } from '@testing-library/react-native';
 import EditPreferencesScreen from '../../app/edit-preferences';
 import { useAuthStore } from '../../features/auth/auth.store';
 
 // Same mocking convention as __tests__/app/(auth)/onboarding.test.tsx's Auth
-// Guard test — a plain stand-in that renders the target href.
+// Guard test — a plain stand-in that renders the target href. useRouter is
+// mocked the same shape as __tests__/app/wardrobe/upload.test.tsx's Cancel
+// button test — canGoBack()/back()/replace() for the back-button fallback.
+const mockBack = jest.fn();
+const mockReplace = jest.fn();
+const mockCanGoBack = jest.fn();
 jest.mock('expo-router', () => {
   const react = jest.requireActual('react');
   const reactNative = jest.requireActual('react-native');
   return {
     Redirect: ({ href }: { href: string }) =>
       react.createElement(reactNative.Text, { testID: 'redirect' }, href),
+    useRouter: () => ({
+      back: mockBack,
+      replace: mockReplace,
+      canGoBack: mockCanGoBack,
+    }),
   };
 });
 
@@ -199,6 +209,40 @@ describe('EditPreferencesScreen (app/edit-preferences.tsx)', () => {
     expect(getByTestId('mock-favourite-colours')).toHaveTextContent(
       '["#000000"]',
     );
+  });
+
+  it('Back navigates back when there is history', async () => {
+    mockCanGoBack.mockReturnValue(true);
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      data: FULL_PROGRESS_DATA,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      refetch: mockRefetchProgress,
+    });
+
+    const { getByLabelText } = await render(<EditPreferencesScreen />);
+    await fireEvent.press(getByLabelText('Back'));
+
+    expect(mockBack).toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('Back falls back to replacing with Profile when there is no back history (e.g. a direct/refreshed load on this route)', async () => {
+    mockCanGoBack.mockReturnValue(false);
+    mockUseOnboardingProgressQuery.mockReturnValue({
+      data: FULL_PROGRESS_DATA,
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      refetch: mockRefetchProgress,
+    });
+
+    const { getByLabelText } = await render(<EditPreferencesScreen />);
+    await fireEvent.press(getByLabelText('Back'));
+
+    expect(mockBack).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)/profile');
   });
 
   it('shows the "finish setting up" banner when onboardingCompleted is false, and every section still renders underneath it', async () => {

@@ -1,6 +1,6 @@
-import { Redirect } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { ScrollView, View } from 'react-native';
-import { Button, Card, Text } from '../components/ui';
+import { Button, Card, IconButton, Text } from '../components/ui';
 import { useAuthStore } from '../features/auth/auth.store';
 import { EditBudgetRangeSection } from '../features/onboarding/components/EditBudgetRangeSection';
 import { EditFavouriteColoursSection } from '../features/onboarding/components/EditFavouriteColoursSection';
@@ -20,9 +20,21 @@ import {
 // this sits outside app/(tabs)/_layout.tsx's Auth Guard, it self-guards
 // session exactly like (auth)/onboarding.tsx does.
 export default function EditPreferencesScreen() {
+  const router = useRouter();
   const session = useAuthStore((state) => state.session);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const userId = session?.user.id;
+
+  // This screen is a top-level route (see header comment) reached only from
+  // Profile, so it never lands with empty history except a direct URL
+  // load/refresh — same fallback shape as wardrobe/upload.tsx's Cancel.
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/profile');
+    }
+  };
 
   const progressQuery = useOnboardingProgressQuery(userId);
   // Fetched once here and passed down to the 3 sections that need DB-backed
@@ -40,6 +52,11 @@ export default function EditPreferencesScreen() {
         variant="flat"
         className="m-md flex-1 items-center justify-center"
       >
+        <IconButton
+          icon="arrow-back"
+          accessibilityLabel="Back"
+          onPress={handleBack}
+        />
         <Text variant="body">Loading…</Text>
       </Card>
     );
@@ -62,6 +79,11 @@ export default function EditPreferencesScreen() {
         variant="flat"
         className="m-md flex-1 items-center justify-center"
       >
+        <IconButton
+          icon="arrow-back"
+          accessibilityLabel="Back"
+          onPress={handleBack}
+        />
         <Text variant="body">Loading…</Text>
       </Card>
     );
@@ -76,7 +98,12 @@ export default function EditPreferencesScreen() {
 
   return (
     <ScrollView testID="edit-preferences-screen" className="flex-1">
-      <View className="p-md">
+      <View className="flex-row items-center gap-xs p-md">
+        <IconButton
+          icon="arrow-back"
+          accessibilityLabel="Back"
+          onPress={handleBack}
+        />
         <Text variant="heading">Edit Preferences</Text>
       </View>
 
