@@ -24,6 +24,7 @@ export const SHARE_CTA = 'Share';
 export const BACKEND_UNREACHABLE_COPY =
   "Couldn't reach the stylist. Try again in a moment.";
 export const RETRY_CTA = 'Retry';
+export const BACK_TO_OCCASIONS_CTA = 'Back to occasions';
 
 export const OUTFIT_SAVE_DEGRADED_COPY =
   "Couldn't save that one — try regenerating.";

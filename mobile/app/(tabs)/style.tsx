@@ -10,6 +10,7 @@ import { OutfitCardDeck } from '../../features/outfit-ai/components/OutfitCardDe
 import { SuggestionSkeletonDeck } from '../../features/outfit-ai/components/SuggestionSkeletonDeck';
 import {
   BACKEND_UNREACHABLE_COPY,
+  BACK_TO_OCCASIONS_CTA,
   GET_SUGGESTIONS_CTA,
   OCCASION_SCREEN_HEADING,
   RETRY_CTA,
@@ -186,6 +187,13 @@ export default function StyleScreen() {
           onPress={handleGetSuggestions}
         >
           {RETRY_CTA}
+        </Button>
+        <Button
+          variant="ghost"
+          accessibilityLabel={BACK_TO_OCCASIONS_CTA}
+          onPress={() => generateMutation.reset()}
+        >
+          {BACK_TO_OCCASIONS_CTA}
         </Button>
       </EmptyState>
     );

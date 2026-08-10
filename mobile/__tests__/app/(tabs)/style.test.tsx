@@ -40,6 +40,7 @@ jest.mock('../../../lib/storage', () => ({
 
 const mockUseWardrobeItemCountQuery = jest.fn();
 const mockGenerateMutate = jest.fn();
+const mockGenerateReset = jest.fn();
 const mockUseGenerateSuggestionsMutation = jest.fn();
 jest.mock('../../../features/outfit-ai/outfit-ai.queries', () => ({
   useWardrobeItemCountQuery: (...args: unknown[]) =>
@@ -203,9 +204,10 @@ describe('StyleScreen (app/(tabs)/style.tsx)', () => {
     expect(mockSkeletonDeckRender).toHaveBeenCalled();
   });
 
-  it('error state renders the retry copy on a rejected mutation', async () => {
+  it('error state renders the retry copy and a back-to-occasions escape hatch on a rejected mutation', async () => {
     mockUseGenerateSuggestionsMutation.mockReturnValue({
       mutate: mockGenerateMutate,
+      reset: mockGenerateReset,
       isPending: false,
       isError: true,
     });
@@ -213,6 +215,22 @@ describe('StyleScreen (app/(tabs)/style.tsx)', () => {
     const { getByLabelText } = await render(<StyleScreen />);
 
     expect(getByLabelText('Retry')).toBeOnTheScreen();
+    expect(getByLabelText('Back to occasions')).toBeOnTheScreen();
+  });
+
+  it('"Back to occasions" resets the mutation instead of retrying, so a repeatedly-failing request never traps the user', async () => {
+    mockUseGenerateSuggestionsMutation.mockReturnValue({
+      mutate: mockGenerateMutate,
+      reset: mockGenerateReset,
+      isPending: false,
+      isError: true,
+    });
+
+    const { getByLabelText } = await render(<StyleScreen />);
+    await fireEvent.press(getByLabelText('Back to occasions'));
+
+    expect(mockGenerateReset).toHaveBeenCalled();
+    expect(mockGenerateMutate).not.toHaveBeenCalled();
   });
 
   it('a successful response renders the OutfitCardDeck with the response shape', async () => {
