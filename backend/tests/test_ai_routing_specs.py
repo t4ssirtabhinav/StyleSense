@@ -52,10 +52,23 @@ def test_default_router_policy_validates_against_its_own_model() -> None:
     assert AI_ROUTER_POLICY_SPEC.default.total_deadline_seconds == 12.0
 
 
-def test_seeded_routing_table_json_parses_to_exactly_the_coded_default() -> None:
+def test_seeded_routing_table_json_still_parses_against_the_current_model() -> None:
+    """Migration ``011`` is a forward-only, point-in-time seed (never
+    edited, per ``BL-060``'s standing discipline) -- it is NOT expected to
+    stay byte-identical to ``DEFAULT_ROUTING_TABLE`` forever. The whole
+    point of `app_config` (SS-026 design) is that the *live* value can be
+    updated with a single ``UPDATE`` and no redeploy/migration, which is
+    exactly what happened on 2026-08-10 (``EVERYDAY_MODEL_ID`` promoted
+    ``gemini-2.5-flash-lite`` -> ``gemini-3.1-flash-lite`` after the former
+    started 404ing for this account -- see ``ai_routing_specs.py``'s
+    module docstring). This test only asserts the migration's original
+    seed is still valid, parseable ``RoutingTableConfig`` JSON -- a
+    schema-compatibility check, not a byte-for-byte snapshot comparison."""
     seeded_raw = _extract_seeded_jsonb(AI_STYLING_ROUTING_TABLE_SPEC.key)
     seeded = RoutingTableConfig.model_validate(seeded_raw)
-    assert seeded == DEFAULT_ROUTING_TABLE
+    assert seeded.default.provider == "gemini"
+    assert seeded.default.cost_class == "everyday"
+    assert seeded.version == 1
 
 
 def test_seeded_provider_quota_json_parses_to_exactly_the_coded_default() -> None:

@@ -121,8 +121,8 @@ def _router(
 
 
 async def test_success_on_first_provider_returns_result_and_decision() -> None:
-    provider = _FakeMeteredProvider([], provider="gemini", model="gemini-2.5-flash-lite")
-    router = _router(adapters={("gemini", "gemini-2.5-flash-lite"): provider})
+    provider = _FakeMeteredProvider([], provider="gemini", model="gemini-3.1-flash-lite")
+    router = _router(adapters={("gemini", "gemini-3.1-flash-lite"): provider})
 
     result, decision = await router.narrate_candidates_with_decision(
         [], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
@@ -134,9 +134,9 @@ async def test_success_on_first_provider_returns_result_and_decision() -> None:
 
 async def test_parse_error_retries_same_provider_then_succeeds() -> None:
     provider = _FakeMeteredProvider(
-        [ProviderParseError("bad json")], provider="gemini", model="gemini-2.5-flash-lite"
+        [ProviderParseError("bad json")], provider="gemini", model="gemini-3.1-flash-lite"
     )
-    router = _router(adapters={("gemini", "gemini-2.5-flash-lite"): provider})
+    router = _router(adapters={("gemini", "gemini-3.1-flash-lite"): provider})
 
     result, _decision = await router.narrate_candidates_with_decision(
         [], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
@@ -147,12 +147,12 @@ async def test_parse_error_retries_same_provider_then_succeeds() -> None:
 
 async def test_transient_error_fails_over_to_next_provider_in_chain() -> None:
     gemini = _FakeMeteredProvider(
-        [ProviderTransientError("down")], provider="gemini", model="gemini-2.5-flash-lite"
+        [ProviderTransientError("down")], provider="gemini", model="gemini-3.1-flash-lite"
     )
     claude = _FakeMeteredProvider([], provider="claude", model="claude-sonnet-5")
     router = _router(
         adapters={
-            ("gemini", "gemini-2.5-flash-lite"): gemini,
+            ("gemini", "gemini-3.1-flash-lite"): gemini,
             ("claude", "claude-sonnet-5"): claude,
         }
     )
@@ -166,7 +166,7 @@ async def test_transient_error_fails_over_to_next_provider_in_chain() -> None:
 
 async def test_both_providers_fail_degrades_to_fallback_never_raises() -> None:
     gemini = _FakeMeteredProvider(
-        [ProviderTransientError("down")], provider="gemini", model="gemini-2.5-flash-lite"
+        [ProviderTransientError("down")], provider="gemini", model="gemini-3.1-flash-lite"
     )
     claude = _FakeMeteredProvider(
         [ProviderTransientError("down")], provider="claude", model="claude-sonnet-5"
@@ -174,7 +174,7 @@ async def test_both_providers_fail_degrades_to_fallback_never_raises() -> None:
     fallback = _FakeFallback()
     router = _router(
         adapters={
-            ("gemini", "gemini-2.5-flash-lite"): gemini,
+            ("gemini", "gemini-3.1-flash-lite"): gemini,
             ("claude", "claude-sonnet-5"): claude,
         },
         fallback=fallback,
@@ -189,7 +189,7 @@ async def test_both_providers_fail_degrades_to_fallback_never_raises() -> None:
 
 async def test_fallback_itself_raising_still_returns_valid_empty_result_never_raises() -> None:
     gemini = _FakeMeteredProvider(
-        [ProviderTransientError("down")], provider="gemini", model="gemini-2.5-flash-lite"
+        [ProviderTransientError("down")], provider="gemini", model="gemini-3.1-flash-lite"
     )
     claude = _FakeMeteredProvider(
         [ProviderTransientError("down")], provider="claude", model="claude-sonnet-5"
@@ -197,7 +197,7 @@ async def test_fallback_itself_raising_still_returns_valid_empty_result_never_ra
     fallback = _FakeFallback(raises=True)
     router = _router(
         adapters={
-            ("gemini", "gemini-2.5-flash-lite"): gemini,
+            ("gemini", "gemini-3.1-flash-lite"): gemini,
             ("claude", "claude-sonnet-5"): claude,
         },
         fallback=fallback,

@@ -11,18 +11,30 @@ indefinitely.
 summarized here since these constants are the thing every reader will want
 to double-check:
 
-- ``EVERYDAY_MODEL_ID = "gemini-2.5-flash-lite"`` -- present in this
-  account's ``client.aio.models.list()``, but a live
-  ``generate_content`` call against it returned
-  ``google.genai.errors.ClientError(code=404, "... no longer available to
-  new users ...")`` for THIS account/key. Shipped anyway per the user's
-  explicit, recorded B1 decision (``docs/worklog/SS-028.md``'s
-  "Orchestrator -- 2026-07-30" entry) -- this is precisely why
-  ``EVERYDAY_FALLBACK_MODEL_ID`` exists as an in-tier retry hop inside
-  ``GeminiStylingAdapter`` (design §4.1: "not a slot in this routing
-  table's JSON"), not a routing-table alternative.
-- ``EVERYDAY_FALLBACK_MODEL_ID = "gemini-3.1-flash-lite"`` -- live-verified
-  callable against the same account/key; returned valid structured JSON.
+- ``EVERYDAY_MODEL_ID = "gemini-3.1-flash-lite"`` -- **promoted from
+  ``gemini-2.5-flash-lite`` on 2026-08-10 (user-directed live fix)**.
+  ``gemini-2.5-flash-lite`` is present in this account's
+  ``client.aio.models.list()``, but a live ``generate_content`` call
+  against it returns ``google.genai.errors.ClientError(code=404, "... no
+  longer available to new users ...")`` for THIS account/key -- it was
+  shipped anyway by SS-028 per the user's B1 decision at the time
+  (``docs/worklog/SS-028.md``'s "Orchestrator -- 2026-07-30" entry), on the
+  premise that ``EVERYDAY_FALLBACK_MODEL_ID``'s in-tier retry hop inside
+  ``GeminiStylingAdapter`` would cover the gap. The live ``app_config``
+  row for ``ai_styling_routing_table`` was updated the same day (2026-08-10,
+  ``UPDATE ... jsonb_set(value, '{default,model}', ...)``, no
+  redeploy/restart per SS-026's live-reload design) to route the
+  "everyday" default straight to the already-verified-working model
+  instead of paying for a 404-then-retry round trip on every call. This
+  constant is updated to match so the config-unreachable degrade path
+  doesn't silently revert to the broken model.
+- ``EVERYDAY_FALLBACK_MODEL_ID = "gemini-2.5-flash-lite"`` -- kept as the
+  in-tier retry hop for symmetry with the pre-2026-08-10 shape, even though
+  it is the model now known to 404 for this account -- if this account's
+  access to it is ever restored, the fallback slot is still meaningful;
+  until then it will simply never succeed as a fallback. Not removed
+  outright since ``GeminiStylingAdapter``'s retry-hop mechanism itself is
+  unrelated to which two model IDs occupy the two slots.
 - ``HIGH_STAKES_MODEL_ID = "claude-sonnet-5"`` -- present in
   ``anthropic.types.model_param.ModelParam``'s ``Literal[...]`` (the
   installed SDK's own accepted-model-ID list) AND live-verified callable
@@ -40,8 +52,8 @@ from pydantic import BaseModel, Field, RootModel, model_validator
 
 from services.app_config import ConfigSpec
 
-EVERYDAY_MODEL_ID = "gemini-2.5-flash-lite"
-EVERYDAY_FALLBACK_MODEL_ID = "gemini-3.1-flash-lite"
+EVERYDAY_MODEL_ID = "gemini-3.1-flash-lite"
+EVERYDAY_FALLBACK_MODEL_ID = "gemini-2.5-flash-lite"
 HIGH_STAKES_MODEL_ID = "claude-sonnet-5"
 
 

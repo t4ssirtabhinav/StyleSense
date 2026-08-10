@@ -225,7 +225,7 @@ class _FakeStylingProvider:
             source=self._source,  # type: ignore[arg-type]
         )
         metrics = _FakeMetrics(
-            provider="gemini", model="gemini-2.5-flash-lite", tokens_in=100, tokens_out=50, latency_ms=5
+            provider="gemini", model="gemini-3.1-flash-lite", tokens_in=100, tokens_out=50, latency_ms=5
         )
         return result, metrics
 
@@ -506,7 +506,7 @@ async def test_budget_denied_degrades_to_rule_based_never_a_429() -> None:
                 "prices": [
                     {
                         "provider": "gemini",
-                        "model": "gemini-2.5-flash-lite",
+                        "model": "gemini-3.1-flash-lite",
                         "mode": "per_token",
                         "effective_from": "2026-01-01",
                         "usd_per_mtok_in": 0.10,
