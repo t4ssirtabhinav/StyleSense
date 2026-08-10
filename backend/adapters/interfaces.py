@@ -142,6 +142,99 @@ class SuggestionOutcomeLog:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ImpressionRef:
+    """(SS-023) One resolved ``suggestion_impressions`` row, the join target
+    of ``POST /outfit-suggestions/outcome``'s ``(session_id, rank)`` pair.
+
+    ``occasion`` is a doc-internal gap-fill (flagged explicitly, same
+    posture as ``IWardrobeRepository.item_exists``'s own precedent): the
+    design doc's dataclass sketch (§3) omits it, but design §7/test-plan
+    item 7 requires ``OutfitOutcomeService`` to write ``outfits.occasion``
+    from "the impression's own session row", and nothing else on this
+    dataclass carries that value. Populated from a
+    ``suggestion_impressions -> suggestion_sessions`` embedded read
+    (``find_impression``'s own join), never from the request."""
+
+    impression_id: str
+    user_id: str  # from the impression row -- the ownership check's input
+    session_id: str
+    rank: int
+    item_ids: list[str]
+    outfit_fingerprint: str
+    total_score: float
+    is_exploration: bool
+    occasion: str | None = None  # from suggestion_sessions.occasion, already normalised
+
+
+@dataclass(frozen=True)
+class OutfitInsert:
+    """(SS-023) One row to write to ``outfits`` -- ``OutfitOutcomeService``'s
+    payload to ``IOutfitRepository.insert_outfit``. Every value here is
+    server-derived or engine-produced; nothing is a client-supplied
+    free-form string except ``name`` (already length-capped by the
+    router's Pydantic model)."""
+
+    user_id: str
+    item_ids: list[str]
+    occasion: str | None  # from the impression's session row -- never client-asserted (design §7)
+    name: str | None = None
+    season: str | None = None
+    ai_generated: bool = True
+    ai_reasoning: str | None = None
+    session_id: str | None = None
+    outfit_fingerprint: str | None = None
+    engine_version: str | None = None
+    effort_tier: str | None = None
+    reasoning_language: str | None = None
+    items_snapshot: list[dict[str, Any]] = field(default_factory=list)
+
+
+class IOutfitRepository(ABC):
+    """(SS-023) JWT-scoped like ``IWardrobeRepository``, deliberately NOT
+    ``service_role`` -- ``outfits`` keeps its ``user_owns_outfits`` FOR ALL
+    policy (design §3's rejected-alternative note: this is the user's own
+    authored content, not accounting data about them), so RLS remains the
+    real enforcement and this port is not a privileged bypass."""
+
+    @abstractmethod
+    async def insert_outfit(self, *, jwt: str, outfit: OutfitInsert) -> tuple[str, bool]:
+        """Insert one ``outfits`` row. Returns ``(outfit_id, already_existed)``.
+
+        On a unique violation against ``uq_outfits_user_fingerprint``
+        (``(user_id, outfit_fingerprint)`` -- a double swipe-right, a
+        retried request, an offline replay), this method does NOT raise:
+        it selects and returns the pre-existing row's id with
+        ``already_existed=True``, mirroring
+        ``suggestion_log_repository.py``'s ``_is_dedupe_conflict`` pattern.
+        Any other failure raises -- unlike ``ISuggestionLogRepository``,
+        this port's writes are user-facing (the ``outfits`` save IS the
+        product action), so a genuine failure must reach the caller, not be
+        swallowed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def insert_wear_rows(
+        self,
+        *,
+        jwt: str,
+        user_id: str,
+        item_ids: list[str],
+        worn_on: str,
+        occasion_key: str | None,
+        outfit_id: str,
+    ) -> bool:
+        """Insert one ``wardrobe_item_wears`` row per ``item_ids`` entry,
+        ``outfit_id`` and ``occasion_key`` set on every row. Idempotent via
+        ``ON CONFLICT DO NOTHING`` against
+        ``wardrobe_item_wears_one_per_day_per_occasion`` (``015``,
+        ``UNIQUE NULLS NOT DISTINCT (item_id, worn_on, occasion_key)``).
+        Returns ``True`` if at least one row was newly inserted, ``False``
+        if every item was already logged for that day/occasion (the
+        "already logged for today" case, §6)."""
+        raise NotImplementedError
+
+
 class ISuggestionLogRepository(ABC):
     """(SS-033) ALWAYS uses service_role -- the second port in this file to
     do so after IAppConfigRepository, and for a different reason: these
@@ -206,6 +299,21 @@ class ISuggestionLogRepository(ABC):
         (cache hit / LLM call / degrade) is known, rather than reopening
         Engine v2's "no AI provider calls" boundary. MUST NEVER RAISE, same
         posture as every other method on this port."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def find_impression(self, *, session_id: str, rank: int) -> ImpressionRef | None:
+        """(SS-023) MUST NEVER RAISE (port-wide contract). Returns ``None``
+        on not-found AND on any error -- the caller cannot distinguish, and
+        must not try. Resolves on the ``(session_id, rank)`` UNIQUE
+        constraint (``suggestion_impressions_session_rank_unique``,
+        ``013:126``).
+
+        ``service_role``, so this BYPASSES RLS ENTIRELY and will happily
+        return any user's impression -- ``OutfitOutcomeService`` MUST
+        compare ``ImpressionRef.user_id`` against the JWT-derived caller
+        before any write (design §3, the single highest-risk line in the
+        ticket)."""
         raise NotImplementedError
 
 

@@ -94,6 +94,7 @@ class OutfitPortfolioService:
         as_of: date | None,
         style_preferences_override: dict[str, Any] | None,
         config_snapshot: AppConfigSnapshot,
+        exclude_fingerprints: list[str] | None = None,
     ) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
         start = time.perf_counter()
@@ -116,6 +117,14 @@ class OutfitPortfolioService:
             app_config=self._app_config,
         )
 
+        # (SS-023) Truncated at 60, oldest-first (design §1) -- an
+        # over-cap list is TRUNCATED, never a 422. Empty/None both forward
+        # as None so pre-SS-023 behaviour is reproduced byte-for-byte
+        # (engine_v2_portfolio.select_portfolio's own "falsy = no-op" check).
+        exclude_fp_set: frozenset[str] | None = (
+            frozenset(exclude_fingerprints[:60]) if exclude_fingerprints else None
+        )
+
         engine_result = await self._engine.generate_portfolio(
             list(wardrobe_by_id.values()),
             occasion_input,
@@ -130,6 +139,7 @@ class OutfitPortfolioService:
             effort_tier=effort_tier_key,
             tier=plan_tier,
             request_id=request_id,
+            exclude_fingerprints=exclude_fp_set,
         )
 
         rationale_by_fingerprint: dict[str, str] = {}
@@ -164,7 +174,12 @@ class OutfitPortfolioService:
                 )
 
         portfolio_response = []
-        for pc in engine_result.portfolio:
+        # (SS-023) `rank` is 1-based and EXACTLY the rank EngineV2._log_session
+        # wrote to suggestion_impressions.rank for the same candidate -- both
+        # loops iterate `engine_result.portfolio` in the same order with the
+        # same `enumerate(..., start=1)`, so the join key is provably
+        # identical, not coincidentally aligned (test plan item 2).
+        for rank, pc in enumerate(engine_result.portfolio, start=1):
             candidate = pc.candidate
             fingerprint = compute_outfit_fingerprint(candidate.item_ids)
             rationale = rationale_by_fingerprint.get(fingerprint)
@@ -182,6 +197,8 @@ class OutfitPortfolioService:
                     "rationale_language": rationale_language,
                     "is_exploration": pc.is_exploration,
                     "gap_flags": list(candidate.gap_flags),
+                    "rank": rank,
+                    "outfit_fingerprint": fingerprint,
                 }
             )
 
@@ -208,6 +225,12 @@ class OutfitPortfolioService:
             "effort_tier": effort_tier_key,
             "cache_hit": cache_hit,
             "generated_at": datetime.now(UTC).isoformat(),
+            # (SS-023) session_id is None when EngineV2._log_session's
+            # best-effort write failed -- a None session must still render
+            # suggestions, it only means outcomes can't be recorded for this
+            # batch (design §1/edge cases).
+            "session_id": engine_result.session_id,
+            "occasion_key": occasion_input.key,
         }
 
     async def _resolve_occasion(self, raw_occasion: str, *, jwt: str) -> OccasionStylingInput:

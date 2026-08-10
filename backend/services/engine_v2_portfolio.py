@@ -74,6 +74,7 @@ def select_portfolio(
     gap_report: GapReport,
     portfolio_size_range: tuple[int, int] = DEFAULT_PORTFOLIO_SIZE_RANGE,
     max_exploration: int = DEFAULT_MAX_EXPLORATION,
+    exclude_fingerprints: frozenset[str] | None = None,
 ) -> PortfolioResult:
     """Doc-internal gap-fill, flagged explicitly: the design doc's own
     listed signature for ``select_portfolio`` takes no ``gap_report``
@@ -84,10 +85,17 @@ def select_portfolio(
     and ``search_result.missing_slots`` in scope right before this call) --
     the minimal way to satisfy the doc's own return shape.
 
-    1. ``eligible = [c for c in scored if c.total_score >= score_floor]``,
-       sorted ``(-total_score, item_ids tuple)`` for determinism.
+    1. ``eligible = [c for c in scored if c.total_score >= score_floor AND
+       compute_outfit_fingerprint(c.item_ids) not in exclude_fingerprints]``,
+       sorted ``(-total_score, item_ids tuple)`` for determinism. (SS-023)
+       ``exclude_fingerprints`` is applied in the SAME filter pass, i.e.
+       strictly before MMR selection runs -- so diversity is computed over
+       what actually remains, not over a set that then gets holes punched
+       in it (design §4). ``None``/empty reproduces pre-SS-023 behaviour
+       byte-for-byte (additive-widening pattern, same as SS-020's).
     2. ``limited_options = len(eligible) < 3`` (same threshold semantics as
-       v0's ``len(scored) < 3``).
+       v0's ``len(scored) < 3`` -- now naturally also true when exclusion
+       leaves too few candidates).
     3. Greedy MMR: seed with the top-scored candidate; repeatedly pick
        ``argmax(lambda_*score - (1-lambda_)*max(jaccard_similarity(c, s) for
        s in selected))`` over remaining eligible candidates, deterministic
@@ -102,7 +110,15 @@ def select_portfolio(
        can never be below-floor by construction.
     """
     eligible = sorted(
-        (c for c in scored if c.total_score >= score_floor),
+        (
+            c
+            for c in scored
+            if c.total_score >= score_floor
+            and (
+                not exclude_fingerprints
+                or compute_outfit_fingerprint(c.item_ids) not in exclude_fingerprints
+            )
+        ),
         key=lambda c: (-c.total_score, tuple(c.item_ids)),
     )
     limited_options = len(eligible) < 3

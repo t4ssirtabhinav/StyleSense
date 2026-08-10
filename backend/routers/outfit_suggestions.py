@@ -33,10 +33,11 @@ from typing import Any, Literal
 
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from adapters.interfaces import ISuggestionLogRepository, IWardrobeRepository
+from adapters.interfaces import IOutfitRepository, ISuggestionLogRepository, IWardrobeRepository
 from adapters.occasion_repository import SupabaseOccasionRepository
+from adapters.outfit_repository import SupabaseOutfitRepository
 from adapters.suggestion_log_repository import SupabaseSuggestionLogRepository
 from adapters.suggestion_narration_cache_repository import (
     SupabaseSuggestionNarrationCacheRepository,
@@ -56,6 +57,7 @@ from services.app_config import AppConfigSnapshot, app_config_service
 from services.cost_budget_gate import CostBudgetGate
 from services.engine_v2 import build_default_engine_v2
 from services.occasion_normalizer import OccasionNormalizer
+from services.outfit_outcome_service import OutcomeNotFoundError, OutfitOutcomeService
 from services.outfit_portfolio_service import OutfitPortfolioService
 from services.outfit_suggestion_service import OutfitSuggestionService
 from services.provider_quota import ProviderQuotaTracker
@@ -88,6 +90,7 @@ _occasion_normalizer = OccasionNormalizer(SupabaseOccasionRepository())
 _cost_rate_limiter = UpstashRateLimiter()
 _wardrobe_repository = SupabaseWardrobeRepository()
 _suggestion_log_repository = SupabaseSuggestionLogRepository()
+_outfit_repository = SupabaseOutfitRepository()
 _narration_cache_orchestrator = NarrationCacheOrchestrator(
     SupabaseSuggestionNarrationCacheRepository()
 )
@@ -276,6 +279,12 @@ class GeneratePortfolioRequest(BaseModel):
     season: Literal["summer", "winter", "monsoon", "all"] | None = None
     as_of: date | None = None  # default: today, IST (services/ist_window.py)
     style_preferences_override: dict[str, Any] | None = None  # None => server fetches users.style_preferences
+    # (SS-023) The regenerate mechanism (design §4). Fingerprints the caller
+    # has already been shown/dismissed in this session. Untrusted but
+    # harmless: the only thing a forged value can do is shrink the caller's
+    # own result set. Capped server-side; over-cap is TRUNCATED
+    # (oldest-first by client order), never a 422.
+    exclude_fingerprints: list[str] = Field(default_factory=list, max_length=60)
 
 
 class PortfolioItemResponse(BaseModel):
@@ -286,6 +295,11 @@ class PortfolioItemResponse(BaseModel):
     rationale_language: Literal["en", "hi"]
     is_exploration: bool
     gap_flags: list[str]
+    # (SS-023) 1-based, EXACTLY the rank written to
+    # suggestion_impressions.rank by EngineV2._log_session -- the join key
+    # /outfit-suggestions/outcome resolves on.
+    rank: int
+    outfit_fingerprint: str  # 64-char lowercase hex
 
 
 class GeneratePortfolioResponse(BaseModel):
@@ -296,6 +310,10 @@ class GeneratePortfolioResponse(BaseModel):
     effort_tier: str
     cache_hit: bool
     generated_at: str
+    # (SS-023) None when session logging failed -- the client can still
+    # render suggestions, but cannot record an outcome for that batch.
+    session_id: str | None
+    occasion_key: str  # RESOLVED canonical key (post-alias)
 
 
 @router.post("/portfolio", status_code=200, response_model=GeneratePortfolioResponse)
@@ -323,6 +341,7 @@ async def generate_outfit_portfolio(
             as_of=request.as_of,
             style_preferences_override=request.style_preferences_override,
             config_snapshot=config_snapshot,
+            exclude_fingerprints=request.exclude_fingerprints,
         )
         return GeneratePortfolioResponse.model_validate(result)
     except HTTPException:
@@ -342,3 +361,80 @@ def _extract_bearer_token(authorization: str | None) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return token
+
+
+# ---------------------------------------------------------------------------
+# SS-023 -- POST /outfit-suggestions/outcome (real endpoint, real auth).
+# ---------------------------------------------------------------------------
+
+
+def get_outfit_repository() -> IOutfitRepository:
+    return _outfit_repository
+
+
+def get_outfit_outcome_service(
+    suggestion_log_repo: ISuggestionLogRepository = Depends(get_suggestion_log_repository),
+    outfit_repo: IOutfitRepository = Depends(get_outfit_repository),
+    wardrobe_repo: IWardrobeRepository = Depends(get_wardrobe_repository),
+) -> OutfitOutcomeService:
+    """The binding from "everything /outcome needs" to a real
+    ``OutfitOutcomeService`` lives here, and only here -- the route handler
+    below never imports a concrete adapter directly. Override via
+    ``app.dependency_overrides`` to swap in fakes for tests."""
+    return OutfitOutcomeService(
+        suggestion_log_repo=suggestion_log_repo,
+        outfit_repo=outfit_repo,
+        wardrobe_repo=wardrobe_repo,
+    )
+
+
+class RecordOutcomeRequest(BaseModel):
+    session_id: str  # UUID string, from the portfolio response
+    rank: int = Field(ge=1)  # which card in that session
+    outcome_type: Literal["saved", "dismissed", "worn", "shared"]
+    # ISO-8601; clamped server-side by the existing _clamp_client_occurred_at.
+    client_occurred_at: str | None = None
+    name: str | None = Field(default=None, max_length=80)  # optional user-given outfit name
+
+
+class RecordOutcomeResponse(BaseModel):
+    outfit_id: str | None  # non-None for 'saved'/'worn'/'shared'; None for 'dismissed'
+    outcome_recorded: bool  # False = outcome logging degraded (outfits save is unaffected)
+    already_saved: bool  # True when the idempotent path hit an existing outfit
+
+
+@router.post("/outcome", status_code=200, response_model=RecordOutcomeResponse)
+async def record_outfit_outcome(
+    request: RecordOutcomeRequest,
+    user_id: str = Depends(get_current_user_id),
+    authorization: str | None = Header(default=None),
+    service: OutfitOutcomeService = Depends(get_outfit_outcome_service),
+) -> RecordOutcomeResponse:
+    """``'shuffled_away'`` is in the DB's CHECK enum but is deliberately not
+    exposed here -- this ticket has no shuffle gesture (design §1). Never a
+    500 for a degraded log write -- only ``OutcomeNotFoundError`` (the
+    cross-tenant/not-found case, design §3, the single highest-risk line in
+    this ticket) maps to a 4xx; everything else that can go wrong inside
+    the service degrades to ``outcome_recorded=False``, not an exception."""
+    jwt_token = _extract_bearer_token(authorization)
+    try:
+        result = await service.record_outcome(
+            user_id=user_id,
+            jwt=jwt_token,
+            session_id=request.session_id,
+            rank=request.rank,
+            outcome_type=request.outcome_type,
+            client_occurred_at=request.client_occurred_at,
+            name=request.name,
+        )
+        return RecordOutcomeResponse.model_validate(result)
+    except OutcomeNotFoundError:
+        # Deliberately 404, never 403 -- a 403 would confirm the session
+        # exists, an enumeration oracle over another user's session ids
+        # (design §3).
+        raise HTTPException(status_code=404, detail="Suggestion not found") from None
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive catch-all
+        logger.exception("outfit_suggestions_outcome_failed", extra={"user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to record outfit outcome") from exc

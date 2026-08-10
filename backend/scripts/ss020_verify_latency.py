@@ -172,6 +172,9 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
             }
         )
 
+    async def find_impression(self, *, session_id: str, rank: int) -> Any:
+        return None
+
 
 class _AlwaysMissNarrationCacheRepo(ISuggestionNarrationCacheRepository):
     """COLD cache, by construction -- `get()` always returns None."""

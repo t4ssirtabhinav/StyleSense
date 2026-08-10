@@ -93,6 +93,9 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
     ) -> None:
         return None
 
+    async def find_impression(self, *, session_id: str, rank: int):  # type: ignore[no-untyped-def]
+        return None
+
 
 class _FailingSuggestionLogRepo(ISuggestionLogRepository):
     async def log_session(self, session, impressions):  # type: ignore[no-untyped-def]
@@ -109,6 +112,9 @@ class _FailingSuggestionLogRepo(ISuggestionLogRepository):
     async def update_session_outcome(
         self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
     ) -> None:
+        return None
+
+    async def find_impression(self, *, session_id: str, rank: int):  # type: ignore[no-untyped-def]
         return None
 
 
