@@ -12,9 +12,13 @@
 // when the image half is eventually built, only the platform files change,
 // never this one's exported TYPE contract.
 
-export type ShareableCard =
-  | { kind: 'image'; uri: string }
-  | { kind: 'text'; body: string };
+// SS-021 — moved to mobile/lib/share/shareableCard.types.ts (design §7), the
+// one generalisation of this seam so both tickets' "shareable card" seams
+// can never drift into two different notions of the concept. Re-exported
+// here so `import type { ShareableCard } from './outfitCardExport'` keeps
+// compiling unchanged.
+import type { ShareableCard } from '../../../lib/share/shareableCard.types';
+export type { ShareableCard } from '../../../lib/share/shareableCard.types';
 
 export interface OutfitShareInput {
   occasionLabel: string;

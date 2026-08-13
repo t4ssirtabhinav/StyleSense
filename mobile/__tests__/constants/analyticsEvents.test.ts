@@ -1,8 +1,10 @@
 import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 
 describe('ANALYTICS_EVENTS', () => {
-  it('has exactly 13 entries', () => {
-    expect(Object.keys(ANALYTICS_EVENTS)).toHaveLength(13);
+  // SS-021 adds a 14th entry, STYLE_SCORE_SHARED, additive over the 13 the
+  // SS-009 comment above ANALYTICS_EVENTS originally enumerated.
+  it('has exactly 14 entries', () => {
+    expect(Object.keys(ANALYTICS_EVENTS)).toHaveLength(14);
   });
 
   it('every value is a unique, non-empty snake_case string', () => {

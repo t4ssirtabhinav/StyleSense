@@ -13,6 +13,12 @@
 // This is the first file in mobile/constants/ — CLAUDE.md's Anti-Patterns
 // section already names constants/api.ts as the required home for hardcoded
 // URLs, establishing the folder convention this file follows.
+//
+// SS-021 adds a 14th entry, STYLE_SCORE_SHARED (real call site:
+// features/style-score/components/StyleScoreCard.tsx), and gives
+// PREMIUM_PAYWALL_VIEWED its first real call site
+// (features/style-score/components/StyleScoreBreakdown.tsx) — one of
+// BL-049's remaining uncalled events, not all of them.
 
 export const ANALYTICS_EVENTS = {
   APP_OPENED: 'app_opened',
@@ -28,6 +34,10 @@ export const ANALYTICS_EVENTS = {
   AFFILIATE_LINK_CLICKED: 'affiliate_link_clicked',
   TRYON_GENERATED: 'tryon_generated',
   CATEGORY_FILTERED: 'category_filtered',
+  // SS-021 — deliberately NOT reusing outfit_shared, which is a funnel
+  // metric for a different object (an accepted outfit, not the style
+  // score).
+  STYLE_SCORE_SHARED: 'style_score_shared',
 } as const;
 
 export type AnalyticsEventName =
@@ -52,4 +62,5 @@ export interface AnalyticsEventProperties {
   affiliate_link_clicked: { retailer?: string };
   tryon_generated: { outfit_id?: string };
   category_filtered: { category: string };
+  style_score_shared: { channel?: string };
 }

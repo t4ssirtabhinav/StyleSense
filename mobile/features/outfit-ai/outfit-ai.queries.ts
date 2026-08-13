@@ -3,7 +3,9 @@
 // through features/<domain>/*.queries.ts" — extended here to the backend
 // fetch calls, mirroring wardrobe.queries.ts's own established split).
 
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuthStore } from '../auth/auth.store';
+import { styleScoreQueryKey } from '../style-score/style-score.queries';
 import {
   generateSuggestionsPortfolio,
   recordOutfitOutcome,
@@ -34,12 +36,22 @@ export function useGenerateSuggestionsMutation() {
   });
 }
 
+// SS-021: onSuccess invalidates the style score's query key -- the "score
+// updates after each outfit saved" half of AC #1 (design §4). Outfit
+// outcomes ('accepted'/'worn') are the only writes to outfits /
+// wardrobe_item_wears this domain owns.
 export function useRecordOutcomeMutation() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((state) => state.session?.user.id);
+
   return useMutation<
     RecordOutcomeResponse,
     Error,
     { request: RecordOutcomeRequest; jwt: string }
   >({
     mutationFn: ({ request, jwt }) => recordOutfitOutcome(request, jwt),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: styleScoreQueryKey(userId) });
+    },
   });
 }
