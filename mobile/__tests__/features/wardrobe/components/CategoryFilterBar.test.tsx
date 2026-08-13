@@ -87,19 +87,24 @@ describe('CategoryFilterBar', () => {
   // vertical space in the screen's flex-column layout, producing the
   // "large unexplained gap" before the search bar. `flex-none` (flex-grow:
   // 0; flex-shrink: 0) pins it back to its content height.
-  it('is pinned to its content height (flex-none className), not left to grow and fill the column', async () => {
+  // Regression pin, rewritten 2026-08-12. The previous version of this test
+  // asserted the `flex-none` *className* was present -- which is why it
+  // stayed green for months while the bug was live in a real browser: the
+  // className never actually won against react-native-web's own
+  // `flexGrow: 1` base style. Assert the real constraint (the `style` prop,
+  // which has last-writer precedence in RN's style merge) rather than the
+  // mechanism that was supposed to produce it.
+  it('is pinned to its content height via the style prop, not left to grow and fill the column', async () => {
     const items = [makeItem()];
 
     const { getByTestId } = await render(<CategoryFilterBar items={items} />);
 
-    // Matches this file's own established pattern (see the `selected`-style
-    // test above): under this jest environment, NativeWind's className ->
-    // style compilation isn't visible on the queried element's own `.props`
-    // (that only happens deeper, at render time in a real RN/web host), so
-    // this asserts the className itself is present rather than a computed
-    // style value.
-    expect(getByTestId('category-filter-bar').props.className).toContain(
-      'flex-none',
+    expect(getByTestId('category-filter-bar').props.style).toEqual(
+      expect.objectContaining({
+        flexGrow: 0,
+        flexShrink: 0,
+        maxHeight: expect.any(Number),
+      }),
     );
   });
 });

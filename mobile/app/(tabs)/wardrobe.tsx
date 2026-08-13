@@ -35,6 +35,38 @@ import { useNetworkStatus } from '../../hooks/useNetworkStatus';
 
 const LOADING_SKELETON_COUNT = 6;
 
+// Load-bearing, not decoration (2026-08-12 investigation, verified via live
+// DOM measurement against the real authenticated route, not just reasoning
+// about it): react-native-screens' web `Screen` (the per-route wrapper
+// expo-router/ui's <Tabs>/<TabSlot> renders this screen inside --
+// node_modules/react-native-screens/lib/.../Screen.web.js) is a plain View
+// with `flex: 1, position: 'relative', height: '100%'` and no exposed prop
+// to add a `minHeight: 0` override. A column flex item's `min-height: auto`
+// default lets its content's intrinsic size win over an explicit
+// `height: 100%` when the content wants more room -- this is standard CSS
+// flexbox behaviour (reproduces in Chrome, not just Safari; an earlier
+// version of this fix wrongly assumed it was Safari-specific). Without
+// this, this screen's grid rendered at its full natural content height
+// (measured 2320px for 20 items) instead of the ~700px actually available,
+// pushing CustomTabBar off the bottom of the viewport.
+//
+// Fix: take this screen's root out of the flex-sizing negotiation
+// entirely. `position: absolute` + `inset: 0` removes it from Screen's
+// in-flow content, so Screen no longer has anything to "grow to fit" --
+// its own min-height:auto then resolves against nothing, letting its
+// `height: 100%` (against ScreenContainer, which app/(tabs)/_layout.tsx's
+// own TabSlot `style={{minHeight:0}}` fix bounds correctly) take over
+// cleanly. This screen's own internal flex-1/minHeight:0 chain down to the
+// grid (unchanged, already correct) then fills that now-correctly-bounded
+// box and scrolls internally.
+const SCREEN_FILL_STYLE = {
+  position: 'absolute' as const,
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+};
+
 // SS-005/SS-013's placeholder EmptyState now becomes the real 2-column
 // FlashList catalogue -- per docs/tickets/SS-014-design.md, this ticket's
 // core deliverable.
@@ -140,8 +172,8 @@ export default function WardrobeScreen() {
   if (itemsQuery.isLoading) {
     return (
       <View
-        className="flex-1 flex-row flex-wrap p-md"
-        style={{ paddingTop: insets.top }}
+        className="flex-row flex-wrap p-md"
+        style={{ ...SCREEN_FILL_STYLE, paddingTop: insets.top }}
         testID="wardrobe-loading"
       >
         {Array.from({ length: LOADING_SKELETON_COUNT }).map((_, index) => (
@@ -156,7 +188,7 @@ export default function WardrobeScreen() {
 
   if (itemsQuery.isError) {
     return (
-      <View className="flex-1" style={{ paddingTop: insets.top }}>
+      <View style={{ ...SCREEN_FILL_STYLE, paddingTop: insets.top }}>
         <EmptyState
           testID="wardrobe-error-state"
           icon="alert-circle-outline"
@@ -177,7 +209,7 @@ export default function WardrobeScreen() {
 
   if (items.length === 0) {
     return (
-      <View className="flex-1" style={{ paddingTop: insets.top }}>
+      <View style={{ ...SCREEN_FILL_STYLE, paddingTop: insets.top }}>
         <EmptyState
           testID="wardrobe-empty-state"
           icon="shirt-outline"
@@ -197,7 +229,17 @@ export default function WardrobeScreen() {
   }
 
   return (
-    <View className="flex-1" style={{ paddingTop: insets.top }}>
+    // SCREEN_FILL_STYLE takes this screen out of Screen's flex-sizing
+    // negotiation entirely (see that constant's own comment for the full
+    // "why", verified via live DOM measurement). minHeight: 0 here is a
+    // second, independent fix for a second, independent link in the chain
+    // -- this screen's OWN internal flex-1 column (CategoryFilterBar, the
+    // search row, FreeTierBanner, then the grid) still needs it so the
+    // grid (not this outer box) is the thing that scrolls internally.
+    <View
+      className="flex-1"
+      style={{ ...SCREEN_FILL_STYLE, paddingTop: insets.top, minHeight: 0 }}
+    >
       <CategoryFilterBar items={items} />
       <View className="flex-row items-center gap-sm px-md">
         <View className="flex-1">
@@ -232,18 +274,28 @@ export default function WardrobeScreen() {
           </Button>
         </EmptyState>
       ) : (
-        <WardrobeGrid
-          items={filteredItems}
-          imageUrls={imageUrls}
-          onItemPress={handleItemPress}
-          refreshing={itemsQuery.isRefetching}
-          onRefresh={handleRefresh}
-        />
+        <View className="flex-1" style={{ minHeight: 0 }}>
+          <WardrobeGrid
+            items={filteredItems}
+            imageUrls={imageUrls}
+            onItemPress={handleItemPress}
+            refreshing={itemsQuery.isRefetching}
+            onRefresh={handleRefresh}
+          />
+        </View>
       )}
 
       <ItemDetailSheet ref={detailSheetRef} item={selectedItem} jwt={jwt} />
 
-      <View className="absolute bottom-md right-md items-end">
+      {/* Sits inside this screen's own bounded flex-1 box (a real, non-
+          overlapping sibling of CustomTabBar now that global.css's html/
+          body/#root height fix makes that box terminate exactly where the
+          tab bar begins -- see that file's comment). No insets.bottom math
+          needed here: the tab bar already reserves the true device-edge/
+          home-indicator safe area for itself. `bottom-lg` is just breathing
+          room off this box's own bottom edge, per the user's "slight
+          margin" ask. */}
+      <View className="absolute bottom-lg right-md items-end">
         <IconButton
           icon="add"
           variant="filled"

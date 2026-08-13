@@ -1,3 +1,39 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Root cause of "have to scroll to reach the tab bar" (2026-08-12): nothing
+ * in this app's web output ever constrained `html`/`body`/`#root` to a real
+ * height. Expo web mounts into `document.getElementById('root')`
+ * (node_modules/expo/src/launch/registerRootComponent.web.tsx), and
+ * react-native-web's own AppContainer wraps everything in a plain
+ * `flex: 1` View (node_modules/react-native-web/dist/exports/AppRegistry/
+ * AppContainer.js) -- `flex: 1` only means anything against a bounded
+ * ancestor, and there wasn't one. Every screen's own `flex: 1` (including
+ * app/(tabs)/_layout.tsx's <Tabs> -> CustomTabBar) was resolving against an
+ * unbounded `height: auto` chain, so the WHOLE PAGE scrolled as one long
+ * document -- the tab bar wasn't "not fixed", it was just wherever it fell
+ * in that page. This was invisible on Home only because that screen's
+ * content happens to be short enough to fit one viewport, not because it
+ * was architecturally different.
+ *
+ * 100dvh (dynamic viewport height) rather than 100vh specifically because
+ * of iOS Safari's floating/collapsing toolbar, which the earlier
+ * bottom-nav-hidden-behind-the-browser-chrome reports were partly about --
+ * 100vh includes space the toolbar can cover; 100dvh does not. Falls back
+ * to 100vh first for browsers that don't support dvh (harmless no-op
+ * override on ones that do, per CSS cascade -- last valid declaration
+ * wins).
+ *
+ * overflow: hidden on body means the *document* itself can never scroll --
+ * each screen's own ScrollView/FlashList becomes the only scrollable
+ * region, and CustomTabBar (a real, non-scrolling, bounded sibling of
+ * TabSlot once this chain is fixed) stays visually pinned, matching native
+ * tab-bar behaviour. */
+html,
+body,
+#root {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}

@@ -59,7 +59,25 @@ export default function TabsLayout() {
 
   return (
     <Tabs>
-      <TabSlot />
+      {/* minHeight: 0 is load-bearing, not decoration (2026-08-12
+          investigation): expo-router/ui's TabSlot renders react-native-
+          screens' ScreenContainer with `flexGrow: 1, flexShrink: 0` but no
+          minHeight override (node_modules/expo-router/build/ui/TabSlot.js).
+          A flex column item defaults to `min-height: auto`, which lets it
+          refuse to shrink below its own content's natural size -- verified
+          via live DOM measurement (Chrome DevTools Protocol against the
+          real authenticated /wardrobe route, not just reasoning about it):
+          without this, wardrobe-grid rendered at its full natural height
+          (2320px for 20 items) instead of the ~700px actually available,
+          pushing CustomTabBar (a sibling of this TabSlot, below it) to
+          y=2406-2470 -- entirely outside the 844px viewport, and clipped/
+          unreachable under global.css's html/body/#root `overflow: hidden`
+          fix rather than merely off-screen-but-scrollable. Every screen's
+          own flex-1 chain (e.g. app/(tabs)/wardrobe.tsx's own minHeight: 0
+          chain) assumed this outer link already behaved correctly; it did
+          not. `style` is TabSlot's only exposed override point for this
+          third-party container -- see its own source for how it merges. */}
+      <TabSlot style={{ minHeight: 0 }} />
       {tabBar}
     </Tabs>
   );

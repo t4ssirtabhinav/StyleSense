@@ -48,8 +48,18 @@ export function WardrobeGrid({
   );
 
   return (
+    // flex: 1 alone reproduces the WardrobeGrid.tsx-class bug fixed here,
+    // but is NOT sufficient by itself on WebKit/Safari: a nested flex child
+    // defaults to `min-height: auto`, which lets it refuse to shrink below
+    // its own intrinsic content height regardless of `flex: 1` — a classic
+    // cross-browser flexbox gotcha (Chrome is more forgiving; Safari is
+    // spec-strict here). minHeight: 0 overrides that default explicitly.
+    // Every ancestor in this screen's flex-1 chain
+    // (app/(tabs)/wardrobe.tsx) needs the same override, not just this
+    // component — see that file's matching comment.
     <FlashList
       testID="wardrobe-grid"
+      style={{ flex: 1, minHeight: 0 }}
       data={items}
       renderItem={renderItem}
       keyExtractor={(item) => item.id}
