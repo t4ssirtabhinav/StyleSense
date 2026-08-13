@@ -5,6 +5,7 @@ import { useAnalytics } from '../../hooks/useAnalytics';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../auth/auth.store';
 import { useOccasionTaxonomy } from '../onboarding/onboarding.queries';
+import { styleScoreQueryKey } from '../style-score/style-score.queries';
 import {
   EXPIRED_URL_MAX_RETRIES,
   GRID_IMAGE_URLS_STALE_TIME_MS,
@@ -247,6 +248,15 @@ export function useSaveWardrobeItemTags() {
       queryClient.invalidateQueries({
         queryKey: wardrobeItemCountQueryKey(userId),
       });
+      // SS-021: this hook predates useInvalidateWardrobeGridQueries and
+      // does its own inline invalidation rather than calling the shared
+      // helper -- the design doc's "one edit covers every wardrobe path"
+      // claim (design §4) assumed it went through that helper, which it
+      // doesn't. Tag edits change category/occasion_tags, both style-score
+      // inputs, so this needs the same invalidation added directly.
+      queryClient.invalidateQueries({
+        queryKey: styleScoreQueryKey(userId),
+      });
     },
   });
 }
@@ -322,6 +332,11 @@ export function useWardrobeItemImageUrlQuery(
   });
 }
 
+// SS-021: also invalidates the style score's query key so tag-save,
+// favourite, delete, wear log/edit/delete and details-save all refresh the
+// score (design §4 — "score updates after each ... item added" half of
+// AC #1). One shared invalidation point rather than per-hook, per the
+// design's explicit instruction not to add per-hook invalidation.
 function useInvalidateWardrobeGridQueries() {
   const queryClient = useQueryClient();
   const userId = useAuthStore((state) => state.session?.user.id);
@@ -330,6 +345,9 @@ function useInvalidateWardrobeGridQueries() {
     queryClient.invalidateQueries({ queryKey: wardrobeItemsQueryKey(userId) });
     queryClient.invalidateQueries({
       queryKey: wardrobeItemCountQueryKey(userId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: styleScoreQueryKey(userId),
     });
   };
 }

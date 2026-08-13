@@ -444,6 +444,10 @@ describe('useSaveWardrobeItemTags', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: wardrobeItemCountQueryKey(FAKE_USER_ID),
     });
+    // SS-021 (AC: score updates after an item is added/edited).
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['style-score', 'summary', FAKE_USER_ID],
+    });
   });
 
   // (SS-025) The UPDATE itself moved to wardrobe.service.ts's
@@ -780,6 +784,11 @@ describe('useLogWardrobeItemWear', () => {
     });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: wardrobeItemsQueryKey(FAKE_USER_ID),
+    });
+    // SS-021 -- shared useInvalidateWardrobeGridQueries() helper also
+    // invalidates the style score (AC: score updates after a wear logged).
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['style-score', 'summary', FAKE_USER_ID],
     });
   });
 });
