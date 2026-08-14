@@ -84,7 +84,9 @@ class GarmentAttributes(BaseModel):
 @dataclass(frozen=True)
 class AssembledCandidate:
     """Stage②'s output, pre-scoring: one assembled combination of items
-    plus any gap flags recorded during assembly (e.g. ``missing_footwear``)."""
+    plus any gap flags recorded during assembly (e.g. ``missing_footwear``,
+    ``footwear_formality_mismatch`` -- SS-024, mutually exclusive with each
+    other by construction)."""
 
     items: list[WardrobeItemInput]
     gap_flags: list[str]

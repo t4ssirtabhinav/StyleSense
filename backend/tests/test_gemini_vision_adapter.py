@@ -253,9 +253,7 @@ class _FakeOccasionRepository(IOccasionRepository):
 def _adapter_with_registry(
     fake_client: _FakeClient, keys: tuple[str, ...], *, fail: bool = False
 ) -> GeminiVisionAdapter:
-    normalizer = OccasionNormalizer(
-        _FakeOccasionRepository(keys, fail=fail), ttl_seconds=0.0
-    )
+    normalizer = OccasionNormalizer(_FakeOccasionRepository(keys, fail=fail), ttl_seconds=0.0)
     return GeminiVisionAdapter(
         client=fake_client, occasion_normalizer=normalizer, registry_jwt="caller-jwt"
     )
@@ -328,3 +326,41 @@ async def test_response_with_an_unknown_occasion_still_succeeds_with_the_tag_ret
     assert result.success is True
     assert result.tags is not None
     assert result.tags.occasion_tags == ["festival", "Ganesh Chaturthi"]
+
+
+# --- SS-024: India-aware footwear vocabulary hint -------------------------
+
+
+async def test_prompt_includes_india_footwear_vocabulary() -> None:
+    """Cheap regression pin: the India-specific footwear values are the
+    whole point of the prompt enrichment and are the first thing a future
+    prompt edit would drop."""
+    fake_client = _FakeClient([_valid_response()])
+    adapter = GeminiVisionAdapter(client=fake_client)
+
+    await adapter.tag_garment(b"fake-image-bytes")
+
+    prompt = fake_client.models.calls[0]["contents"][0]
+    assert "juti" in prompt
+    assert "mojari" in prompt
+    assert "kolhapuri" in prompt
+
+
+async def test_footwear_subcategory_out_of_vocabulary_is_accepted() -> None:
+    """Pins BL-064's lenient posture against a future strict-validation
+    regression: an out-of-vocabulary footwear subcategory must still
+    validate successfully, never nuke the whole payload."""
+    payload = {
+        **VALID_PAYLOAD,
+        "category": "footwear_ethnic",
+        "subcategory": "peshawari_chappal",
+    }
+    fake_client = _FakeClient([_FakeResponse(json.dumps(payload))])
+    adapter = GeminiVisionAdapter(client=fake_client)
+
+    result = await adapter.tag_garment(b"fake-image-bytes")
+
+    assert result.success is True
+    assert result.tags is not None
+    assert result.tags.category == "footwear_ethnic"
+    assert result.tags.subcategory == "peshawari_chappal"

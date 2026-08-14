@@ -7,6 +7,13 @@ jest.mock('../../../../features/onboarding/onboarding.queries', () => ({
   useOccasionTaxonomy: () => mockUseOccasionTaxonomy(),
 }));
 
+// SS-024: OutfitCard now renders FootwearSection, which calls useRouter()
+// (for the ADD_FOOTWEAR_CTA route) -- mocked here so every existing test in
+// this file keeps rendering outside a real navigation container.
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: jest.fn() }),
+}));
+
 const mockOutfitItemStackRender = jest.fn();
 jest.mock('../../../../features/outfit-ai/components/OutfitItemStack', () => ({
   OutfitItemStack: (props: unknown) => {
@@ -115,6 +122,19 @@ describe('OutfitCard', () => {
       expect(queryByTestId('ai-unavailable-badge')).toBeNull();
     },
   );
+
+  it('renders the footwear nudge when the item has gap_flags: [missing_footwear] (SS-024)', async () => {
+    const { getByText } = await render(
+      <OutfitCard
+        item={item({ gap_flags: ['missing_footwear'] })}
+        occasionKey="office"
+        onAccept={jest.fn()}
+        onReject={jest.fn()}
+      />,
+    );
+
+    expect(getByText('No footwear in your wardrobe yet')).toBeOnTheScreen();
+  });
 
   it('accept/reject buttons call their handlers', async () => {
     const onAccept = jest.fn();

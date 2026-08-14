@@ -33,10 +33,17 @@ def _item(
 
 
 def _occasion(
-    *, key: str = "office", kind: str = "professional", formality: int = 6, styling_rules: dict | None = None
+    *,
+    key: str = "office",
+    kind: str = "professional",
+    formality: int = 6,
+    styling_rules: dict | None = None,
 ) -> OccasionStylingInput:
     return OccasionStylingInput(
-        key=key, kind=kind, formality=formality, styling_rules=styling_rules or {}  # type: ignore[arg-type]
+        key=key,
+        kind=kind,  # type: ignore[arg-type]
+        formality=formality,
+        styling_rules=styling_rules or {},
     )
 
 
@@ -46,7 +53,9 @@ def _no_lookup(_category: str) -> GarmentAttributes | None:
     return None
 
 
-def _fake_lookup_factory(rows: dict[str, GarmentAttributes]) -> Callable[[str], GarmentAttributes | None]:
+def _fake_lookup_factory(
+    rows: dict[str, GarmentAttributes],
+) -> Callable[[str], GarmentAttributes | None]:
     def _lookup(category: str) -> GarmentAttributes | None:
         return rows.get(category.strip().lower())
 
@@ -173,6 +182,7 @@ def test_search_candidates_uses_garment_lookup_assembly_slot() -> None:
 
     top = WardrobeItemInput(id="top1", category="ethnic_kurta", color_primary="#1E3A8A")
     bottom = WardrobeItemInput(id="bottom1", category="ethnic_kurta", color_primary="#1E3A8A")
+
     # Force these two categories through the fake lookup via a monkeypatched
     # wrapper: real WardrobeCategory values never match "kurta"/"palazzo"
     # literally, so wrap lookup to translate for this synthetic test only.
@@ -226,7 +236,9 @@ def test_expansion_produces_multiple_distinct_footwear_choices() -> None:
         for item in candidate.items:
             if item.category in ("footwear_casual", "footwear_formal", "footwear_sports"):
                 footwear_ids_seen.add(item.id)
-    assert len(footwear_ids_seen) > 1, "expected multiple distinct footwear choices across candidates"
+    assert len(footwear_ids_seen) > 1, (
+        "expected multiple distinct footwear choices across candidates"
+    )
 
 
 def test_expansion_produces_multiple_distinct_accessory_choices() -> None:
@@ -312,12 +324,157 @@ def test_fallback_path_is_a_genuine_noop_vs_direct_dict_lookups_for_every_catego
     for category in _CATEGORIES:  # every one of the 21 real WardrobeCategory values
         item = _item(f"item-{category}", category=category)
         assert assembly_slot_for(item, _no_lookup) == CATEGORY_SLOT[category]
-        assert _formality_item_score(item, occasion.formality, tolerance=2) == _direct_formality_score(
-            category, occasion.formality, tolerance=2
+        assert _formality_item_score(
+            item, occasion.formality, tolerance=2
+        ) == _direct_formality_score(category, occasion.formality, tolerance=2)
+
+
+# ---------------------------------------------------------------------------
+# SS-024: footwear_formality_mismatch gap flag (failure mode B -- a
+# sneakers-only wardrobe at a ceremony/festival/religious occasion must not
+# get sneakers with no signal at all).
+# ---------------------------------------------------------------------------
+
+
+def test_mismatched_footwear_sets_formality_mismatch_flag() -> None:
+    """Ceremony occasion (footwear_required=True, preferred=[ethnic,
+    formal]); the wardrobe's only footwear is footwear_sports. Every
+    assembled candidate must carry the mismatch flag, AND the sneakers must
+    still be present in items -- surfaced as a gap, never suppressed."""
+    wardrobe = [
+        _item("kurta1", category="ethnic_kurta"),
+        _item("palazzo1", category="western_bottom"),
+        _item("sneaker1", category="footwear_sports"),
+    ]
+    occasion = _occasion(key="ceremony_test", kind="ceremony", formality=8)
+    rules = resolve_styling_rules(occasion)
+    result = search_candidates(
+        wardrobe,
+        occasion=occasion,
+        garment_lookup=_no_lookup,
+        rules=rules,
+        as_of=_AS_OF,
+        season=None,
+        style_preferences=None,
+    )
+    assert result.candidates, "expected at least one assembled candidate"
+    for candidate in result.candidates:
+        assert "footwear_formality_mismatch" in candidate.gap_flags
+        assert any(item.id == "sneaker1" for item in candidate.items)
+
+
+def test_preferred_footwear_sets_no_gap_flag() -> None:
+    """Same occasion, wardrobe's footwear is in the preferred set (ethnic)
+    -- no gap flag on a correct outfit (guards against a false-positive
+    nudge)."""
+    wardrobe = [
+        _item("kurta1", category="ethnic_kurta"),
+        _item("palazzo1", category="western_bottom"),
+        _item("juti1", category="footwear_ethnic"),
+    ]
+    occasion = _occasion(key="ceremony_test", kind="ceremony", formality=8)
+    rules = resolve_styling_rules(occasion)
+    result = search_candidates(
+        wardrobe,
+        occasion=occasion,
+        garment_lookup=_no_lookup,
+        rules=rules,
+        as_of=_AS_OF,
+        season=None,
+        style_preferences=None,
+    )
+    assert result.candidates
+    for candidate in result.candidates:
+        assert candidate.gap_flags == []
+
+
+def test_footwear_gap_flags_are_mutually_exclusive() -> None:
+    """No candidate ever carries both missing_footwear and
+    footwear_formality_mismatch -- this is the assertion the narration
+    payload's char-budget bound (BL-130) rests on."""
+    wardrobe = [
+        _item("kurta1", category="ethnic_kurta"),
+        _item("palazzo1", category="western_bottom"),
+        _item("sneaker1", category="footwear_sports"),
+    ]
+    occasion = _occasion(key="ceremony_test", kind="ceremony", formality=8)
+    rules = resolve_styling_rules(occasion)
+    result = search_candidates(
+        wardrobe,
+        occasion=occasion,
+        garment_lookup=_no_lookup,
+        rules=rules,
+        as_of=_AS_OF,
+        season=None,
+        style_preferences=None,
+    )
+    assert result.candidates
+    for candidate in result.candidates:
+        assert not (
+            "missing_footwear" in candidate.gap_flags
+            and "footwear_formality_mismatch" in candidate.gap_flags
         )
 
 
-def _direct_formality_score(category: WardrobeCategory, occasion_formality: int, *, tolerance: int) -> float:
+def test_no_mismatch_flag_when_occasion_has_no_preferred_footwear() -> None:
+    """everyday kind: footwear_required=True but preferred_footwear_categories
+    is unset -- guards the `and preferred_footwear` half of the gate."""
+    wardrobe = [
+        _item("top1", category="western_top"),
+        _item("bottom1", category="western_bottom"),
+        _item("sneaker1", category="footwear_sports"),
+    ]
+    occasion = _occasion(key="everyday_test", kind="everyday", formality=3)
+    rules = resolve_styling_rules(occasion)
+    assert not rules.preferred_footwear_categories
+    result = search_candidates(
+        wardrobe,
+        occasion=occasion,
+        garment_lookup=_no_lookup,
+        rules=rules,
+        as_of=_AS_OF,
+        season=None,
+        style_preferences=None,
+    )
+    assert result.candidates
+    for candidate in result.candidates:
+        assert "footwear_formality_mismatch" not in candidate.gap_flags
+
+
+def test_no_mismatch_flag_when_footwear_not_required() -> None:
+    """footwear_required=False with a preference list still set (explicit
+    override) -- guards the other half of the gate."""
+    wardrobe = [
+        _item("kurta1", category="ethnic_kurta"),
+        _item("palazzo1", category="western_bottom"),
+        _item("sneaker1", category="footwear_sports"),
+    ]
+    occasion = _occasion(
+        key="ceremony_test",
+        kind="ceremony",
+        formality=8,
+        styling_rules={"footwear_required": False},
+    )
+    rules = resolve_styling_rules(occasion)
+    assert rules.footwear_required is False
+    result = search_candidates(
+        wardrobe,
+        occasion=occasion,
+        garment_lookup=_no_lookup,
+        rules=rules,
+        as_of=_AS_OF,
+        season=None,
+        style_preferences=None,
+    )
+    assert result.candidates
+    for candidate in result.candidates:
+        assert "footwear_formality_mismatch" not in candidate.gap_flags
+        assert "missing_footwear" not in candidate.gap_flags
+
+
+def _direct_formality_score(
+    category: WardrobeCategory, occasion_formality: int, *, tolerance: int
+) -> float:
     """The exact formula `_formality_item_score` implements, computed
     directly against `CATEGORY_FORMALITY`'s dict -- the independent
     "ground truth" this test compares the real function's fallback-path

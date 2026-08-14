@@ -207,11 +207,18 @@ def search_candidates(
 
     def base_key(items: list[WardrobeItemInput]) -> float:
         return (
-            0.35 * _mean([_formality_item_score(i, occasion.formality, tolerance) for i in items], default=0.0)
+            0.35
+            * _mean(
+                [_formality_item_score(i, occasion.formality, tolerance) for i in items],
+                default=0.0,
+            )
             + 0.25 * _mean([_recency_item_score(i, as_of) for i in items], default=0.0)
             + 0.15 * _mean([_season_item_score(i, season) for i in items], default=1.0)
             + 0.15 * _mean([_occasion_tag_item_score(i, occasion.key) for i in items], default=0.0)
-            + 0.10 * _mean([_style_preference_item_bonus(i, style_preferences) for i in items], default=0.0)
+            + 0.10
+            * _mean(
+                [_style_preference_item_bonus(i, style_preferences) for i in items], default=0.0
+            )
             + CANDIDATE_SEARCH_COLOUR_WEIGHT * pairwise_colour_harmony(items)
         )
 
@@ -225,9 +232,7 @@ def search_candidates(
             for bottom in bottoms:
                 bases.append([top, bottom])
 
-    ranked_bases = sorted(
-        bases, key=lambda b: (-base_key(b), tuple(sorted(i.id for i in b)))
-    )
+    ranked_bases = sorted(bases, key=lambda b: (-base_key(b), tuple(sorted(i.id for i in b))))
     kept_bases = ranked_bases[:top_k_bases]
     bases_to_expand = kept_bases[:_TOP_BASES_TO_EXPAND]
 
@@ -279,6 +284,25 @@ def search_candidates(
             gap_flags: list[str] = []
             if footwear is not None:
                 items.append(footwear)
+                # SS-024: the ranking bonus at footwear_key() above only
+                # *biases* footwear selection toward preferred_footwear --
+                # it never excludes non-preferred footwear (a sneakers-only
+                # wardrobe still has to wear something). When the occasion
+                # both requires footwear AND expresses a preference, and the
+                # footwear actually attached isn't in that preference set,
+                # surface it rather than silently forcing the mismatch (the
+                # ticket's own "sneakers-only + wedding_guest" failure
+                # mode). Gated identically to the existing 0.7-component
+                # penalty in engine_v2_attribute_scoring.py -- no new
+                # semantics, just a visible flag for a judgment the engine
+                # already makes. Mutually exclusive with missing_footwear
+                # by construction (different branches of this if).
+                if (
+                    rules.footwear_required
+                    and preferred_footwear
+                    and footwear.category not in preferred_footwear
+                ):
+                    gap_flags.append("footwear_formality_mismatch")
             elif rules.footwear_required:
                 gap_flags.append("missing_footwear")
             if outerwear is not None:
