@@ -97,7 +97,11 @@ markdown, no prose) matching this shape:
     accessory_bag, accessory_jewellery, accessory_watch, accessory_belt,
     accessory_scarf] or null if the photo is not clothing (e.g. food, a pet,
     a person with no garment focus),
-  "subcategory": a short free-text label (e.g. "straight-fit kurta"), or null,
+  "subcategory": a short free-text label (e.g. "straight-fit kurta"), or null
+    -- if the item is footwear, prefer one of [juti, mojari, kolhapuri,
+    sandal, sneaker, sports_shoe, heel, wedge, flat, ballerina, loafer,
+    oxford, brogue, derby, boot, flip_flop, slipper] or another short label
+    if none of those fit,
   "color_primary": the dominant colour as a hex string, e.g. "#1E3A8A",
   "color_secondary": a secondary colour as hex, or null if the garment is a
     single solid colour,

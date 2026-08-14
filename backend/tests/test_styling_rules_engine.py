@@ -32,15 +32,21 @@ from services.styling_rules_engine import render_candidate_for_prompt
 from services.styling_rules_types import RuleScore, ScoredCandidate
 
 
-def _scored_candidate(item_ids_and_categories: list[tuple[str, str]], *, score: float = 0.82) -> ScoredCandidate:
+def _scored_candidate(
+    item_ids_and_categories: list[tuple[str, str]], *, score: float = 0.82
+) -> ScoredCandidate:
     return ScoredCandidate(
         item_ids=[item_id for item_id, _ in item_ids_and_categories],
         category_labels={item_id: category for item_id, category in item_ids_and_categories},
         total_score=score,
         rule_scores=[
-            RuleScore(rule="formality_fit", score=0.9, explanation="Formality fit 0.90 (tolerance 2)"),
+            RuleScore(
+                rule="formality_fit", score=0.9, explanation="Formality fit 0.90 (tolerance 2)"
+            ),
             RuleScore(rule="colour_harmony", score=0.85, explanation="Colour harmony 0.85"),
-            RuleScore(rule="category_completeness", score=0.8, explanation="Outfit completeness 0.80"),
+            RuleScore(
+                rule="category_completeness", score=0.8, explanation="Outfit completeness 0.80"
+            ),
         ],
         gap_flags=[],
     )
@@ -104,3 +110,46 @@ def test_render_candidate_for_prompt_carries_gap_flags() -> None:
     )
     rendered = render_candidate_for_prompt(candidate)
     assert rendered["gap_flags"] == ["missing_footwear"]
+
+
+def test_render_candidate_for_prompt_budget_with_footwear_mismatch_flag() -> None:
+    """BL-130's own re-verification trigger firing: SS-024's new
+    ``footwear_formality_mismatch`` gap flag (§4.1) is rendered into the
+    narration payload alongside the same worst-case 6-item ceremony
+    candidate ``test_render_candidate_for_prompt_stays_within_budget_for_max_size_candidate``
+    uses -- must still stay within the measured 700-char budget.
+
+    Measured 2026-08-14 (SS-024 Developer phase): serialized length is
+    **619 chars** against the 700-char budget -- a real datum (uuid4's
+    36-char string form makes this deterministic across runs), not the
+    design doc's ~626 arithmetic estimate, recorded here per BL-130's own
+    requirement."""
+    item_ids = [str(uuid4()) for _ in range(6)]
+    categories = [
+        "ethnic_kurta",
+        "western_bottom",
+        "footwear_sports",
+        "western_outerwear",
+        "ethnic_dupatta",
+        "accessory_jewellery",
+    ]
+    candidate = ScoredCandidate(
+        item_ids=item_ids,
+        category_labels=dict(zip(item_ids, categories, strict=True)),
+        total_score=0.82,
+        rule_scores=[
+            RuleScore(
+                rule="formality_fit", score=0.9, explanation="Formality fit 0.90 (tolerance 2)"
+            ),
+            RuleScore(rule="colour_harmony", score=0.85, explanation="Colour harmony 0.85"),
+            RuleScore(
+                rule="category_completeness", score=0.7, explanation="Outfit completeness 0.70"
+            ),
+        ],
+        gap_flags=["footwear_formality_mismatch"],
+    )
+    rendered = render_candidate_for_prompt(candidate)
+    serialized = json.dumps(rendered)
+    json.loads(serialized)  # must round-trip without error
+    assert len(serialized) == 619
+    assert len(serialized) < 700

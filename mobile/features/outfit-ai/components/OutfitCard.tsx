@@ -3,6 +3,7 @@ import { Badge, Card, IconButton, Text } from '../../../components/ui';
 import { useOccasionTaxonomy } from '../../onboarding/onboarding.queries';
 import { scoreBadgeLabel } from '../outfit-ai.constants';
 import type { PortfolioItemResponse } from '../outfit-ai.types';
+import { FootwearSection } from './FootwearSection';
 import { OutfitItemStack } from './OutfitItemStack';
 import { ReasoningDisclosure } from './ReasoningDisclosure';
 
@@ -37,6 +38,8 @@ export function OutfitCard({
       className="gap-md"
     >
       <OutfitItemStack itemIds={item.item_ids} />
+
+      <FootwearSection item={item} />
 
       <View className="flex-row flex-wrap gap-sm">
         <Badge

@@ -33,6 +33,18 @@ export const OUTFIT_SAVE_DEGRADED_COPY =
 
 export const ITEM_NO_LONGER_IN_WARDROBE_COPY = 'No longer in your wardrobe';
 
+// SS-024 — FootwearSection copy (design §4.3, "the Architect's own authored
+// copy — no design doc pins them", flagged as such rather than mistaken for
+// transcribed values).
+export const FOOTWEAR_SECTION_HEADING = 'Best footwear for this outfit';
+export const MISSING_FOOTWEAR_HEADING = 'No footwear in your wardrobe yet';
+export const MISSING_FOOTWEAR_SUBTEXT =
+  'Add a pair and your outfits will be complete.';
+export const FOOTWEAR_MISMATCH_HEADING = 'These are a casual match';
+export const FOOTWEAR_MISMATCH_SUBTEXT =
+  'This is the only footwear you own for this occasion. Formal or ethnic footwear would suit it better.';
+export const ADD_FOOTWEAR_CTA = 'Add footwear';
+
 // `SuggestionSkeletonDeck`'s 3 skeletons are a visual constant, not a data
 // assumption — the response may legitimately carry 1 or 2 candidates
 // (`limited_options`), and the deck component must never hardcode 3
