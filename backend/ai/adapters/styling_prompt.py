@@ -23,9 +23,7 @@ class StylingPromptBuilder(Protocol):
     exactly -- so a test double or a future SS-027 replacement can be
     swapped in without touching either adapter's constructor shape."""
 
-    def __call__(
-        self, preferences: StylePreferencesInput, *, max_suggestions: int
-    ) -> str: ...
+    def __call__(self, preferences: StylePreferencesInput, *, max_suggestions: int) -> str: ...
 
 
 _INSTRUCTIONS = """You are a fashion-styling AI for an India-first wardrobe app.
@@ -54,9 +52,7 @@ User style preferences (JSON, any field may be absent or null):
 """
 
 
-def build_styling_prompt(
-    preferences: StylePreferencesInput, *, max_suggestions: int
-) -> str:
+def build_styling_prompt(preferences: StylePreferencesInput, *, max_suggestions: int) -> str:
     return _INSTRUCTIONS.format(
         max_suggestions=max_suggestions,
         preferences_json=preferences.model_dump_json(exclude_none=True),
@@ -68,6 +64,7 @@ def build_styling_prompt(
 # candidates, never invent new ones).
 # ---------------------------------------------------------------------------
 
+
 class NarrationPromptBuilder(Protocol):
     """Callable type alias for ``build_narration_prompt``'s signature --
     same injection seam ``StylingPromptBuilder`` gives ``suggest_outfits``."""
@@ -78,6 +75,7 @@ class NarrationPromptBuilder(Protocol):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -97,14 +95,27 @@ Field guidance (mirrors this backend's own onboarding mapping doc):
   occasion (India-specific convention: white is associated with mourning).
 - Keep each rationale generic enough to be true regardless of exact colour
   shade -- do not claim a specific named colour beyond what the candidate's
-  own category/explanation text already states.
+  own category/explanation text already states.{weather_instructions}
 
 User style preferences (JSON, any field may be absent or null):
 {preferences_json}
-
+{weather_block}
 Candidates (JSON array, each with items/score/explanation/gap_flags/outfit_fingerprint):
 {candidates_json}
 """
+
+# (SS-022) Only emitted when a weather block is present. The second line is
+# load-bearing, not stylistic: it is what makes a cached narration safe to
+# reuse across a coarse temperature band (services/weather_rules
+# .weather_cache_bucket) -- the exact analogue of the existing "keep each
+# rationale generic enough to be true regardless of exact colour shade"
+# instruction that already makes the colour coarsening safe.
+_WEATHER_INSTRUCTIONS = """
+- Take the weather into account in your rationale (comfort, breathability,
+  layering) where it is genuinely relevant. Do not force a weather mention
+  into every rationale.
+- Do NOT quote a specific temperature or humidity figure in your rationale
+  -- the app displays those separately."""
 
 
 def build_narration_prompt(
@@ -112,13 +123,35 @@ def build_narration_prompt(
     occasion: str,
     preferences: StylePreferencesInput,
     max_suggestions: int,
+    weather: dict[str, Any] | None = None,
 ) -> str:
     """Sibling to ``build_styling_prompt`` -- renders ``render_candidate_for_prompt``'s
     dicts verbatim (never re-deriving colour/formality text itself, per that
-    function's own stated contract)."""
+    function's own stated contract).
+
+    (SS-022) ``weather``, when present, is rendered by
+    ``services.weather_rules.render_weather_for_prompt`` into a compact
+    block appended after the preferences block. A dict (not a
+    ``WeatherContext``) so this ai/ module never needs a Pydantic-model
+    contract with the caller -- reconstructed here, never re-derived."""
+    weather_instructions = ""
+    weather_block = ""
+    if weather is not None:
+        from services.weather_rules import WeatherContext, render_weather_for_prompt
+
+        try:
+            ctx = WeatherContext.model_validate(weather)
+        except Exception:  # noqa: BLE001 -- a malformed weather dict must never break the prompt
+            ctx = None
+        if ctx is not None:
+            weather_instructions = _WEATHER_INSTRUCTIONS
+            weather_block = render_weather_for_prompt(ctx) + "\n"
+
     return _NARRATION_INSTRUCTIONS.format(
         occasion=occasion,
         max_suggestions=max_suggestions,
         preferences_json=preferences.model_dump_json(exclude_none=True),
+        weather_instructions=weather_instructions,
+        weather_block=weather_block,
         candidates_json=json.dumps(candidates),
     )

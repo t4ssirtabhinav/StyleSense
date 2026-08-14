@@ -29,7 +29,9 @@ _REQUEST_ID = "aaaaaaaa-1111-1111-1111-111111111111"
 _PRICE_TABLE = PriceTable(_DEFAULT_PRICE_TABLE)
 
 
-def _reservation(*, reserved_micropaise: int = 2_000_000, touched_redis: bool = True) -> Reservation:
+def _reservation(
+    *, reserved_micropaise: int = 2_000_000, touched_redis: bool = True
+) -> Reservation:
     return Reservation(
         user_id="user-1",
         tier="free",
@@ -162,6 +164,10 @@ class _FakeRepository(IWardrobeRepository):
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         return None
 
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        return None
+
 
 class _FakeStorage:
     def __init__(self, data: bytes = b"fake-original-bytes", fail: bool = False) -> None:
@@ -246,7 +252,12 @@ def _service(
     cost_budget_gate: _FakeCostBudgetGate | None = None,
     cost_ledger: _FakeCostLedger | None = None,
 ) -> tuple[
-    WardrobeTaggingService, _FakeStorage, _FakeCache, _FakeRateLimiter, _FakeCostBudgetGate, _FakeCostLedger
+    WardrobeTaggingService,
+    _FakeStorage,
+    _FakeCache,
+    _FakeRateLimiter,
+    _FakeCostBudgetGate,
+    _FakeCostLedger,
 ]:
     storage = storage or _FakeStorage()
     cache = cache or _FakeCache()
@@ -577,9 +588,7 @@ async def test_cache_hit_records_ledger_row_with_zero_cost_and_refunds_reservati
     repository = _FakeRepository()
     cache = _FakeCache(cached=cached_payload)
     reservation = _reservation(reserved_micropaise=5_000_000)
-    service, _, _, _, gate, ledger = _service(
-        provider=provider, repository=repository, cache=cache
-    )
+    service, _, _, _, gate, ledger = _service(provider=provider, repository=repository, cache=cache)
 
     await _tag(service, reservation=reservation)
 
@@ -600,7 +609,7 @@ async def test_inflight_dedupe_refunds_and_records_no_row() -> None:
     repository = _FakeRepository()
     cache = _FakeCache(inflight_already_present=True)
     reservation = _reservation(reserved_micropaise=3_000_000)
-    service, *_ , gate, ledger = _service(provider=provider, repository=repository, cache=cache)
+    service, *_, gate, ledger = _service(provider=provider, repository=repository, cache=cache)
 
     await _tag(service, reservation=reservation)
 
@@ -614,7 +623,7 @@ async def test_provider_failure_records_failed_outcome_row_without_refund() -> N
     provider = _FakeProvider(results=[VisionTaggingResult(success=False, error="timeout")])
     repository = _FakeRepository()
     reservation = _reservation(reserved_micropaise=2_000_000)
-    service, *_ , gate, ledger = _service(provider=provider, repository=repository)
+    service, *_, gate, ledger = _service(provider=provider, repository=repository)
 
     await _tag(service, reservation=reservation)
 
@@ -630,9 +639,7 @@ async def test_storage_read_failure_refunds_and_records_no_row() -> None:
     repository = _FakeRepository()
     storage = _FakeStorage(fail=True)
     reservation = _reservation(reserved_micropaise=1_500_000)
-    service, *_ , gate, ledger = _service(
-        provider=provider, repository=repository, storage=storage
-    )
+    service, *_, gate, ledger = _service(provider=provider, repository=repository, storage=storage)
 
     await _tag(service, reservation=reservation)
 
@@ -655,7 +662,7 @@ async def test_successful_tag_reconciles_and_records_a_priced_or_estimated_row()
     )
     repository = _FakeRepository()
     reservation = _reservation(reserved_micropaise=2_000_000)
-    service, *_ , gate, ledger = _service(provider=provider, repository=repository)
+    service, *_, gate, ledger = _service(provider=provider, repository=repository)
 
     await _tag(service, reservation=reservation)
 
@@ -682,7 +689,7 @@ async def test_no_usage_falls_back_to_default_tokens_and_forces_estimated() -> N
         ]
     )
     repository = _FakeRepository()
-    service, *_ , gate, ledger = _service(provider=provider, repository=repository)
+    service, *_, gate, ledger = _service(provider=provider, repository=repository)
 
     await _tag(service)
 

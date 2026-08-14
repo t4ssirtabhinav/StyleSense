@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from adapters.interfaces import IOutfitRepository, ISuggestionLogRepository, IWardrobeRepository
 from adapters.occasion_repository import SupabaseOccasionRepository
+from adapters.open_meteo_weather_adapter import OpenMeteoWeatherAdapter
 from adapters.outfit_repository import SupabaseOutfitRepository
 from adapters.suggestion_log_repository import SupabaseSuggestionLogRepository
 from adapters.suggestion_narration_cache_repository import (
@@ -64,6 +65,8 @@ from services.provider_quota import ProviderQuotaTracker
 from services.routing_mix_monitor import RoutingMixMonitor
 from services.styling_router import RoutingContext, StylingRouter
 from services.suggestion_narration_cache import NarrationCacheOrchestrator
+from services.weather_cache import WeatherCache
+from services.weather_service import WeatherService
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,14 @@ _narration_cache_orchestrator = NarrationCacheOrchestrator(
     SupabaseSuggestionNarrationCacheRepository()
 )
 _engine_v2 = build_default_engine_v2()
+# (SS-022) Same "zero-I/O at construction" reasoning -- OpenMeteoWeatherAdapter
+# and WeatherCache both hold no state that needs per-request construction.
+_weather_service = WeatherService(
+    wardrobe_repo=_wardrobe_repository,
+    provider=OpenMeteoWeatherAdapter(),
+    cache=WeatherCache(),
+    app_config=app_config_service,
+)
 
 
 def get_current_user_id_stub(authorization: str | None = Header(default=None)) -> str:
@@ -134,9 +145,7 @@ def get_provider_quota_tracker(
     snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
 ) -> ProviderQuotaTracker:
     quota_config = app_config_service.read(snapshot, AI_PROVIDER_QUOTA_SPEC)
-    ceilings = {
-        provider: (entry.rpm, entry.tpm) for provider, entry in quota_config.root.items()
-    }
+    ceilings = {provider: (entry.rpm, entry.tpm) for provider, entry in quota_config.root.items()}
     _provider_quota_tracker.set_ceilings(ceilings)
     return _provider_quota_tracker
 
@@ -218,7 +227,9 @@ async def generate_outfit_suggestions(
         raise
     except Exception as exc:  # pragma: no cover - defensive catch-all
         logger.exception("outfit_suggestions_generate_failed", extra={"user_id": user_id})
-        raise HTTPException(status_code=500, detail="Failed to queue outfit suggestion generation") from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to queue outfit suggestion generation"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +257,10 @@ def get_narration_cache() -> NarrationCacheOrchestrator:
     return _narration_cache_orchestrator
 
 
+def get_weather_service() -> WeatherService:
+    return _weather_service
+
+
 def get_outfit_portfolio_service(
     wardrobe_repo: IWardrobeRepository = Depends(get_wardrobe_repository),
     occasion_normalizer: OccasionNormalizer = Depends(get_occasion_normalizer),
@@ -255,6 +270,7 @@ def get_outfit_portfolio_service(
     quota: ProviderQuotaTracker = Depends(get_provider_quota_tracker),
     narration_cache: NarrationCacheOrchestrator = Depends(get_narration_cache),
     suggestion_log_repo: ISuggestionLogRepository = Depends(get_suggestion_log_repository),
+    weather_service: WeatherService = Depends(get_weather_service),
 ) -> OutfitPortfolioService:
     """The binding from "everything /portfolio needs" to a real
     ``OutfitPortfolioService`` lives here, and only here -- the route
@@ -271,6 +287,7 @@ def get_outfit_portfolio_service(
         provider_quota=quota,
         narration_cache=narration_cache,
         suggestion_log_repo=suggestion_log_repo,
+        weather_service=weather_service,
     )
 
 
@@ -278,7 +295,9 @@ class GeneratePortfolioRequest(BaseModel):
     occasion: str  # raw text or registry key; normalised server-side
     season: Literal["summer", "winter", "monsoon", "all"] | None = None
     as_of: date | None = None  # default: today, IST (services/ist_window.py)
-    style_preferences_override: dict[str, Any] | None = None  # None => server fetches users.style_preferences
+    style_preferences_override: dict[str, Any] | None = (
+        None  # None => server fetches users.style_preferences
+    )
     # (SS-023) The regenerate mechanism (design §4). Fingerprints the caller
     # has already been shown/dismissed in this session. Untrusted but
     # harmless: the only thing a forged value can do is shrink the caller's
@@ -302,6 +321,29 @@ class PortfolioItemResponse(BaseModel):
     outfit_fingerprint: str  # 64-char lowercase hex
 
 
+class WeatherResponse(BaseModel):
+    """(SS-022) Mirrors ``services.weather_rules.WeatherContext`` --
+    ``Literal``-constrained ``condition`` so an unmappable WMO code (already
+    degraded to ``"cloudy"`` in ``weather_rules.condition_for_wmo_code``)
+    can never fail validation at this boundary."""
+
+    city: str
+    temp_c: float
+    condition: Literal[
+        "clear",
+        "partly_cloudy",
+        "cloudy",
+        "fog",
+        "drizzle",
+        "rain",
+        "heavy_rain",
+        "thunderstorm",
+        "snow",
+    ]
+    humidity: int
+    is_heavy_rain: bool
+
+
 class GeneratePortfolioResponse(BaseModel):
     portfolio: list[PortfolioItemResponse]
     limited_options: bool
@@ -314,6 +356,9 @@ class GeneratePortfolioResponse(BaseModel):
     # render suggestions, but cannot record an outcome for that batch.
     session_id: str | None
     occasion_key: str  # RESOLVED canonical key (post-alias)
+    # (SS-022) None when the user has no usable city or Open-Meteo was
+    # unreachable -- never blocks the response.
+    weather: WeatherResponse | None = None
 
 
 @router.post("/portfolio", status_code=200, response_model=GeneratePortfolioResponse)

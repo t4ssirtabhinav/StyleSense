@@ -332,9 +332,14 @@ class StylingRouter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         result, _decision = await self.narrate_candidates_with_decision(
-            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+            candidates,
+            occasion=occasion,
+            preferences=preferences,
+            max_suggestions=max_suggestions,
+            weather=weather,
         )
         return result
 
@@ -345,6 +350,7 @@ class StylingRouter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, RoutingDecision]:
         """Reuses the exact chain/failover/quota/timeout/degrade structure
         ``suggest_outfits_with_decision`` uses -- ``_build_chain``,
@@ -395,7 +401,7 @@ class StylingRouter(IStylingProvider):
             while True:
                 if self._deadline_exceeded(start):
                     return await self._degrade_narration(
-                        candidates, occasion, preferences, max_suggestions, decision
+                        candidates, occasion, preferences, max_suggestions, decision, weather
                     )
 
                 reserved = await self._quota.try_reserve(
@@ -422,6 +428,7 @@ class StylingRouter(IStylingProvider):
                             occasion=occasion,
                             preferences=preferences,
                             max_suggestions=max_suggestions,
+                            weather=weather,
                         ),
                         timeout=self._policy.attempt_timeout_seconds,
                     )
@@ -487,7 +494,7 @@ class StylingRouter(IStylingProvider):
                     return result, decision
 
         return await self._degrade_narration(
-            candidates, occasion, preferences, max_suggestions, decision
+            candidates, occasion, preferences, max_suggestions, decision, weather
         )
 
     def _deadline_exceeded(self, start: float) -> bool:
@@ -514,7 +521,9 @@ class StylingRouter(IStylingProvider):
         provider is actually configured with elsewhere in the same table
         rather than inventing one. Pure, derived from the already-resolved
         ``routing_table`` -- no extra I/O."""
-        mapping: dict[str, str] = {self._routing_table.default.provider: self._routing_table.default.model}
+        mapping: dict[str, str] = {
+            self._routing_table.default.provider: self._routing_table.default.model
+        }
         for rule in self._routing_table.rules:
             mapping[rule.route.provider] = rule.route.model
         return mapping
@@ -565,6 +574,7 @@ class StylingRouter(IStylingProvider):
         preferences: StylePreferencesInput,
         max_suggestions: int,
         decision: RoutingDecision,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, RoutingDecision]:
         """Narration sibling of ``_degrade`` -- calls
         ``self._fallback.narrate_candidates(...)`` (``MockStylingAdapter`` by
@@ -589,6 +599,7 @@ class StylingRouter(IStylingProvider):
                 occasion=occasion,
                 preferences=preferences,
                 max_suggestions=max_suggestions,
+                weather=weather,
             )
             return result, decision
         except Exception:  # noqa: BLE001 - the degrade path itself must never raise
@@ -596,7 +607,9 @@ class StylingRouter(IStylingProvider):
                 "ai_narration_fallback_failed",
                 extra={"request_id": self._context.request_id, "user_id": self._context.user_id},
             )
-            return NarratedPortfolioResult(narrations=[], language="en", source="rules_only"), decision
+            return NarratedPortfolioResult(
+                narrations=[], language="en", source="rules_only"
+            ), decision
 
     def _log_and_record(
         self,

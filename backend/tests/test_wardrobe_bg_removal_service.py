@@ -28,7 +28,9 @@ _REQUEST_ID = "bbbbbbbb-1111-1111-1111-111111111111"
 _PRICE_TABLE = PriceTable(_DEFAULT_PRICE_TABLE)
 
 
-def _reservation(*, reserved_micropaise: int = 2_000_000, touched_redis: bool = True) -> Reservation:
+def _reservation(
+    *, reserved_micropaise: int = 2_000_000, touched_redis: bool = True
+) -> Reservation:
     return Reservation(
         user_id="user-1",
         tier="free",
@@ -153,6 +155,10 @@ class _FakeRepository(IWardrobeRepository):
         return []
 
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
+        return None
+
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
         return None
 
 
@@ -454,9 +460,7 @@ async def test_semaphore_caps_concurrency_at_three_for_ten_parallel_calls() -> N
         provider, repository, storage, circuit_breaker, max_concurrent_replicate_calls=3
     )
 
-    await asyncio.gather(
-        *(_process(service, item_id=f"item-{i}") for i in range(10))
-    )
+    await asyncio.gather(*(_process(service, item_id=f"item-{i}") for i in range(10)))
 
     assert provider.calls == 10
     assert provider.max_concurrent <= 3

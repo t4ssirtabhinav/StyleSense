@@ -620,6 +620,17 @@ class IWardrobeRepository(ABC):
         raises."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        """(SS-022) Selects ``users.city``, RLS-scoped, mirrors
+        ``get_plan_tier``/``get_style_preferences``'s existing shape.
+        Returns the raw stored value verbatim -- may be ``None``, ``''``,
+        one of the 50 ``TOP_50_INDIAN_CITIES`` display names, or arbitrary
+        free text from the picker's "Other" row (design §2). Resolution
+        against the coordinate table is ``services/india_city_coordinates
+        .resolve_city``'s job, not this port's."""
+        raise NotImplementedError
+
 
 # ---------------------------------------------------------------------------
 # SS-029 -- IRateLimiter / ICostLedger.
@@ -765,4 +776,40 @@ class ISuggestionNarrationCacheRepository(ABC):
     ) -> None:
         """Best-effort write -- never blocks the caller's response on a
         cache-write failure. MUST NEVER RAISE."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# SS-022 -- IWeatherProvider.
+#
+# Placed here (not ai/ports/interfaces.py): this is infrastructure one layer
+# below an AI *provider capability* (that file's own scoping comment) --
+# same precedent as IRateLimiter/ICostLedger/IFabricRegistryRepository
+# above. Open-Meteo needs no auth/key, so unlike every AI port in this repo
+# this one carries no user identity at all -- only a city's public lat/lng.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WeatherObservation:
+    """One provider's raw current-weather reading. Never surfaced to a
+    caller directly -- ``services/weather_rules.WeatherContext`` is the
+    derived, in-app shape everything downstream actually consumes."""
+
+    temp_c: float
+    humidity: int  # relative humidity %
+    weather_code: int  # WMO code, raw
+    precipitation_mm: float
+    observed_at: str  # ISO-8601 as returned by the provider
+
+
+class IWeatherProvider(ABC):
+    """Never modify this signature to fit a new provider -- add a new
+    adapter class instead (Open/Closed, per CLAUDE.md)."""
+
+    @abstractmethod
+    async def fetch_current(self, *, lat: float, lng: float) -> WeatherObservation | None:
+        """MUST NEVER RAISE -- every timeout/HTTP/parse failure returns
+        ``None``. Same never-raise contract as ``ISuggestionLogRepository``
+        and ``ISuggestionNarrationCacheRepository`` (SS-020)."""
         raise NotImplementedError

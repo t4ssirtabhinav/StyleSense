@@ -85,8 +85,10 @@ class NarratedCandidate(BaseModel):
     candidate, never trusting the LLM's own ordering."""
 
     outfit_fingerprint: str  # ties back to engine_v2_portfolio.compute_outfit_fingerprint
-    rationale: str           # English or Hindi prose, per AC #2
-    rank: int | None = None  # LLM's own re-ranking within the supplied set, if it re-ranks; None = kept input order
+    rationale: str  # English or Hindi prose, per AC #2
+    rank: int | None = (
+        None  # LLM's own re-ranking within the supplied set, if it re-ranks; None = kept input order
+    )
 
 
 class NarratedPortfolioResult(BaseModel):
@@ -115,11 +117,14 @@ class IStylingProvider(ABC):
     @abstractmethod
     async def narrate_candidates(
         self,
-        candidates: list[dict[str, Any]],  # engine_v2_types.render_candidate_for_prompt(...) output, one dict per candidate, UNCHANGED shape
+        candidates: list[
+            dict[str, Any]
+        ],  # engine_v2_types.render_candidate_for_prompt(...) output, one dict per candidate, UNCHANGED shape
         *,
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         """(SS-020, additive port capability -- same class of change SS-039
         made to ``IRateLimiter.peek()``) MUST NEVER invent an item id/
@@ -130,7 +135,11 @@ class IStylingProvider(ABC):
         to ``StylingCall``'s existing ``ProviderXxxError`` hierarchy exactly
         like ``suggest_outfits_with_metrics`` does, so ``StylingRouter``'s
         chain/failover/degrade logic (unmodified) works identically for
-        this method."""
+        this method.
+
+        (SS-022) ``weather``, additive, default ``None`` -- reproduces
+        pre-SS-022 prompts byte-for-byte. Never enters the structured-output
+        schema, only the prompt text (design §4)."""
         raise NotImplementedError
 
 

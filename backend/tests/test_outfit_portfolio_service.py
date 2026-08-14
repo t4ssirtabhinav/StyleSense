@@ -46,6 +46,7 @@ from services.suggestion_narration_cache import NarrationCacheOrchestrator
 def _salt(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SUGGESTION_CACHE_SALT", "test-salt-do-not-use-in-prod")
 
+
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
@@ -58,10 +59,12 @@ class _FakeWardrobeRepo(IWardrobeRepository):
         *,
         plan_tier: str = "free",
         preferences: dict[str, Any] | None = None,
+        city: str | None = None,
     ) -> None:
         self._rows = rows if rows is not None else []
         self.plan_tier = plan_tier
         self.preferences = preferences
+        self.city = city
 
     async def upsert_uploaded_row(self, **kwargs: Any) -> None:
         raise NotImplementedError
@@ -92,6 +95,10 @@ class _FakeWardrobeRepo(IWardrobeRepository):
 
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         return self.preferences
+
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        return self.city
 
 
 class _FakeOccasionRepo(IOccasionRepository):
@@ -132,11 +139,18 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
     async def log_outcome(self, outcome):  # type: ignore[no-untyped-def]
         return None
 
-    async def recent_impressions(self, *, user_id: str, since: datetime, limit: int = 200) -> list[dict]:
+    async def recent_impressions(
+        self, *, user_id: str, since: datetime, limit: int = 200
+    ) -> list[dict]:
         return []
 
     async def update_session_outcome(
-        self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
+        self,
+        *,
+        session_id: str,
+        cost_incurred: bool,
+        request_id: str | None,
+        latency_ms: int | None,
     ) -> None:
         if self.raise_on_update:
             raise RuntimeError("outcome update failed")
@@ -151,6 +165,21 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
 
     async def find_impression(self, *, session_id: str, rank: int) -> ImpressionRef | None:
         return None
+
+
+class _FakeWeatherService:
+    """(SS-022) Duck-typed against WeatherService's own public shape --
+    this file's tests are pre-existing SS-020/023 coverage, not weather
+    coverage (see test_outfit_portfolio_service_weather.py for that).
+    Defaults to 'no weather', reproducing pre-SS-022 output byte-for-byte."""
+
+    def __init__(self, weather: Any = None) -> None:
+        self._weather = weather
+        self.calls = 0
+
+    async def resolve_for_user(self, *, jwt: str, user_id: str, config_snapshot: Any) -> Any:
+        self.calls += 1
+        return self._weather
 
 
 class _FakeNarrationCacheRepo(ISuggestionNarrationCacheRepository):
@@ -207,7 +236,9 @@ class _FakeStylingProvider:
         self._source = source
         self.call_count = 0
 
-    async def suggest_outfits_with_metrics(self, preferences: Any, *, max_suggestions: int = 5) -> Any:
+    async def suggest_outfits_with_metrics(
+        self, preferences: Any, *, max_suggestions: int = 5
+    ) -> Any:
         raise NotImplementedError
 
     async def narrate_candidates_with_metrics(
@@ -217,6 +248,7 @@ class _FakeStylingProvider:
         occasion: str,
         preferences: Any,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, _FakeMetrics]:
         self.call_count += 1
         result = NarratedPortfolioResult(
@@ -225,7 +257,11 @@ class _FakeStylingProvider:
             source=self._source,  # type: ignore[arg-type]
         )
         metrics = _FakeMetrics(
-            provider="gemini", model="gemini-3.1-flash-lite", tokens_in=100, tokens_out=50, latency_ms=5
+            provider="gemini",
+            model="gemini-3.1-flash-lite",
+            tokens_in=100,
+            tokens_out=50,
+            latency_ms=5,
         )
         return result, metrics
 
@@ -291,6 +327,7 @@ def _build_service(
     styling_provider: _FakeStylingProvider,
     rate_limiter: IRateLimiter,
     monitor: RoutingMixMonitor | None = None,
+    weather_service: Any = None,
 ) -> OutfitPortfolioService:
     occasion_normalizer = OccasionNormalizer(_FakeOccasionRepo(_occasion_snapshot()))
     engine = _build_engine(suggestion_log_repo=suggestion_log_repo)
@@ -307,6 +344,7 @@ def _build_service(
         provider_quota=ProviderQuotaTracker(),
         narration_cache=NarrationCacheOrchestrator(narration_cache_repo),
         suggestion_log_repo=suggestion_log_repo,
+        weather_service=weather_service or _FakeWeatherService(),  # type: ignore[arg-type]
     )
 
 
@@ -388,7 +426,9 @@ async def test_e0_tier_skips_narration_and_cache_entirely() -> None:
 
     cache_repo = _FakeNarrationCacheRepo()
     log_repo = _FakeSuggestionLogRepo()
-    provider = _FakeStylingProvider([NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")])
+    provider = _FakeStylingProvider(
+        [NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")]
+    )
     service = _build_service(
         wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
         suggestion_log_repo=log_repo,
@@ -413,10 +453,14 @@ async def test_e0_tier_skips_narration_and_cache_entirely() -> None:
 
 
 async def test_cache_hit_skips_budget_and_llm_call() -> None:
-    cached = CachedNarration(narrations_by_signature_index={0: "cached rationale text"}, language="en")
+    cached = CachedNarration(
+        narrations_by_signature_index={0: "cached rationale text"}, language="en"
+    )
     cache_repo = _FakeNarrationCacheRepo(hit=cached)
     log_repo = _FakeSuggestionLogRepo()
-    provider = _FakeStylingProvider([NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")])
+    provider = _FakeStylingProvider(
+        [NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")]
+    )
     rate_limiter = _FakeRateLimiter()
     service = _build_service(
         wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows()),
@@ -490,7 +534,9 @@ async def test_budget_denied_degrades_to_rule_based_never_a_429() -> None:
     reasoning with a normal (200-shaped) result, never a 429/exception."""
     cache_repo = _FakeNarrationCacheRepo(hit=None)
     log_repo = _FakeSuggestionLogRepo()
-    provider = _FakeStylingProvider([NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")])
+    provider = _FakeStylingProvider(
+        [NarratedCandidate(outfit_fingerprint="x", rationale="should not be called")]
+    )
     rate_limiter = _FakeRateLimiter()
     service = _build_service(
         wardrobe_repo=_FakeWardrobeRepo(rows=_wardrobe_rows(), plan_tier="free"),
@@ -561,7 +607,9 @@ async def test_update_session_outcome_called_exactly_once_and_never_blocks_on_ra
         config_snapshot=_empty_snapshot(),
     )
     assert "portfolio" in result
-    assert log_repo.outcome_updates == []  # raised, so nothing recorded -- but no exception propagated
+    assert (
+        log_repo.outcome_updates == []
+    )  # raised, so nothing recorded -- but no exception propagated
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +724,7 @@ async def test_exclude_fingerprints_forwarded_truncated_at_60() -> None:
         provider_quota=ProviderQuotaTracker(),
         narration_cache=NarrationCacheOrchestrator(_FakeNarrationCacheRepo()),
         suggestion_log_repo=log_repo,
+        weather_service=_FakeWeatherService(),  # type: ignore[arg-type]
     )
     over_cap = [f"{i:064x}" for i in range(75)]
     await service.generate_portfolio_for_request(
@@ -720,6 +769,7 @@ async def test_empty_exclude_fingerprints_forwarded_as_none() -> None:
         provider_quota=ProviderQuotaTracker(),
         narration_cache=NarrationCacheOrchestrator(_FakeNarrationCacheRepo()),
         suggestion_log_repo=log_repo,
+        weather_service=_FakeWeatherService(),  # type: ignore[arg-type]
     )
     await service.generate_portfolio_for_request(
         user_id="u1",

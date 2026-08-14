@@ -45,6 +45,7 @@ class _FakeProvider(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, object] | None = None,
     ) -> NarratedPortfolioResult:
         return NarratedPortfolioResult(narrations=[], language="en", source="rules_only")
 
@@ -105,9 +106,7 @@ async def test_invalid_budget_range_degrades_to_empty_preferences() -> None:
     provider = _FakeProvider()
     service = OutfitSuggestionService(provider, rate_limiter=_AlwaysAllowRateLimiter())
 
-    result = await service.generate_suggestions(
-        "user-999", {"budget_range": "not_a_real_tier"}
-    )
+    result = await service.generate_suggestions("user-999", {"budget_range": "not_a_real_tier"})
 
     assert len(provider.calls) == 1
     assert provider.calls[0].budget_range is None

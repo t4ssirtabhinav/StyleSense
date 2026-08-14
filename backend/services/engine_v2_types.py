@@ -108,6 +108,9 @@ class EligibilityResult:
 
     eligible_items: list[WardrobeItemInput]
     excluded_missing_color_or_category: int
+    # (SS-022) True when a heavy-rain white/silk exclusion would have
+    # emptied the eligible pool and was relaxed. Additive, default False.
+    weather_exclusions_relaxed: bool = False
 
 
 @dataclass(frozen=True)

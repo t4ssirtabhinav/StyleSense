@@ -175,7 +175,9 @@ class MockStylingAdapter(IStylingProvider):
 
         if preferences.gender is not None:
             candidates = [
-                c for c in candidates if preferences.gender in c["genders"]  # type: ignore[operator]
+                c
+                for c in candidates
+                if preferences.gender in c["genders"]  # type: ignore[operator]
             ]
 
         # --- Soft signals: styles, wardrobe_type, occasions_priority, favourite_colours ---
@@ -187,7 +189,10 @@ class MockStylingAdapter(IStylingProvider):
                 if any(s in item_styles for s in preferences.styles):
                     points += 3.0
 
-            if preferences.wardrobe_type is not None and item["wardrobe_type"] == preferences.wardrobe_type:
+            if (
+                preferences.wardrobe_type is not None
+                and item["wardrobe_type"] == preferences.wardrobe_type
+            ):
                 points += 2.0
 
             if preferences.occasions_priority:
@@ -200,7 +205,11 @@ class MockStylingAdapter(IStylingProvider):
             item_colours = item["colours"]
             if preferences.favourite_colours and isinstance(item_colours, list):
                 best = min(
-                    (_hex_distance(fav, colour) for fav in preferences.favourite_colours for colour in item_colours),
+                    (
+                        _hex_distance(fav, colour)
+                        for fav in preferences.favourite_colours
+                        for colour in item_colours
+                    ),
                     default=255 * 3,
                 )
                 # Closer colours (smaller distance) contribute more points.
@@ -247,6 +256,7 @@ class MockStylingAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         """Deterministic, offline: builds ``rationale`` directly from each
         candidate dict's ``explanation`` string (``render_candidate_for_prompt``'s
@@ -254,7 +264,11 @@ class MockStylingAdapter(IStylingProvider):
         This is the literal implementation of the AC's "degrade to
         deterministic candidates with rule-based reasoning" path and of E0's
         ``llm_candidate_count=None`` tier. Never invents an id/category not
-        present in ``candidates`` -- it never invents anything at all."""
+        present in ``candidates`` -- it never invents anything at all.
+
+        (SS-022) ``weather`` accepted for port-signature parity but unused
+        -- the rule-based degrade never calls an LLM, so there is no prompt
+        for weather context to enter."""
         narrations = [
             NarratedCandidate(
                 outfit_fingerprint=str(candidate.get("outfit_fingerprint", "")),

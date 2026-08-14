@@ -21,6 +21,7 @@ rule-based rationale text, never a 429/500 for those cases specifically
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -51,8 +52,14 @@ from services.suggestion_narration_cache import (
     compute_narration_signature,
     signature_order,
 )
+from services.weather_rules import WeatherContext, weather_cache_bucket
+from services.weather_service import WeatherService
 
 logger = logging.getLogger(__name__)
+
+# (SS-022) Headroom over OpenMeteoWeatherAdapter's own 3.0s provider timeout
+# -- covers the cache round-trip + provider round-trip + users.city DB read.
+_WEATHER_RESOLVE_TIMEOUT_SECONDS = 4.0
 
 _FALLBACK_OCCASION_KIND = "everyday"
 _FALLBACK_OCCASION_FORMALITY = 5
@@ -72,6 +79,7 @@ class OutfitPortfolioService:
         provider_quota: ProviderQuotaTracker,
         narration_cache: NarrationCacheOrchestrator,
         suggestion_log_repo: ISuggestionLogRepository,
+        weather_service: WeatherService,
     ) -> None:
         self._wardrobe_repo = wardrobe_repo
         self._occasion_normalizer = occasion_normalizer
@@ -83,6 +91,7 @@ class OutfitPortfolioService:
         self._provider_quota = provider_quota
         self._narration_cache = narration_cache
         self._suggestion_log_repo = suggestion_log_repo
+        self._weather_service = weather_service
 
     async def generate_portfolio_for_request(
         self,
@@ -99,6 +108,13 @@ class OutfitPortfolioService:
         request_id = str(uuid.uuid4())
         start = time.perf_counter()
         resolved_as_of = as_of or ist_today()
+
+        # (SS-022) First statement: the weather round-trip (users.city read +
+        # Redis + possibly Open-Meteo) overlaps the reads below rather than
+        # adding to them serially -- awaited just before the engine call.
+        weather_task = asyncio.create_task(
+            self._resolve_weather(jwt=jwt, user_id=user_id, config_snapshot=config_snapshot)
+        )
 
         occasion_input = await self._resolve_occasion(occasion, jwt=jwt)
 
@@ -125,6 +141,8 @@ class OutfitPortfolioService:
             frozenset(exclude_fingerprints[:60]) if exclude_fingerprints else None
         )
 
+        weather = await weather_task
+
         engine_result = await self._engine.generate_portfolio(
             list(wardrobe_by_id.values()),
             occasion_input,
@@ -140,6 +158,7 @@ class OutfitPortfolioService:
             tier=plan_tier,
             request_id=request_id,
             exclude_fingerprints=exclude_fp_set,
+            weather=weather,
         )
 
         rationale_by_fingerprint: dict[str, str] = {}
@@ -166,6 +185,7 @@ class OutfitPortfolioService:
                     request_id=request_id,
                     as_of=resolved_as_of,
                     config_snapshot=config_snapshot,
+                    weather=weather,
                 )
             except Exception as exc:  # noqa: BLE001 -- narration must never fail the whole request
                 logger.warning(
@@ -231,7 +251,34 @@ class OutfitPortfolioService:
             # batch (design §1/edge cases).
             "session_id": engine_result.session_id,
             "occasion_key": occasion_input.key,
+            # (SS-022) None when the user has no usable city or Open-Meteo
+            # was unreachable -- the response is otherwise byte-identical to
+            # pre-SS-022 output.
+            "weather": weather.model_dump() if weather is not None else None,
         }
+
+    async def _resolve_weather(
+        self, *, jwt: str, user_id: str, config_snapshot: AppConfigSnapshot
+    ) -> WeatherContext | None:
+        """(SS-022) The one never-raising, timeout-capped entry point.
+        ``WeatherService.resolve_for_user`` already never raises on its own,
+        but this outer wrapper is belt-and-suspenders (mirrors
+        ``EngineV2._log_session``'s own defensive double-wrapping posture)
+        AND is what actually enforces the wall-clock bound -- a hung
+        provider/cache call cannot hang the request."""
+        try:
+            return await asyncio.wait_for(
+                self._weather_service.resolve_for_user(
+                    jwt=jwt, user_id=user_id, config_snapshot=config_snapshot
+                ),
+                timeout=_WEATHER_RESOLVE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:  # noqa: BLE001 -- weather must never fail the suggestion request
+            logger.warning(
+                "outfit_portfolio_weather_resolve_failed",
+                extra={"user_id": user_id, "error": str(exc)},
+            )
+            return None
 
     async def _resolve_occasion(self, raw_occasion: str, *, jwt: str) -> OccasionStylingInput:
         """§2 step 1. An unresolvable/unknown occasion (not in
@@ -305,6 +352,7 @@ class OutfitPortfolioService:
         request_id: str,
         as_of: date,
         config_snapshot: AppConfigSnapshot,
+        weather: WeatherContext | None = None,
     ) -> tuple[dict[str, str], str, bool, bool]:
         """§2 steps 8-11. Returns
         ``(rationale_by_fingerprint, language, cache_hit, cost_incurred)``."""
@@ -319,6 +367,7 @@ class OutfitPortfolioService:
             occasion_key=occasion_input.key,
             engine_version=engine_version,
             llm_candidate_count=llm_candidate_count,
+            weather_bucket=weather_cache_bucket(weather),
         )
         order = signature_order(shapes)  # order[sig_idx] -> position in `top`
 
@@ -389,6 +438,7 @@ class OutfitPortfolioService:
             occasion=occasion_input.key,
             preferences=preferences,
             max_suggestions=llm_candidate_count,
+            weather=weather.model_dump() if weather is not None else None,
         )
 
         real_llm_call = narrated_result.source in ("gemini", "claude")
@@ -413,7 +463,9 @@ class OutfitPortfolioService:
             reservation=gate_decision.reservation, actual_micropaise=actual_micropaise
         )
 
-        fingerprint_to_rationale = {n.outfit_fingerprint: n.rationale for n in narrated_result.narrations}
+        fingerprint_to_rationale = {
+            n.outfit_fingerprint: n.rationale for n in narrated_result.narrations
+        }
         rationale_by_fingerprint = {}
         for pc in top:
             fp = compute_outfit_fingerprint(pc.candidate.item_ids)

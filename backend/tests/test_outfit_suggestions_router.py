@@ -61,6 +61,7 @@ class _FakeCallTrackingProvider(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, object] | None = None,
     ) -> NarratedPortfolioResult:
         return NarratedPortfolioResult(narrations=[], language="en", source="rules_only")
 
@@ -148,9 +149,14 @@ class _CallCountingMockAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, object] | None = None,
     ) -> NarratedPortfolioResult:
         return await self._delegate.narrate_candidates(
-            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+            candidates,
+            occasion=occasion,
+            preferences=preferences,
+            max_suggestions=max_suggestions,
+            weather=weather,
         )
 
 
