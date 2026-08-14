@@ -56,3 +56,39 @@ async def test_source_is_rules_only_never_raises() -> None:
     )
     assert result.source == "rules_only"
     assert result.narrations == []
+
+
+# ---------------------------------------------------------------------------
+# SS-022 -- accepts weather=None (default) and a populated dict, unchanged
+# shape/schema either way.
+# ---------------------------------------------------------------------------
+
+
+async def test_accepts_weather_none_default() -> None:
+    adapter = MockStylingAdapter()
+    candidates = [_candidate("fp1", "matches well")]
+    result = await adapter.narrate_candidates(
+        candidates, occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+    )
+    assert result.narrations[0].outfit_fingerprint == "fp1"
+
+
+async def test_accepts_populated_weather_dict_unchanged_shape() -> None:
+    adapter = MockStylingAdapter()
+    candidates = [_candidate("fp1", "matches well")]
+    weather = {
+        "city": "Mumbai",
+        "temp_c": 28.0,
+        "condition": "heavy_rain",
+        "humidity": 90,
+        "is_heavy_rain": True,
+    }
+    result = await adapter.narrate_candidates(
+        candidates,
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+        weather=weather,
+    )
+    assert result.narrations[0].outfit_fingerprint == "fp1"
+    assert result.source == "rules_only"

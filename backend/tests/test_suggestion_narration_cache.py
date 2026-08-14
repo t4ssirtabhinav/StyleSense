@@ -23,7 +23,9 @@ def _wardrobe(**kwargs: WardrobeItemInput) -> dict[str, WardrobeItemInput]:
     return kwargs
 
 
-def _item(id: str, *, category: str = "western_top", color: str | None = "#1E3A8A") -> WardrobeItemInput:
+def _item(
+    id: str, *, category: str = "western_top", color: str | None = "#1E3A8A"
+) -> WardrobeItemInput:
     return WardrobeItemInput(id=id, category=category, color_primary=color)  # type: ignore[arg-type]
 
 
@@ -38,10 +40,18 @@ def test_signature_is_order_independent_across_permuted_candidate_lists() -> Non
     shape_b = compute_candidate_shape(["b"], w)
 
     sig1 = compute_narration_signature(
-        [shape_a, shape_b], occasion_key="office", engine_version="engine-v2", llm_candidate_count=6
+        [shape_a, shape_b],
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     sig2 = compute_narration_signature(
-        [shape_b, shape_a], occasion_key="office", engine_version="engine-v2", llm_candidate_count=6
+        [shape_b, shape_a],
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 == sig2
 
@@ -59,6 +69,7 @@ def test_signature_is_order_independent_within_a_single_candidates_items() -> No
         ("occasion_key", "office", "wedding_guest"),
         ("engine_version", "engine-v2", "engine-v3"),
         ("llm_candidate_count", 5, 6),
+        ("weather_bucket", "none", "heavy_rain"),
     ],
 )
 def test_signature_is_sensitive_to_occasion_engine_version_and_candidate_count(
@@ -66,7 +77,12 @@ def test_signature_is_sensitive_to_occasion_engine_version_and_candidate_count(
 ) -> None:
     w = _wardrobe(a=_item("a"))
     shape = compute_candidate_shape(["a"], w)
-    kwargs_a = {"occasion_key": "office", "engine_version": "engine-v2", "llm_candidate_count": 6}
+    kwargs_a = {
+        "occasion_key": "office",
+        "engine_version": "engine-v2",
+        "llm_candidate_count": 6,
+        "weather_bucket": "none",
+    }
     kwargs_b = dict(kwargs_a)
     kwargs_a[field] = value_a
     kwargs_b[field] = value_b
@@ -81,11 +97,17 @@ def test_signature_is_sensitive_to_category_change() -> None:
     w2 = _wardrobe(a=_item("a", category="western_bottom"))
     sig1 = compute_narration_signature(
         [compute_candidate_shape(["a"], w1)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     sig2 = compute_narration_signature(
         [compute_candidate_shape(["a"], w2)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 != sig2
 
@@ -95,11 +117,17 @@ def test_signature_is_sensitive_to_colour_family_change() -> None:
     w2 = _wardrobe(a=_item("a", color="#0000FF"))  # blue
     sig1 = compute_narration_signature(
         [compute_candidate_shape(["a"], w1)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     sig2 = compute_narration_signature(
         [compute_candidate_shape(["a"], w2)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 != sig2
 
@@ -110,27 +138,41 @@ def test_signature_is_sensitive_to_formality_band_change() -> None:
     w2 = _wardrobe(a=_item("a", category="ethnic_saree"))
     sig1 = compute_narration_signature(
         [compute_candidate_shape(["a"], w1)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     sig2 = compute_narration_signature(
         [compute_candidate_shape(["a"], w2)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 != sig2
 
 
-def test_same_candidate_set_different_raw_hex_within_same_colour_family_produces_same_signature() -> None:
+def test_same_candidate_set_different_raw_hex_within_same_colour_family_produces_same_signature() -> (
+    None
+):
     """Coarsening proof: two near-identical reds must hash to the SAME
     signature -- this is the whole point of the cache."""
     w1 = _wardrobe(a=_item("a", color="#B22222"))  # firebrick red
     w2 = _wardrobe(a=_item("a", color="#DC143C"))  # crimson red
     sig1 = compute_narration_signature(
         [compute_candidate_shape(["a"], w1)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     sig2 = compute_narration_signature(
         [compute_candidate_shape(["a"], w2)],
-        occasion_key="office", engine_version="engine-v2", llm_candidate_count=6,
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 == sig2
 
@@ -142,11 +184,19 @@ def test_hmac_changes_if_suggestion_cache_salt_changes(monkeypatch: pytest.Monke
 
     monkeypatch.setenv("SUGGESTION_CACHE_SALT", "salt-one")
     sig1 = compute_narration_signature(
-        [shape], occasion_key="office", engine_version="engine-v2", llm_candidate_count=6
+        [shape],
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     monkeypatch.setenv("SUGGESTION_CACHE_SALT", "salt-two")
     sig2 = compute_narration_signature(
-        [shape], occasion_key="office", engine_version="engine-v2", llm_candidate_count=6
+        [shape],
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
     assert sig1 != sig2
 
@@ -161,6 +211,13 @@ def test_hmac_changes_if_suggestion_cache_salt_changes(monkeypatch: pytest.Monke
 
 
 def test_golden_file_signature_is_locked_for_a_fixed_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    # UPDATED by SS-022 (docs/tickets/SS-022-design.md §5 / Open Question
+    # #3): compute_narration_signature gained a REQUIRED weather_bucket
+    # segment, which changes EVERY existing signature -- this is the
+    # "flag loudly, not silently" event SS-020's own design doc
+    # anticipated. Safe/self-healing: every suggestion_narration_cache row
+    # has a <=6h TTL and is swept by migration 019's pg_cron job, so this is
+    # a one-time cold cache, not a data-loss or correctness event.
     monkeypatch.setenv("SUGGESTION_CACHE_SALT", "golden-file-fixed-salt-do-not-change")
     w = _wardrobe(
         top1=_item("top1", category="western_top", color="#1E3A8A"),
@@ -169,9 +226,13 @@ def test_golden_file_signature_is_locked_for_a_fixed_input(monkeypatch: pytest.M
     )
     shape = compute_candidate_shape(["top1", "bottom1", "shoe1"], w)
     signature = compute_narration_signature(
-        [shape], occasion_key="office", engine_version="engine-v2", llm_candidate_count=6
+        [shape],
+        occasion_key="office",
+        engine_version="engine-v2",
+        llm_candidate_count=6,
+        weather_bucket="none",
     )
-    assert signature == "1eb13ec4cdb295356fb4217143f267986205def9f063e4c43a0d3149d0cfd6ca"
+    assert signature == "816b7d968333255b5d7b5be2254ab9c4b9ed6eac0a6d4298b88f3ed2e289e129"
 
 
 # ---------------------------------------------------------------------------

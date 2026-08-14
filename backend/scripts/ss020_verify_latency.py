@@ -119,6 +119,10 @@ class _FakeWardrobeRepo(IWardrobeRepository):
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         return None
 
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        return None
+
 
 class _FakeOccasionRepo(IOccasionRepository):
     def __init__(self, snapshot: OccasionRegistrySnapshot) -> None:
@@ -161,7 +165,12 @@ class _FakeSuggestionLogRepo(ISuggestionLogRepository):
         return []
 
     async def update_session_outcome(
-        self, *, session_id: str, cost_incurred: bool, request_id: str | None, latency_ms: int | None
+        self,
+        *,
+        session_id: str,
+        cost_incurred: bool,
+        request_id: str | None,
+        latency_ms: int | None,
     ) -> None:
         self.outcome_updates.append(
             {
@@ -284,6 +293,17 @@ def _occasion_snapshot() -> OccasionRegistrySnapshot:
     )
 
 
+class _NoWeatherService:
+    """(SS-022) mechanical addition -- OutfitPortfolioService now requires a
+    weather_service. This script measures cache-hit latency for the
+    narration path only, so a no-op "always no weather" fake reproduces
+    pre-SS-022 behaviour byte-for-byte rather than adding a real network
+    call that would skew the measurement itself."""
+
+    async def resolve_for_user(self, *, jwt: str, user_id: str, config_snapshot: Any) -> None:
+        return None
+
+
 def _empty_app_config() -> AppConfigService:
     from adapters.interfaces import IAppConfigRepository
 
@@ -331,6 +351,7 @@ async def main() -> int:
         provider_quota=ProviderQuotaTracker(),
         narration_cache=NarrationCacheOrchestrator(_AlwaysMissNarrationCacheRepo()),
         suggestion_log_repo=log_repo,
+        weather_service=_NoWeatherService(),  # type: ignore[arg-type]
     )
 
     print(
@@ -370,8 +391,10 @@ async def main() -> int:
             "'cold call' scenario."
         )
     print()
-    print(f"End-to-end pipeline AC check (<4000ms happy-path, per BL-100): "
-          f"{'PASS' if wall_elapsed_ms < 4000 else 'FAIL (see BL-067/BL-100 renegotiation precedent)'}")
+    print(
+        f"End-to-end pipeline AC check (<4000ms happy-path, per BL-100): "
+        f"{'PASS' if wall_elapsed_ms < 4000 else 'FAIL (see BL-067/BL-100 renegotiation precedent)'}"
+    )
 
     # ------------------------------------------------------------------
     # Supplementary direct-adapter measurement: the pipeline run above
@@ -385,9 +408,11 @@ async def main() -> int:
     # per-adapter `timeout_seconds`.
     # ------------------------------------------------------------------
     print()
-    print("Supplementary: direct ClaudeStylingAdapter call (bypasses StylingRouter's "
-          "6s attempt_timeout, uses the adapter's own 30s timeout) to capture the "
-          "TRUE, un-truncated API latency...")
+    print(
+        "Supplementary: direct ClaudeStylingAdapter call (bypasses StylingRouter's "
+        "6s attempt_timeout, uses the adapter's own 30s timeout) to capture the "
+        "TRUE, un-truncated API latency..."
+    )
     engine_result = await engine.generate_portfolio(
         [WardrobeItemInput.model_validate(r) for r in _wardrobe_rows(45)],
         OccasionStylingInput(key="wedding_guest", kind="ceremony", formality=9, styling_rules={}),
@@ -421,7 +446,9 @@ async def main() -> int:
         print("direct call source   = claude (succeeded)")
         print(f"direct call tokens   = in={metrics.tokens_in} out={metrics.tokens_out}")
         print(f"direct call narrations = {len(narrated_result.narrations)}")
-        print(f"MEASURED TRUE ADAPTER LATENCY (claude-sonnet-5, un-truncated): {direct_elapsed_ms:.0f} ms")
+        print(
+            f"MEASURED TRUE ADAPTER LATENCY (claude-sonnet-5, un-truncated): {direct_elapsed_ms:.0f} ms"
+        )
     except Exception as exc:  # noqa: BLE001 -- this is a diagnostic script
         direct_elapsed_ms = (time.perf_counter() - direct_start) * 1000
         print(f"[FAIL] direct claude call raised after {direct_elapsed_ms:.0f} ms: {exc!r}")

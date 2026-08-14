@@ -9,6 +9,28 @@ export type SeasonTag = 'summer' | 'winter' | 'monsoon' | 'all';
 export type RationaleLanguage = 'en' | 'hi';
 export type OutcomeType = 'saved' | 'dismissed' | 'worn' | 'shared';
 
+// SS-022 — mirrors backend/services/weather_rules.py's WeatherCondition
+// Literal and backend/routers/outfit_suggestions.py's WeatherResponse
+// verbatim. Closed set shared by backend and mobile.
+export type WeatherCondition =
+  | 'clear'
+  | 'partly_cloudy'
+  | 'cloudy'
+  | 'fog'
+  | 'drizzle'
+  | 'rain'
+  | 'heavy_rain'
+  | 'thunderstorm'
+  | 'snow';
+
+export interface WeatherResponse {
+  city: string;
+  temp_c: number;
+  condition: WeatherCondition;
+  humidity: number;
+  is_heavy_rain: boolean;
+}
+
 export interface GeneratePortfolioRequest {
   occasion: string;
   season?: SeasonTag | null;
@@ -39,6 +61,10 @@ export interface PortfolioItemResponse {
 export interface GapReport {
   excluded_missing_color_or_category: number;
   missing_slots: string[];
+  /** (SS-022) True when a heavy-rain white/silk exclusion would have
+   * emptied the eligible pool and was relaxed — a monsoon user whose
+   * wardrobe is mostly white/silk still gets suggestions. */
+  weather_exclusions_relaxed: boolean;
 }
 
 export interface GeneratePortfolioResponse {
@@ -55,6 +81,9 @@ export interface GeneratePortfolioResponse {
   /** RESOLVED canonical key (post-alias) — badge/persist against THIS,
    * not the raw string the user tapped. */
   occasion_key: string;
+  /** (SS-022) `null` when the user has no usable city or Open-Meteo was
+   * unreachable — never blocks the deck rendering. */
+  weather: WeatherResponse | null;
 }
 
 export interface RecordOutcomeRequest {

@@ -8,6 +8,7 @@ import { useOccasionTaxonomy } from '../../features/onboarding/onboarding.querie
 import { OccasionGrid } from '../../features/outfit-ai/components/OccasionGrid';
 import { OutfitCardDeck } from '../../features/outfit-ai/components/OutfitCardDeck';
 import { SuggestionSkeletonDeck } from '../../features/outfit-ai/components/SuggestionSkeletonDeck';
+import { WeatherChip } from '../../features/outfit-ai/components/WeatherChip';
 import {
   BACKEND_UNREACHABLE_COPY,
   BACK_TO_OCCASIONS_CTA,
@@ -202,6 +203,7 @@ export default function StyleScreen() {
   if (result && selectedOccasionKey) {
     return (
       <View testID="style-deck-screen" className="flex-1">
+        <WeatherChip weather={result.weather} />
         <OutfitCardDeck
           portfolio={result.portfolio}
           occasionKey={result.occasion_key}

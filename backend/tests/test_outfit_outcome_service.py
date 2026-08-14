@@ -134,6 +134,10 @@ class _FakeWardrobeRepo(IWardrobeRepository):
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         raise NotImplementedError
 
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        raise NotImplementedError
+
 
 # ---------------------------------------------------------------------------
 # Builders

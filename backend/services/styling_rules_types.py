@@ -171,6 +171,11 @@ class GapReport(BaseModel):
 
     excluded_missing_color_or_category: int = 0
     missing_slots: list[str] = Field(default_factory=list)
+    # (SS-022) True when a heavy-rain white/silk exclusion would have
+    # emptied the eligible pool and was relaxed (design §3 step 3) -- a
+    # monsoon user whose wardrobe is mostly white/silk still gets
+    # suggestions. Additive, defaults False (today's behaviour).
+    weather_exclusions_relaxed: bool = False
 
 
 class PreFilterResult(BaseModel):

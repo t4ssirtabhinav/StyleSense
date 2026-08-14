@@ -181,3 +181,77 @@ def test_service_exception_maps_to_500_not_a_silent_200() -> None:
     )
 
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# SS-022 -- weather block: validates with `weather` present and with
+# `weather=None`; a request from a user with no city returns 200 with
+# `weather: null`.
+# ---------------------------------------------------------------------------
+
+
+def test_response_validates_with_weather_present() -> None:
+    payload = _valid_response_payload()
+    payload["weather"] = {
+        "city": "Mumbai",
+        "temp_c": 28.4,
+        "condition": "partly_cloudy",
+        "humidity": 71,
+        "is_heavy_rain": False,
+    }
+    fake_service = _FakeOutfitPortfolioService(payload)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+    app.dependency_overrides[get_outfit_portfolio_service] = lambda: fake_service
+
+    response = client.post(
+        "/outfit-suggestions/portfolio",
+        headers={"Authorization": "Bearer any-token"},
+        json={"occasion": "office"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["weather"] == {
+        "city": "Mumbai",
+        "temp_c": 28.4,
+        "condition": "partly_cloudy",
+        "humidity": 71,
+        "is_heavy_rain": False,
+    }
+
+
+def test_response_validates_with_weather_none_no_city_user() -> None:
+    """A missing weather field never blanks the screen -- the response is
+    otherwise byte-identical to pre-SS-022 output."""
+    payload = _valid_response_payload()
+    payload["weather"] = None
+    fake_service = _FakeOutfitPortfolioService(payload)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+    app.dependency_overrides[get_outfit_portfolio_service] = lambda: fake_service
+
+    response = client.post(
+        "/outfit-suggestions/portfolio",
+        headers={"Authorization": "Bearer any-token"},
+        json={"occasion": "office"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["weather"] is None
+
+
+def test_response_validates_with_weather_key_absent_entirely() -> None:
+    """The Pydantic field default (None) covers a caller that omits the key
+    outright -- pre-SS-022 payload shape must still validate."""
+    payload = _valid_response_payload()
+    assert "weather" not in payload
+    fake_service = _FakeOutfitPortfolioService(payload)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-1"
+    app.dependency_overrides[get_outfit_portfolio_service] = lambda: fake_service
+
+    response = client.post(
+        "/outfit-suggestions/portfolio",
+        headers={"Authorization": "Bearer any-token"},
+        json={"occasion": "office"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["weather"] is None

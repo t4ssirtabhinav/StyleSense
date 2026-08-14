@@ -15,6 +15,12 @@ export interface BadgeProps {
   onPress?: () => void;
   /** Optional test hook — not part of the ticket's fixed API, purely additive. */
   testID?: string;
+  /** (SS-022) Truncate `label` to 20 chars + '…'. Default `true` — every
+   * pre-SS-022 caller (occasion tiles, style pills) keeps its exact
+   * behaviour. Set `false` for a caller whose copy is deliberately longer
+   * than 20 chars and must render verbatim (e.g. the weather chip's
+   * "Dressing for 28°C, partly cloudy"). */
+  truncate?: boolean;
 }
 
 const MAX_LABEL_LENGTH = 20;
@@ -45,9 +51,10 @@ export function Badge({
   icon,
   onPress,
   testID,
+  truncate = true,
 }: BadgeProps) {
   const style = occasion ? OCCASION_STYLE[occasion] : NEUTRAL_STYLE;
-  const truncatedLabel = truncateBadgeLabel(label);
+  const truncatedLabel = truncate ? truncateBadgeLabel(label) : label;
 
   const containerClassName = [
     'flex-row items-center self-start rounded-pill px-md py-xs',

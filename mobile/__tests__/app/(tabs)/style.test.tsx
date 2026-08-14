@@ -102,13 +102,18 @@ function samplePortfolioResponse() {
       },
     ],
     limited_options: false,
-    gap_report: { excluded_missing_color_or_category: 0, missing_slots: [] },
+    gap_report: {
+      excluded_missing_color_or_category: 0,
+      missing_slots: [],
+      weather_exclusions_relaxed: false,
+    },
     engine_version: 'engine-v2',
     effort_tier: 'E2',
     cache_hit: false,
     generated_at: '2026-08-07T00:00:00.000Z',
     session_id: 'session-1',
     occasion_key: 'office',
+    weather: null,
   };
 }
 

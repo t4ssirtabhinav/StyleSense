@@ -19,7 +19,9 @@ from ai.adapters.styling_call import (
 from ai.ports.interfaces import StylePreferencesInput
 
 VALID_NARRATION_TOOL_INPUT = {
-    "narrations": [{"outfit_fingerprint": "fp1", "rationale": "high-stakes-quality narration", "rank": None}]
+    "narrations": [
+        {"outfit_fingerprint": "fp1", "rationale": "high-stakes-quality narration", "rank": None}
+    ]
 }
 
 
@@ -65,7 +67,9 @@ def _valid_message() -> _FakeMessage:
 
 def _fake_response(status_code: int) -> httpx.Response:
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    return httpx.Response(status_code, request=request, json={"error": {"type": "x", "message": "x"}})
+    return httpx.Response(
+        status_code, request=request, json={"error": {"type": "x", "message": "x"}}
+    )
 
 
 def _rate_limit_error() -> anthropic.RateLimitError:
@@ -134,6 +138,39 @@ async def test_not_found_error_maps_to_permanent_error() -> None:
         raise AssertionError("expected ProviderPermanentError")
     except ProviderPermanentError:
         pass
+
+
+async def test_weather_none_default_and_populated_dict_both_produce_unchanged_shape() -> None:
+    client = _FakeClient([_valid_message(), _valid_message()])
+    adapter = ClaudeStylingAdapter(model="claude-sonnet-5", client=client)
+
+    result_no_weather = await adapter.narrate_candidates(
+        [_candidate("fp1")], occasion="puja", preferences=StylePreferencesInput(), max_suggestions=5
+    )
+    weather = {
+        "city": "Mumbai",
+        "temp_c": 28.0,
+        "condition": "clear",
+        "humidity": 60,
+        "is_heavy_rain": False,
+        "observed_at": "2026-08-14T13:00",
+    }
+    result_with_weather = await adapter.narrate_candidates(
+        [_candidate("fp1")],
+        occasion="puja",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+        weather=weather,
+    )
+
+    assert result_no_weather.source == "claude"
+    assert result_with_weather.source == "claude"
+    assert [n.outfit_fingerprint for n in result_no_weather.narrations] == ["fp1"]
+    assert [n.outfit_fingerprint for n in result_with_weather.narrations] == ["fp1"]
+
+    second_call_prompt = client.messages.calls[1]["messages"][0]["content"]
+    assert "28" in second_call_prompt
+    assert "clear" in second_call_prompt
 
 
 async def test_no_tool_use_block_maps_to_parse_error() -> None:

@@ -141,20 +141,34 @@ def compute_narration_signature(
     occasion_key: str,
     engine_version: str,
     llm_candidate_count: int,
+    weather_bucket: str,
 ) -> str:
     """Order-independent across the candidate list (candidates themselves
     sorted by their own tuple-of-tuples) but sensitive to occasion/
-    engine_version/llm_candidate_count/category/colour-family/formality-band
-    changes. A SALTED, KEYED hash (HMAC-SHA256), not a plain sha256 --
-    closes the "brute-force common wardrobes to probe which signatures are
-    cache-warm" angle at zero extra cost.
+    engine_version/llm_candidate_count/weather_bucket/category/colour-family/
+    formality-band changes. A SALTED, KEYED hash (HMAC-SHA256), not a plain
+    sha256 -- closes the "brute-force common wardrobes to probe which
+    signatures are cache-warm" angle at zero extra cost.
+
+    (SS-022) ``weather_bucket`` is a REQUIRED keyword arg -- see
+    ``services/weather_rules.weather_cache_bucket``. Without it, monsoon
+    prose could be served on a clear day. Adding a segment to the shape
+    string changes EVERY signature -- flagged loudly, not silently, per
+    SS-020's own design doc instruction (docs/worklog/SS-022.md's Developer
+    entry). Safe and self-healing: every existing
+    ``suggestion_narration_cache`` row has a <=6h TTL and is swept by the
+    migration-``019`` ``pg_cron`` job -- no data loss, no migration, just a
+    one-time cold cache.
 
     ``SUGGESTION_CACHE_SALT`` is a required env var -- see
     ``docs/worklog/SS-020.md``'s Developer entry for provisioning status."""
     sorted_shapes = sorted(candidate_shapes)
-    shape_string = f"{occasion_key}|{engine_version}|{llm_candidate_count}|" + "||".join(
-        ",".join(f"{category}:{colour}:{formality}" for category, colour, formality in shape)
-        for shape in sorted_shapes
+    shape_string = (
+        f"{occasion_key}|{engine_version}|{llm_candidate_count}|{weather_bucket}|"
+        + "||".join(
+            ",".join(f"{category}:{colour}:{formality}" for category, colour, formality in shape)
+            for shape in sorted_shapes
+        )
     )
     salt = os.environ["SUGGESTION_CACHE_SALT"]
     return hmac.new(salt.encode("utf-8"), shape_string.encode("utf-8"), hashlib.sha256).hexdigest()

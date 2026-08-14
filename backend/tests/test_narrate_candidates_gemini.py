@@ -79,18 +79,26 @@ async def test_never_invents_a_fingerprint_outside_input_candidates() -> None:
     client = _FakeClient([_valid_response()])
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     result = await adapter.narrate_candidates(
-        [_candidate("fp1")], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+        [_candidate("fp1")],
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
     )
     assert all(n.outfit_fingerprint == "fp1" for n in result.narrations)
     assert result.source == "gemini"
 
 
 async def test_server_error_maps_to_provider_transient_error() -> None:
-    client = _FakeClient([errors.ServerError(503, {"message": "unavailable", "status": "UNAVAILABLE"})])
+    client = _FakeClient(
+        [errors.ServerError(503, {"message": "unavailable", "status": "UNAVAILABLE"})]
+    )
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     try:
         await adapter.narrate_candidates(
-            [_candidate()], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+            [_candidate()],
+            occasion="office",
+            preferences=StylePreferencesInput(),
+            max_suggestions=5,
         )
         raise AssertionError("expected ProviderTransientError")
     except ProviderTransientError:
@@ -104,7 +112,10 @@ async def test_client_error_429_maps_to_quota_exhausted() -> None:
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     try:
         await adapter.narrate_candidates(
-            [_candidate()], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+            [_candidate()],
+            occasion="office",
+            preferences=StylePreferencesInput(),
+            max_suggestions=5,
         )
         raise AssertionError("expected ProviderQuotaExhaustedError")
     except ProviderQuotaExhaustedError:
@@ -116,7 +127,10 @@ async def test_client_error_404_maps_to_permanent_error() -> None:
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     try:
         await adapter.narrate_candidates(
-            [_candidate()], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+            [_candidate()],
+            occasion="office",
+            preferences=StylePreferencesInput(),
+            max_suggestions=5,
         )
         raise AssertionError("expected ProviderPermanentError")
     except ProviderPermanentError:
@@ -128,11 +142,51 @@ async def test_empty_response_maps_to_parse_error() -> None:
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     try:
         await adapter.narrate_candidates(
-            [_candidate()], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+            [_candidate()],
+            occasion="office",
+            preferences=StylePreferencesInput(),
+            max_suggestions=5,
         )
         raise AssertionError("expected ProviderParseError")
     except ProviderParseError:
         pass
+
+
+async def test_weather_none_default_and_populated_dict_both_produce_unchanged_shape() -> None:
+    client = _FakeClient([_valid_response(), _valid_response()])
+    adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
+
+    result_no_weather = await adapter.narrate_candidates(
+        [_candidate("fp1")],
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+    )
+    weather = {
+        "city": "Mumbai",
+        "temp_c": 28.0,
+        "condition": "clear",
+        "humidity": 60,
+        "is_heavy_rain": False,
+        "observed_at": "2026-08-14T13:00",
+    }
+    result_with_weather = await adapter.narrate_candidates(
+        [_candidate("fp1")],
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+        weather=weather,
+    )
+
+    assert result_no_weather.source == "gemini"
+    assert result_with_weather.source == "gemini"
+    assert [n.outfit_fingerprint for n in result_no_weather.narrations] == ["fp1"]
+    assert [n.outfit_fingerprint for n in result_with_weather.narrations] == ["fp1"]
+
+    # The weather block actually reached the rendered prompt text.
+    second_call_prompt = client.models.calls[1]["contents"][0]
+    assert "28" in second_call_prompt
+    assert "clear" in second_call_prompt
 
 
 async def test_malformed_json_maps_to_parse_error() -> None:
@@ -140,7 +194,10 @@ async def test_malformed_json_maps_to_parse_error() -> None:
     adapter = GeminiStylingAdapter(model="gemini-2.5-flash-lite", client=client)
     try:
         await adapter.narrate_candidates(
-            [_candidate()], occasion="office", preferences=StylePreferencesInput(), max_suggestions=5
+            [_candidate()],
+            occasion="office",
+            preferences=StylePreferencesInput(),
+            max_suggestions=5,
         )
         raise AssertionError("expected ProviderParseError")
     except ProviderParseError:

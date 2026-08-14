@@ -24,6 +24,11 @@ from services.styling_rules_types import (
     StylingRulesOverride,
     WardrobeItemInput,
 )
+from services.weather_rules import (
+    WeatherContext,
+    weather_excluded_color_families,
+    weather_excluded_fabrics,
+)
 
 __all__ = ["resolve_styling_rules", "resolve_near_white_thresholds", "filter_eligible"]
 
@@ -91,29 +96,44 @@ def filter_eligible(
     rules: StylingRulesOverride,
     *,
     near_white_thresholds: NearWhiteThresholdConfig,
+    weather: WeatherContext | None = None,
 ) -> EligibilityResult:
     """Dedupe-by-id, missing-category/colour exclusion count, hard-colour-
     family exclusion (``HARD_EXCLUDED_COLOR_FAMILIES`` merged with
     ``rules.excluded_color_families``, unchanged), near-white filter using
-    the resolved thresholds via ``engine_v2_colour.item_is_hard_excluded_white``."""
+    the resolved thresholds via ``engine_v2_colour.item_is_hard_excluded_white``.
+
+    (SS-022) ``weather`` is additive, default ``None`` -- reproduces
+    pre-SS-022 output byte-for-byte. When ``weather.is_heavy_rain``: white
+    (including near-white/cream/ivory, via the SAME ``item_is_hard_excluded_white``
+    call as ``wedding_guest`` -- no second definition of "white") and
+    ``fabric == "silk"`` (exact, case-insensitive match) are excluded, in
+    addition to whatever the occasion already excludes. Mandatory
+    relax-if-empty guardrail (design §3 step 3): if the post-weather set is
+    empty and the pre-weather set was non-empty, the weather exclusions are
+    discarded entirely and ``weather_exclusions_relaxed=True`` is returned."""
     deduped = _dedupe_by_id(wardrobe)
 
     excluded_missing = sum(
         1 for item in deduped if item.category is None or item.color_primary is None
     )
-    eligible = [
+    missing_filtered = [
         item for item in deduped if item.category is not None and item.color_primary is not None
     ]
 
     hard_families = HARD_EXCLUDED_COLOR_FAMILIES.get(occasion.key, frozenset())
     effective_excluded = set(rules.excluded_color_families or []) | hard_families
 
-    if "white" in effective_excluded:
+    def _white_filtered(
+        pool: list[WardrobeItemInput], excluded: set[str]
+    ) -> list[WardrobeItemInput]:
+        if "white" not in excluded:
+            return pool
         # Code-level, unconditional guard (never a prompt-level instruction)
         # -- applied regardless of what styling_rules contains or omits.
-        eligible = [
+        return [
             item
-            for item in eligible
+            for item in pool
             if not item_is_hard_excluded_white(
                 item,
                 value_threshold=near_white_thresholds.value_threshold,
@@ -121,6 +141,36 @@ def filter_eligible(
             )
         ]
 
+    # "Everything currently in this function running unchanged" -- the
+    # pre-SS-022 result, ignoring weather entirely. This is what the
+    # relax-if-empty guardrail falls back to (design §3 step 3), NOT the
+    # weather-influenced white-only intermediate.
+    pre_weather = _white_filtered(missing_filtered, effective_excluded)
+
+    eligible = pre_weather
+    weather_exclusions_relaxed = False
+    if weather is not None and weather.is_heavy_rain:
+        weather_excluded = effective_excluded | weather_excluded_color_families(weather)
+        eligible = _white_filtered(missing_filtered, weather_excluded)
+
+        excluded_fabrics = weather_excluded_fabrics(weather)
+        if excluded_fabrics:
+            eligible = [
+                item
+                for item in eligible
+                if item.fabric is None or item.fabric.casefold() not in excluded_fabrics
+            ]
+
+        if not eligible and pre_weather:
+            # Relax-if-empty (design §3 step 3): a monsoon user whose
+            # wardrobe is mostly white/silk must still get suggestions --
+            # degraded advice beats an empty screen. Deliberately
+            # all-or-nothing at the item-pool level, not per-slot.
+            eligible = pre_weather
+            weather_exclusions_relaxed = True
+
     return EligibilityResult(
-        eligible_items=eligible, excluded_missing_color_or_category=excluded_missing
+        eligible_items=eligible,
+        excluded_missing_color_or_category=excluded_missing,
+        weather_exclusions_relaxed=weather_exclusions_relaxed,
     )

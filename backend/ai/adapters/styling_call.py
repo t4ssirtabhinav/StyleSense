@@ -98,6 +98,7 @@ class MeteredStylingProvider(Protocol):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]: ...
 
 

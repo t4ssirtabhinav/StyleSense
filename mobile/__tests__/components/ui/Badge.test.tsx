@@ -45,6 +45,15 @@ describe('Badge', () => {
     expect(queryByText(longLabel)).toBeNull();
   });
 
+  it('truncate=false renders a >20-char label verbatim (SS-022)', async () => {
+    const longLabel = 'Dressing for 28°C, partly cloudy';
+    const { getByText, queryByText } = await render(
+      <Badge label={longLabel} truncate={false} />,
+    );
+    expect(getByText(longLabel)).toBeOnTheScreen();
+    expect(queryByText(/…$/)).toBeNull();
+  });
+
   it('is touchable when onPress is provided', async () => {
     const onPress = jest.fn();
     const { getByRole } = await render(

@@ -77,9 +77,7 @@ def test_puja_religious_occasion_kind_stays_everyday_pinning_b6() -> None:
 
 
 def test_rule_order_decides_when_two_rules_match() -> None:
-    decision = resolve_route(
-        DEFAULT_ROUTING_TABLE, _ctx(tier="atelier", occasion="wedding_guest")
-    )
+    decision = resolve_route(DEFAULT_ROUTING_TABLE, _ctx(tier="atelier", occasion="wedding_guest"))
     assert decision.reason == "tier_atelier"  # tier rule listed first
 
 
@@ -89,11 +87,15 @@ def test_unknown_when_field_skips_only_that_rule() -> None:
         rules=[
             RoutingRule(
                 when={"nonexistent_field": ["x"]},
-                route=Route(provider="claude", model="c1", cost_class="high_stakes", reason="bad_rule"),
+                route=Route(
+                    provider="claude", model="c1", cost_class="high_stakes", reason="bad_rule"
+                ),
             ),
             RoutingRule(
                 when={"tier": ["atelier"]},
-                route=Route(provider="claude", model="c2", cost_class="high_stakes", reason="good_rule"),
+                route=Route(
+                    provider="claude", model="c2", cost_class="high_stakes", reason="good_rule"
+                ),
             ),
         ],
         failover={},
@@ -211,6 +213,7 @@ class _FakeFallback(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         self.calls += 1
         if self.raises:
@@ -220,7 +223,12 @@ class _FakeFallback(IStylingProvider):
 
 def _table(failover: dict[str, list[str]] | None = None) -> RoutingTableConfig:
     return RoutingTableConfig(
-        default=Route(provider="gemini", model="gemini-model", cost_class="everyday", reason="default_everyday"),
+        default=Route(
+            provider="gemini",
+            model="gemini-model",
+            cost_class="everyday",
+            reason="default_everyday",
+        ),
         # A never-matching rule solely to register claude's model in the
         # provider->model map _build_chain/_provider_model_map derive from
         # the table (mirrors the shipped table's real shape, where every
@@ -229,7 +237,12 @@ def _table(failover: dict[str, list[str]] | None = None) -> RoutingTableConfig:
         rules=[
             RoutingRule(
                 when={"tier": ["_never_matches_"]},
-                route=Route(provider="claude", model="claude-model", cost_class="high_stakes", reason="unused"),
+                route=Route(
+                    provider="claude",
+                    model="claude-model",
+                    cost_class="high_stakes",
+                    reason="unused",
+                ),
             )
         ],
         failover=failover if failover is not None else {"gemini": ["claude"], "claude": ["gemini"]},
@@ -290,11 +303,18 @@ async def test_parse_error_retries_same_provider_then_fails_over_to_secondary() 
         }
     )
     table = RoutingTableConfig(
-        default=Route(provider="gemini", model="gemini-model", cost_class="everyday", reason="default_everyday"),
+        default=Route(
+            provider="gemini",
+            model="gemini-model",
+            cost_class="everyday",
+            reason="default_everyday",
+        ),
         rules=[
             RoutingRule(
                 when={"tier": ["atelier"]},
-                route=Route(provider="claude", model="claude-model", cost_class="high_stakes", reason="x"),
+                route=Route(
+                    provider="claude", model="claude-model", cost_class="high_stakes", reason="x"
+                ),
             )
         ],
         failover={"gemini": ["claude"]},
@@ -328,8 +348,12 @@ async def test_local_quota_exhaustion_skips_straight_to_secondary_without_callin
 
 
 async def test_both_providers_fail_returns_fallback_degraded_no_exception() -> None:
-    gemini_provider = _FakeMeteredProvider([ProviderTransientError("down")], provider="gemini", model="gemini-model")
-    claude_provider = _FakeMeteredProvider([ProviderTransientError("down")], provider="claude", model="claude-model")
+    gemini_provider = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="gemini", model="gemini-model"
+    )
+    claude_provider = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="claude", model="claude-model"
+    )
     registry = _FakeRegistry(
         {
             ("gemini", "gemini-model"): gemini_provider,
@@ -351,8 +375,12 @@ async def test_both_providers_fail_returns_fallback_degraded_no_exception() -> N
 
 
 async def test_fallback_itself_raising_still_returns_a_valid_empty_result_no_raise() -> None:
-    gemini_provider = _FakeMeteredProvider([ProviderTransientError("down")], provider="gemini", model="gemini-model")
-    claude_provider = _FakeMeteredProvider([ProviderTransientError("down")], provider="claude", model="claude-model")
+    gemini_provider = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="gemini", model="gemini-model"
+    )
+    claude_provider = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="claude", model="claude-model"
+    )
     registry = _FakeRegistry(
         {
             ("gemini", "gemini-model"): gemini_provider,
@@ -369,7 +397,9 @@ async def test_fallback_itself_raising_still_returns_a_valid_empty_result_no_rai
 
 
 async def test_deadline_exhausted_before_second_provider_degrades_without_calling_it() -> None:
-    gemini_provider = _FakeMeteredProvider([ProviderTransientError("down")], provider="gemini", model="gemini-model")
+    gemini_provider = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="gemini", model="gemini-model"
+    )
     claude_provider = _FakeMeteredProvider([], provider="claude", model="claude-model")
     registry = _FakeRegistry(
         {
@@ -416,11 +446,21 @@ async def test_unknown_provider_name_in_table_does_not_raise_and_fails_over() ->
     claude_provider = _FakeMeteredProvider([], provider="claude", model="claude-model")
     registry = _FakeRegistry({("claude", "claude-model"): claude_provider})
     table = RoutingTableConfig(
-        default=Route(provider="gemini", model="gemini-model", cost_class="everyday", reason="default_everyday"),
+        default=Route(
+            provider="gemini",
+            model="gemini-model",
+            cost_class="everyday",
+            reason="default_everyday",
+        ),
         rules=[
             RoutingRule(
                 when={"tier": ["_never_matches_"]},
-                route=Route(provider="claude", model="claude-model", cost_class="high_stakes", reason="unused"),
+                route=Route(
+                    provider="claude",
+                    model="claude-model",
+                    cost_class="high_stakes",
+                    reason="unused",
+                ),
             )
         ],
         failover={"gemini": ["unknown_vendor", "claude"]},

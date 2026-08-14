@@ -88,7 +88,9 @@ class EffortTierParams(BaseModel):
     colour_mode: str  # documentation-only today -- NOT wired to any stage call (BL-135)
     mmr_lambda: float  # -> select_portfolio(lambda_=...)
     max_exploration: int  # -> select_portfolio(max_exploration=...)
-    llm_candidate_count: int | None  # -> IStylingProvider.suggest_outfits(max_suggestions=...); None = no LLM call (E0)
+    llm_candidate_count: (
+        int | None
+    )  # -> IStylingProvider.suggest_outfits(max_suggestions=...); None = no LLM call (E0)
 
 
 class EngineV2EffortTierConfig(BaseModel):
@@ -148,4 +150,22 @@ SUGGESTION_NARRATION_CACHE_TTL_SPEC: ConfigSpec[SuggestionNarrationCacheTtlConfi
     key="suggestion_narration_cache_ttl_seconds",
     model=SuggestionNarrationCacheTtlConfig,
     default=SuggestionNarrationCacheTtlConfig(),
+)
+
+
+class WeatherHeavyRainConfig(BaseModel):
+    """(SS-022) The precipitation-rate half of the heavy-rain predicate
+    (``services/weather_rules.is_heavy_rain``) -- an Architect inference
+    (the commonly-cited "heavy rain" hourly rate), NOT a verified IMD/WMO
+    standard, in the same unvalidated class as ``ENGINE_V2_RULE_WEIGHTS``.
+    No seed migration: a missing/malformed row degrades to this coded
+    default (SS-026's pattern, same as ``GEMINI_QUOTA_CEILING_SPEC``)."""
+
+    precip_mm_per_hour: float = 7.6
+
+
+WEATHER_HEAVY_RAIN_SPEC: ConfigSpec[WeatherHeavyRainConfig] = ConfigSpec(
+    key="weather_heavy_rain_threshold",
+    model=WeatherHeavyRainConfig,
+    default=WeatherHeavyRainConfig(),
 )

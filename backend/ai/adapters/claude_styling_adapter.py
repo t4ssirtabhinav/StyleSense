@@ -319,7 +319,6 @@ class ClaudeStylingAdapter(IStylingProvider):
         )
         return result, metrics
 
-
     async def narrate_candidates(
         self,
         candidates: list[dict[str, Any]],
@@ -327,9 +326,14 @@ class ClaudeStylingAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         result, _ = await self.narrate_candidates_with_metrics(
-            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+            candidates,
+            occasion=occasion,
+            preferences=preferences,
+            max_suggestions=max_suggestions,
+            weather=weather,
         )
         return result
 
@@ -340,8 +344,11 @@ class ClaudeStylingAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]:
-        prompt = self._narration_prompt_builder(candidates, occasion, preferences, max_suggestions)
+        prompt = self._narration_prompt_builder(
+            candidates, occasion, preferences, max_suggestions, weather
+        )
         start = time.perf_counter()
         try:
             client = self._get_client()

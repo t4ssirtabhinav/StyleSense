@@ -2,6 +2,8 @@
 // the regenerate exclusion cap. One place so a future copy change doesn't
 // need to be hunted down across 8 components.
 
+import type { WeatherCondition } from './outfit-ai.types';
+
 export const OCCASION_SCREEN_HEADING = "What's the occasion?";
 export const GET_SUGGESTIONS_CTA = 'Get suggestions';
 export const LOADING_COPY = 'Styling three looks for you…';
@@ -46,3 +48,18 @@ export const EXCLUDE_FINGERPRINTS_CAP = 60;
 export function scoreBadgeLabel(totalScore: number): string {
   return `${Math.round(totalScore * 100)}% match`;
 }
+
+// SS-022 — the weather chip's copy (design §7, "fixed, use verbatim").
+export const WEATHER_CHIP_PREFIX = 'Dressing for';
+
+export const WEATHER_CONDITION_LABELS: Record<WeatherCondition, string> = {
+  clear: 'clear',
+  partly_cloudy: 'partly cloudy',
+  cloudy: 'cloudy',
+  fog: 'foggy',
+  drizzle: 'drizzly',
+  rain: 'rainy',
+  heavy_rain: 'heavy rain',
+  thunderstorm: 'thunderstorms',
+  snow: 'snow',
+};

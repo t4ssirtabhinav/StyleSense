@@ -15,7 +15,9 @@ from services.styling_router import RoutingContext, StylingRouter
 def _metrics(provider: str, model: str) -> Any:
     from ai.adapters.styling_call import StylingCallMetrics
 
-    return StylingCallMetrics(provider=provider, model=model, tokens_in=10, tokens_out=5, latency_ms=10)
+    return StylingCallMetrics(
+        provider=provider, model=model, tokens_in=10, tokens_out=5, latency_ms=10
+    )
 
 
 def _fake_narration(source: str) -> NarratedPortfolioResult:
@@ -32,6 +34,7 @@ class _FakeMeteredProvider:
         self.calls = 0
         self._provider = provider
         self._model = model
+        self.last_weather: dict[str, Any] | None = None
 
     async def suggest_outfits_with_metrics(
         self, preferences: StylePreferencesInput, *, max_suggestions: int = 5
@@ -45,8 +48,10 @@ class _FakeMeteredProvider:
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> Any:
         self.calls += 1
+        self.last_weather = weather
         if self._outcomes:
             outcome = self._outcomes.pop(0)
             if isinstance(outcome, BaseException):
@@ -83,6 +88,7 @@ class _FakeFallback:
     def __init__(self, *, raises: bool = False) -> None:
         self.raises = raises
         self.calls = 0
+        self.last_weather: dict[str, Any] | None = None
 
     async def suggest_outfits(
         self, preferences: StylePreferencesInput, *, max_suggestions: int = 5
@@ -96,8 +102,10 @@ class _FakeFallback:
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         self.calls += 1
+        self.last_weather = weather
         if self.raises:
             raise RuntimeError("fallback broke")
         return _fake_narration("rules_only")
@@ -118,6 +126,60 @@ def _router(
         context=RoutingContext(user_id="user-1"),
         fallback=fallback,
     )
+
+
+async def test_weather_forwarded_to_the_chain_call() -> None:
+    provider = _FakeMeteredProvider([], provider="gemini", model="gemini-3.1-flash-lite")
+    router = _router(adapters={("gemini", "gemini-3.1-flash-lite"): provider})
+    weather = {
+        "city": "Mumbai",
+        "temp_c": 28.0,
+        "condition": "clear",
+        "humidity": 60,
+        "is_heavy_rain": False,
+    }
+
+    await router.narrate_candidates_with_decision(
+        [],
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+        weather=weather,
+    )
+    assert provider.last_weather == weather
+
+
+async def test_weather_forwarded_to_the_degrade_fallback() -> None:
+    gemini = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="gemini", model="gemini-3.1-flash-lite"
+    )
+    claude = _FakeMeteredProvider(
+        [ProviderTransientError("down")], provider="claude", model="claude-sonnet-5"
+    )
+    fallback = _FakeFallback()
+    router = _router(
+        adapters={
+            ("gemini", "gemini-3.1-flash-lite"): gemini,
+            ("claude", "claude-sonnet-5"): claude,
+        },
+        fallback=fallback,
+    )
+    weather = {
+        "city": "Mumbai",
+        "temp_c": 28.0,
+        "condition": "clear",
+        "humidity": 60,
+        "is_heavy_rain": False,
+    }
+
+    await router.narrate_candidates_with_decision(
+        [],
+        occasion="office",
+        preferences=StylePreferencesInput(),
+        max_suggestions=5,
+        weather=weather,
+    )
+    assert fallback.last_weather == weather
 
 
 async def test_success_on_first_provider_returns_result_and_decision() -> None:

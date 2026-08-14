@@ -105,6 +105,7 @@ from services.styling_rules_defaults import (
     DEFAULT_SCORE_FLOOR,
 )
 from services.styling_rules_types import GapReport, OccasionStylingInput, WardrobeItemInput
+from services.weather_rules import WeatherContext
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ class EngineV2:
         tier: str | None = None,
         request_id: str | None = None,
         exclude_fingerprints: frozenset[str] | None = None,
+        weather: WeatherContext | None = None,
     ) -> EngineV2Result:
         """The only async/I/O boundary in the whole pipeline -- see module
         docstring for the exact sequence.
@@ -169,7 +171,12 @@ class EngineV2:
         ``engine_v2_portfolio.select_portfolio``, which drops any scored
         candidate whose fingerprint is in the set BEFORE MMR selection
         (design §4, the regenerate mechanism). Default ``None`` reproduces
-        pre-SS-023 output byte-for-byte."""
+        pre-SS-023 output byte-for-byte.
+
+        (SS-022) ``weather`` is a further additive-only widening --
+        forwarded verbatim to ``engine_v2_eligibility.filter_eligible``,
+        which applies the heavy-rain white/silk hard exclusion (design §3).
+        Default ``None`` reproduces pre-SS-022 output byte-for-byte."""
         await self._garment_registry.refresh()
 
         try:
@@ -180,11 +187,9 @@ class EngineV2:
 
         rules = engine_v2_eligibility.resolve_styling_rules(occasion)
         app_config_snapshot = await self._app_config.snapshot()
-        near_white = engine_v2_eligibility.resolve_near_white_thresholds(
-            app_config_snapshot, rules
-        )
+        near_white = engine_v2_eligibility.resolve_near_white_thresholds(app_config_snapshot, rules)
         eligibility = engine_v2_eligibility.filter_eligible(
-            wardrobe, occasion, rules, near_white_thresholds=near_white
+            wardrobe, occasion, rules, near_white_thresholds=near_white, weather=weather
         )
 
         novelty_inputs = await engine_v2_novelty.fetch_novelty_inputs(
@@ -225,6 +230,7 @@ class EngineV2:
         gap_report = GapReport(
             excluded_missing_color_or_category=eligibility.excluded_missing_color_or_category,
             missing_slots=search_result.missing_slots,
+            weather_exclusions_relaxed=eligibility.weather_exclusions_relaxed,
         )
         portfolio_result = engine_v2_portfolio.select_portfolio(
             scored,
@@ -298,7 +304,9 @@ class EngineV2:
             ]
             return await self._suggestion_log_repo.log_session(session, impressions)
         except Exception as exc:  # noqa: BLE001 -- logging must never fail the suggestion request
-            logger.error("engine_v2_session_log_failed", extra={"user_id": user_id, "error": str(exc)})
+            logger.error(
+                "engine_v2_session_log_failed", extra={"user_id": user_id, "error": str(exc)}
+            )
             return None
 
 

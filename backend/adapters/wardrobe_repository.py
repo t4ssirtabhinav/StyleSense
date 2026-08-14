@@ -192,11 +192,20 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
 
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         client = await _client_for(jwt)
-        response = (
-            await client.table("users").select("style_preferences").limit(1).execute()
-        )
+        response = await client.table("users").select("style_preferences").limit(1).execute()
         if not response.data:
             return None
         first_row = cast(dict[str, Any], response.data[0])
         prefs = first_row.get("style_preferences")
         return cast(dict[str, Any] | None, prefs)
+
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        """(SS-022) select city from users, RLS-scoped, mirrors
+        get_plan_tier/get_style_preferences exactly -- never service_role."""
+        client = await _client_for(jwt)
+        response = await client.table("users").select("city").limit(1).execute()
+        if not response.data:
+            return None
+        first_row = cast(dict[str, Any], response.data[0])
+        city = first_row.get("city")
+        return cast(str | None, city)

@@ -138,6 +138,10 @@ class _FakeRepository(IWardrobeRepository):
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         return None
 
+    # SS-022 mechanical addition: same ABC-extension trap as above.
+    async def get_city(self, *, jwt: str, user_id: str) -> str | None:
+        return None
+
 
 class _FakeRateLimiter:
     def __init__(self, allowed: bool = True) -> None:
@@ -235,7 +239,9 @@ class _FakeCostBudgetGate:
             {"user_id": user_id, "tier": tier, "estimate_micropaise": estimate_micropaise}
         )
         if not self._allowed:
-            return GateDecision(allowed=False, scope=self._scope or "daily", degraded=False, reservation=None)
+            return GateDecision(
+                allowed=False, scope=self._scope or "daily", degraded=False, reservation=None
+            )
         return GateDecision(
             allowed=True,
             scope=None,
@@ -281,7 +287,9 @@ def _override_infra(
     app.dependency_overrides[get_background_removal_provider] = lambda: _FakeProvider()
     app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
     app.dependency_overrides[get_circuit_breaker] = lambda: _FakeCircuitBreaker()
-    app.dependency_overrides[get_cost_budget_gate] = lambda: (cost_budget_gate or _FakeCostBudgetGate())
+    app.dependency_overrides[get_cost_budget_gate] = lambda: (
+        cost_budget_gate or _FakeCostBudgetGate()
+    )
     app.dependency_overrides[get_cost_ledger] = lambda: _FakeCostLedgerForRouter()
     app.dependency_overrides[get_app_config_snapshot] = lambda: AppConfigSnapshot()
 
@@ -503,7 +511,9 @@ def _override_tag_infra(
     app.dependency_overrides[get_vision_provider] = lambda: provider
     app.dependency_overrides[get_r2_storage_client] = lambda: _FakeStorage()
     app.dependency_overrides[get_tag_cache] = _FakeTagCache
-    app.dependency_overrides[get_cost_budget_gate] = lambda: (cost_budget_gate or _FakeCostBudgetGate())
+    app.dependency_overrides[get_cost_budget_gate] = lambda: (
+        cost_budget_gate or _FakeCostBudgetGate()
+    )
     app.dependency_overrides[get_cost_ledger] = lambda: _FakeCostLedgerForRouter()
     app.dependency_overrides[get_app_config_snapshot] = lambda: AppConfigSnapshot()
 

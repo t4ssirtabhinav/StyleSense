@@ -159,9 +159,14 @@ class GeminiStylingAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> NarratedPortfolioResult:
         result, _ = await self.narrate_candidates_with_metrics(
-            candidates, occasion=occasion, preferences=preferences, max_suggestions=max_suggestions
+            candidates,
+            occasion=occasion,
+            preferences=preferences,
+            max_suggestions=max_suggestions,
+            weather=weather,
         )
         return result
 
@@ -172,8 +177,11 @@ class GeminiStylingAdapter(IStylingProvider):
         occasion: str,
         preferences: StylePreferencesInput,
         max_suggestions: int,
+        weather: dict[str, Any] | None = None,
     ) -> tuple[NarratedPortfolioResult, StylingCallMetrics]:
-        prompt = self._narration_prompt_builder(candidates, occasion, preferences, max_suggestions)
+        prompt = self._narration_prompt_builder(
+            candidates, occasion, preferences, max_suggestions, weather
+        )
 
         models_to_try = [self._model]
         if self._fallback_model and self._fallback_model != self._model:
