@@ -1,10 +1,9 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import { Button, Card, Input, Text } from '../../components/ui';
 import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 import {
-  useOnboardingCompletedQuery,
   useSendOtpMutation,
   useVerifyOtpMutation,
 } from '../../features/auth/auth.queries';
@@ -16,7 +15,6 @@ const GENERIC_OTP_ERROR_MESSAGE =
   'Incorrect or expired OTP. Please try again or resend.';
 
 export default function VerifyOtpScreen() {
-  const router = useRouter();
   const { phone: phoneParam } = useLocalSearchParams<{ phone: string }>();
   const phone = phoneParam ?? '';
 
@@ -25,13 +23,9 @@ export default function VerifyOtpScreen() {
   const [secondsRemaining, setSecondsRemaining] = useState(
     RESEND_COOLDOWN_SECONDS,
   );
-  const [verifiedUserId, setVerifiedUserId] = useState<string | undefined>(
-    undefined,
-  );
 
   const sendOtpMutation = useSendOtpMutation();
   const verifyOtpMutation = useVerifyOtpMutation();
-  const onboardingCompletedQuery = useOnboardingCompletedQuery(verifiedUserId);
   const { track } = useAnalytics();
 
   // Android SMS auto-read: a documented no-op stub on this pass (BL-019) —
@@ -50,27 +44,19 @@ export default function VerifyOtpScreen() {
     return () => clearInterval(interval);
   }, []);
 
-  // Post-verify navigation decision: a real side effect (imperative
-  // navigation once the profile-exists query settles), not derived state.
-  useEffect(() => {
-    if (!verifiedUserId || !onboardingCompletedQuery.isSuccess) {
-      return;
-    }
-    router.replace(onboardingCompletedQuery.data ? '/' : '/onboarding');
-  }, [
-    verifiedUserId,
-    onboardingCompletedQuery.isSuccess,
-    onboardingCompletedQuery.data,
-    router,
-  ]);
-
+  // SS-071: post-verify navigation is no longer decided here. A successful
+  // verify writes the session (via supabase.auth.onAuthStateChange ->
+  // hooks/useAuth.ts), and app/(auth)/_layout.tsx's forward guard — which
+  // wraps this screen — reacts to that session change and redirects toward
+  // /onboarding or / on its own next render. This screen performs no
+  // navigation at all after a successful verify (asserted by
+  // __tests__/app/(auth)/verify-otp.test.tsx).
   const handleVerify = (code: string) => {
     setOtpError(undefined);
     verifyOtpMutation.mutate(
       { phone, token: code },
       {
         onSuccess: (session) => {
-          setVerifiedUserId(session.user.id);
           // Supabase sets created_at/last_sign_in_at identically on a fresh
           // sign-up (first-ever verify for this phone number) — a returning
           // user's later verify has a later last_sign_in_at. Not literally

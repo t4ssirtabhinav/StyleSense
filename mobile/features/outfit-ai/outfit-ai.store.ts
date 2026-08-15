@@ -5,6 +5,7 @@
 // card the deck is showing, and the regenerate exclusion set (design §4).
 
 import { create } from 'zustand';
+import { registerUserStateReset } from '../auth/userStateReset';
 import { EXCLUDE_FINGERPRINTS_CAP } from './outfit-ai.constants';
 
 export interface OutfitAiState {
@@ -22,6 +23,7 @@ export interface OutfitAiState {
   addShownFingerprints: (fingerprints: string[]) => void;
   advanceDeck: () => void;
   resetDeck: () => void;
+  reset: () => void;
 }
 
 function pushCapped(
@@ -76,5 +78,26 @@ export const useOutfitAiStore = create<OutfitAiState>((set) => ({
 
   advanceDeck: () => set((state) => ({ deckIndex: state.deckIndex + 1 })),
 
+  // Kept exactly as-is (clears deckIndex only) -- app/(tabs)/style.tsx's own
+  // regenerate flow relies on this NOT touching
+  // selectedOccasionKey/dismissedFingerprints/sessionId. `reset()` below is
+  // the full, sign-out-scoped clear; resetDeck() is not folded into it.
   resetDeck: () => set({ deckIndex: 0 }),
+
+  // SS-071 AC #6 — the full reset the sign-out registry needs.
+  // resetDeck() above only ever clears 1 of these 4 fields by design (see
+  // its own comment); a previous user's selectedOccasionKey,
+  // dismissedFingerprints, and sessionId would otherwise survive into the
+  // next signed-in user's session on the same device.
+  reset: () =>
+    set({
+      selectedOccasionKey: null,
+      deckIndex: 0,
+      dismissedFingerprints: [],
+      sessionId: null,
+    }),
 }));
+
+// SS-071 AC #6 — self-registers with the sign-out reset registry. See
+// features/auth/userStateReset.ts.
+registerUserStateReset(() => useOutfitAiStore.getState().reset());
