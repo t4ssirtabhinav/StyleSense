@@ -120,6 +120,12 @@ PLACEHOLDER_IMAGE_URL = "https://placehold.co/600x800.png?text=SS-070+seed+item"
 
 LIST_PAGE_SIZE = 200
 
+# Boundary-sweep guard (not from the design note -- added defensively): a
+# typo like an extra zero on --items should not be able to flood the one
+# shared live project with rows. Re-run seed multiple times if more are
+# genuinely needed.
+MAX_SEED_ITEMS = 200
+
 
 class TestUserAdminError(RuntimeError):
     """Raised for expected refusals/failures. Message is always safe to
@@ -411,6 +417,11 @@ def cmd_seed(
     label = _validate_label(label)
     if items < 1:
         raise TestUserAdminError("--items must be >= 1.")
+    if items > MAX_SEED_ITEMS:
+        raise TestUserAdminError(
+            f"Refusing to seed {items} rows in one call (max {MAX_SEED_ITEMS}) -- likely a typo "
+            "(e.g. an extra zero). Re-run seed multiple times if you really need more."
+        )
     supabase_url = os.environ["SUPABASE_URL"]
 
     user = _find_by_label(client.auth.admin, label)

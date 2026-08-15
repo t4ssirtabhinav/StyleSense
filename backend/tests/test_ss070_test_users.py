@@ -317,6 +317,48 @@ def test_delete_refusal_message_is_clear_and_specific(monkeypatch: pytest.Monkey
 
 
 # ------------------------------------------------------------------
+# Boundary sweep: empty label, and delete is safely re-runnable after a
+# simulated mid-operation crash (Risk: high -- §C6 boundary sweep).
+# ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("label", ["", "-leadinghyphen", "UPPERCASE", "a" * 49])
+def test_invalid_labels_are_rejected_before_any_admin_call(label: str) -> None:
+    admin = FakeAdmin()
+    client = FakeClient(admin=admin)
+
+    with pytest.raises(sut.TestUserAdminError):
+        sut.cmd_create(client, label, confirm=_never_confirm)
+
+    assert admin.calls == []
+
+
+def test_delete_is_safely_re_runnable_after_a_simulated_mid_operation_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulates a process kill between clearing the four no-action-FK
+    tables and deleting public.users -- the state a real crash would leave
+    behind. Re-running delete must finish the job cleanly, not error out on
+    the already-empty tables."""
+    label = "crashmidway"
+    fake_user = _marked_user(label)
+    monkeypatch.setattr(sut, "_find_by_label", lambda admin, label_: fake_user)
+
+    admin = FakeAdmin(users=[fake_user])
+    client = FakeClient(admin=admin)
+    client.tables["users"] = [{"id": fake_user.id}]
+    client.tables["wardrobe_items"] = [{"id": "item-1", "user_id": fake_user.id}]
+    # Pre-clear the four no-action-FK tables, as if a first run got exactly
+    # that far before being killed.
+    for table in sut.NO_ACTION_FK_TABLES:
+        client.tables[table] = []
+
+    result = sut.cmd_delete(client, label, confirm=_always_confirm)
+
+    assert result.verification.fully_deleted is True
+
+
+# ------------------------------------------------------------------
 # create: duplicate label refused (BL-169 landmine, guard rail #5).
 # ------------------------------------------------------------------
 
@@ -377,6 +419,51 @@ def test_create_succeeds_and_verifies_public_users_row_by_query() -> None:
     assert result.profile_row_verified is True
     assert len(result.password) >= 16
     assert result.email == sut._email_for_label(label)
+
+
+# ------------------------------------------------------------------
+# seed: boundary sweep (empty / max / duplicate-is-additive).
+# ------------------------------------------------------------------
+
+
+def test_seed_refuses_zero_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    label = "zeroitems"
+    fake_user = _marked_user(label)
+    monkeypatch.setattr(sut, "_find_by_label", lambda admin, label_: fake_user)
+    client = FakeClient()
+
+    with pytest.raises(sut.TestUserAdminError):
+        sut.cmd_seed(client, label, items=0, confirm=_never_confirm)
+
+
+def test_seed_refuses_items_over_the_typo_guard_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    label = "toomany"
+    fake_user = _marked_user(label)
+    monkeypatch.setattr(sut, "_find_by_label", lambda admin, label_: fake_user)
+    client = FakeClient()
+
+    with pytest.raises(sut.TestUserAdminError) as exc_info:
+        sut.cmd_seed(client, label, items=sut.MAX_SEED_ITEMS + 1, confirm=_never_confirm)
+
+    assert str(sut.MAX_SEED_ITEMS) in str(exc_info.value)
+    assert client.tables.get("wardrobe_items", []) == []
+
+
+def test_seed_re_run_is_additive_not_replacing(monkeypatch: pytest.MonkeyPatch) -> None:
+    label = "reseed"
+    fake_user = _marked_user(label)
+    monkeypatch.setattr(sut, "_find_by_label", lambda admin, label_: fake_user)
+    client = FakeClient()
+
+    first = sut.cmd_seed(client, label, items=3, confirm=_always_confirm)
+    second = sut.cmd_seed(client, label, items=2, confirm=_always_confirm)
+
+    assert first.total == 3
+    assert second.total == 5
+    assert len(client.tables["wardrobe_items"]) == 5
+    assert all(row["user_id"] == fake_user.id for row in client.tables["wardrobe_items"])
+    # cost_per_wear is a GENERATED column -- the script must never insert it.
+    assert all("cost_per_wear" not in row for row in client.tables["wardrobe_items"])
 
 
 # ------------------------------------------------------------------
