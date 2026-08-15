@@ -3,8 +3,9 @@ import ProfileScreen from '../../../app/(tabs)/profile';
 import { useAuthStore } from '../../../features/auth/auth.store';
 
 const mockPush = jest.fn();
+const mockReplace = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
 jest.mock('../../../features/home/home.queries', () => ({
@@ -34,13 +35,27 @@ jest.mock('../../../features/style-score/style-score.queries', () => ({
 // (hooks/useAnalytics.ts -> lib/analytics.ts) reaches @sentry/react-native,
 // which ships ESM the default transform can't parse -- same
 // "composition smoke test" reason as the mocks above.
+const mockTrack = jest.fn();
 jest.mock('../../../hooks/useAnalytics', () => ({
-  useAnalytics: () => ({ track: jest.fn() }),
+  useAnalytics: () => ({ track: mockTrack }),
+}));
+
+// SS-071: profile.tsx's own Sign Out button drives useSignOutMutation
+// directly -- mocked here rather than exercising the real mutation's
+// React Query plumbing, which is signOut.test.tsx's job.
+const mockSignOutMutate = jest.fn();
+let mockIsPending = false;
+jest.mock('../../../features/auth/auth.queries', () => ({
+  useSignOutMutation: () => ({
+    mutate: mockSignOutMutate,
+    isPending: mockIsPending,
+  }),
 }));
 
 describe('ProfileScreen (app/(tabs)/profile.tsx)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIsPending = false;
     useAuthStore.setState({
       session: { user: { id: 'user-1' } } as never,
       isSessionLoading: false,
@@ -68,5 +83,56 @@ describe('ProfileScreen (app/(tabs)/profile.tsx)', () => {
     const { getByText } = await render(<ProfileScreen />);
     fireEvent.press(getByText('Edit Preferences'));
     expect(mockPush).toHaveBeenCalledWith('/edit-preferences');
+  });
+
+  it('renders a "Sign Out" button with an accessibility label', async () => {
+    const { getByLabelText } = await render(<ProfileScreen />);
+    expect(getByLabelText('Sign Out')).toBeOnTheScreen();
+  });
+
+  it('pressing "Sign Out" shows the confirm affordance without signing out yet; Cancel returns to the default state', async () => {
+    const { getByLabelText, getByTestId, queryByTestId } = await render(
+      <ProfileScreen />,
+    );
+
+    await fireEvent.press(getByLabelText('Sign Out'));
+
+    expect(getByTestId('sign-out-confirm')).toBeOnTheScreen();
+    expect(mockSignOutMutate).not.toHaveBeenCalled();
+
+    await fireEvent.press(getByLabelText('Cancel'));
+
+    expect(queryByTestId('sign-out-confirm')).toBeNull();
+    expect(mockSignOutMutate).not.toHaveBeenCalled();
+  });
+
+  it('confirming Sign Out fires the mutation, tracks sign_out, and calls router.replace("/login")', async () => {
+    mockSignOutMutate.mockImplementation(
+      (_vars: unknown, { onSuccess }: { onSuccess: () => void }) => {
+        onSuccess();
+      },
+    );
+    const { getByLabelText } = await render(<ProfileScreen />);
+
+    await fireEvent.press(getByLabelText('Sign Out'));
+    await fireEvent.press(getByLabelText('Confirm Sign Out'));
+
+    expect(mockSignOutMutate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+    expect(mockTrack).toHaveBeenCalledWith('sign_out', {
+      method: 'phone_otp',
+    });
+    expect(mockReplace).toHaveBeenCalledWith('/login');
+  });
+
+  it('the confirm Sign Out button is disabled while the mutation is pending (double-tap protection)', async () => {
+    mockIsPending = true;
+    const { getByLabelText } = await render(<ProfileScreen />);
+
+    await fireEvent.press(getByLabelText('Sign Out'));
+
+    expect(getByLabelText('Confirm Sign Out')).toBeDisabled();
   });
 });

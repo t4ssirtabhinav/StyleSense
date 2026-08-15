@@ -1,7 +1,7 @@
 import { Redirect } from 'expo-router';
 import { TabSlot, Tabs } from 'expo-router/ui';
 import { Card, Text } from '../../components/ui';
-import { useAuthStore } from '../../features/auth/auth.store';
+import { useAuthRouting } from '../../features/auth/useAuthRouting';
 import { useCustomTabBar } from '../../features/navigation/components/CustomTabBar';
 
 // The Auth Guard wrapping the (tabs) route group. SS-005 (Home Screen Shell
@@ -28,20 +28,26 @@ import { useCustomTabBar } from '../../features/navigation/components/CustomTabB
 // here means its returned `<TabList>` element is a literal, un-wrapped
 // child of `<Tabs>`, as required.
 export default function TabsLayout() {
-  const session = useAuthStore((state) => state.session);
-  const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
+  // SS-071: reads the same shared decision (useAuthRouting) that
+  // app/(auth)/_layout.tsx's forward guard consumes, rather than checking
+  // session presence alone — this is what closes BL-168's second half (AC
+  // #4): a returning user with a valid session and incomplete onboarding,
+  // who opens the app cold and never passes through an auth screen, is now
+  // routed to /onboarding instead of dropped straight into the tabs.
+  const routing = useAuthRouting();
   // Called unconditionally, alongside the other hooks above, before either
   // early return below — Rules of Hooks: a hook call placed after an early
-  // return would be skipped on some renders (isSessionLoading === true) and
-  // run on others, which React disallows.
+  // return would be skipped on some renders (routing.status === 'loading')
+  // and run on others, which React disallows.
   const tabBar = useCustomTabBar();
 
-  // `isSessionLoading` must default to true (see auth.store.ts) — this
-  // guards the first-render race where hooks/useAuth.ts's initial
-  // getSession() call is still in flight, avoiding a one-frame
-  // flash-redirect to /login for users who actually have a valid persisted
-  // session.
-  if (isSessionLoading) {
+  // `routing.status === 'loading'` covers both the first-render race where
+  // hooks/useAuth.ts's initial getSession() call is still in flight AND the
+  // onboarding-completed query settling — avoiding a one-frame
+  // flash-redirect to /login for users with a valid persisted session, and
+  // a flash toward the wrong destination while onboarding status is still
+  // resolving (design doc's "no flash" note, edge case #9).
+  if (routing.status === 'loading') {
     return (
       <Card
         testID="auth-guard-loading"
@@ -53,8 +59,12 @@ export default function TabsLayout() {
     );
   }
 
-  if (!session) {
+  if (routing.status === 'unauthenticated') {
     return <Redirect href="/login" />;
+  }
+
+  if (routing.status === 'onboarding') {
+    return <Redirect href="/onboarding" />;
   }
 
   return (

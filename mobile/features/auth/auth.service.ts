@@ -167,3 +167,42 @@ export async function fetchUserPlanTier(
     return null;
   }
 }
+
+// SS-071 — `{ scope: 'local' }` is deliberate, not the SDK's default.
+// [VERIFIED 2026-08-15 against installed @supabase/auth-js@2.108.2's own
+// source, node_modules/@supabase/auth-js/dist/module/GoTrueClient.js:3316]
+// `signOut()` defaults to `scope: 'global'`, which signs the user out of
+// EVERY device they're currently signed in on — the SDK's own doc comment
+// carries an explicit warning to that effect and recommends `'local'` for
+// exactly this "Sign Out" button case. Leaving the default would silently
+// kill the user's other devices on a single-device sign-out tap.
+//
+// Verified failure-path finding (read from the same file's `_signOut`,
+// lines 3326-3352): if the network revoke call
+// (`this.admin.signOut(accessToken, scope)`) fails with an error that is
+// NOT a 404/401/403/session-missing (i.e. a genuine network failure or a
+// 5xx, which the SDK wraps as AuthRetryableFetchError per
+// node_modules/@supabase/auth-js/dist/module/lib/fetch.js:22-32/114), the
+// SDK returns early WITHOUT calling `_removeSession()` — so on that branch
+// specifically, the SDK's own call does NOT clear the persisted
+// SecureStore/localStorage session and does NOT emit SIGNED_OUT. This
+// function still resolves (never rejects) either way, per its own
+// contract below; auth.queries.ts's useSignOutMutation additionally sets
+// useAuthStore's session to null directly in its `finally`, defensively,
+// specifically to cover this branch — see that file's comment. (A
+// residual gap this ticket does not close: the persisted token itself can
+// still be present in storage after a genuine network failure, until it
+// next expires/refreshes — see docs/worklog/SS-071.md and the BL-181 entry
+// this finding produced.)
+export async function signOut(): Promise<void> {
+  try {
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error) {
+      // Do not rethrow — the mutation's local-state clear must proceed
+      // regardless of whether the network revoke succeeded (AC #7).
+    }
+  } catch {
+    // Network/unknown failure calling signOut() itself — same contract:
+    // resolve, never reject.
+  }
+}

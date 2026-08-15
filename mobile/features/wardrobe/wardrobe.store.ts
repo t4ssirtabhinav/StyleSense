@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerUserStateReset } from '../auth/userStateReset';
 import { STALE_UPLOAD_THRESHOLD_MS } from './wardrobe.constants';
 import type {
   BatchItemState,
@@ -33,6 +34,7 @@ export interface WardrobeUploadState {
   setError: (taskId: string, error: WardrobeUploadError) => void;
   retryUpload: (taskId: string) => void;
   removeTask: (taskId: string) => void;
+  reset: () => void;
 }
 
 export const useWardrobeUploadStore = create<WardrobeUploadState>((set) => ({
@@ -143,7 +145,17 @@ export const useWardrobeUploadStore = create<WardrobeUploadState>((set) => ({
       delete nextTasks[taskId];
       return { tasks: nextTasks };
     }),
+
+  // SS-071 AC #6 — this store previously had no reset() at all, a silent
+  // cross-user-bleed source: a signed-out user's in-flight upload tasks
+  // (with local URIs pointing at THEIR device photos) would otherwise
+  // survive into the next signed-in user's session on the same device.
+  reset: () => set({ tasks: {} }),
 }));
+
+// SS-071 AC #6 — self-registers with the sign-out reset registry. See
+// features/auth/userStateReset.ts.
+registerUserStateReset(() => useWardrobeUploadStore.getState().reset());
 
 // --- SS-013: useWardrobeBatchStore ---
 // Kept separate from useWardrobeUploadStore above (per the design doc's
@@ -217,6 +229,9 @@ export const useWardrobeBatchStore = create<WardrobeBatchState>((set) => ({
   reset: () => set({ items: [], currentIndex: 0 }),
 }));
 
+// SS-071 AC #6 — self-registers with the sign-out reset registry.
+registerUserStateReset(() => useWardrobeBatchStore.getState().reset());
+
 // --- SS-014: useWardrobeFilterStore ---
 // Kept separate from useWardrobeUploadStore/useWardrobeBatchStore above (per
 // the design doc's "Files to create/modify" note): this store's state
@@ -254,6 +269,12 @@ export const useWardrobeFilterStore = create<WardrobeFilterStoreState>(
     reset: () => set({ ...DEFAULT_FILTER_STATE }),
   }),
 );
+
+// SS-071 AC #6 — self-registers with the sign-out reset registry. Filters
+// are weakly user-scoped (design doc's store table), but a stale search
+// term/sort left over from a previous user is still worth clearing rather
+// than assuming it is harmless.
+registerUserStateReset(() => useWardrobeFilterStore.getState().reset());
 
 // Derived "stale" check (Edge Cases: app backgrounded/closed mid-upload) --
 // exposed as a standalone helper rather than store state since it depends on

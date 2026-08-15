@@ -1,86 +1,38 @@
-import { useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
-import { View } from 'react-native';
-import {
-  type AppBottomSheetRef,
-  Button,
-  Card,
-  Input,
-  Text,
-} from '../../components/ui';
-import { useSendOtpMutation } from '../../features/auth/auth.queries';
-import { validateIndianMobile } from '../../features/auth/auth.service';
-import { CountryCodePicker } from '../../features/auth/components/CountryCodePicker';
+import { Card, Text } from '../../components/ui';
+import { AUTH_METHODS } from '../../features/auth/auth.methods';
+import { AuthMethodChooser } from '../../features/auth/components/AuthMethodChooser';
 
-function sanitizePhoneInput(text: string): string {
-  // `Input`'s phone variant enforces maxLength={10} at the RN TextInput
-  // level but does not filter non-digit characters itself (confirmed by
-  // reading components/ui/Input.tsx) — still admits non-digits on
-  // web/paste, so this screen sanitizes before validating.
-  return text.replace(/\D/g, '').slice(0, 10);
-}
-
+// SS-071: reduced to a registry host. No phone-specific code, no session
+// code — session-awareness lives in app/(auth)/_layout.tsx (see
+// useAuthRouting.ts's own comment for why: login.test.tsx renders this
+// screen bare, with no QueryClientProvider, and AC #1 requires that suite
+// to pass unmodified).
+//
+// With exactly one registered method (today), this renders that method's
+// Component directly — no wrapper, no chooser chrome, no "more options"
+// affordance — so the render tree is byte-identical to the pre-SS-071
+// phone-only screen. Registering a second method is what makes
+// AuthMethodChooser appear.
 export default function LoginScreen() {
-  const router = useRouter();
-  const countryPickerRef = useRef<AppBottomSheetRef>(null);
-  const [phone, setPhone] = useState('');
-  const [error, setError] = useState<string | undefined>(undefined);
-  const sendOtpMutation = useSendOtpMutation();
+  if (AUTH_METHODS.length === 0) {
+    // Cheap guard against a misconfigured empty registry (design doc edge
+    // case #12) — should never happen, but AUTH_METHODS[0] below would
+    // otherwise crash.
+    return (
+      <Card
+        testID="login-screen"
+        variant="flat"
+        className="m-md flex-1 items-center justify-center"
+      >
+        <Text variant="body">No sign-in method is available right now.</Text>
+      </Card>
+    );
+  }
 
-  const handleChangePhone = (text: string) => {
-    setPhone(sanitizePhoneInput(text));
-    if (error) {
-      setError(undefined);
-    }
-  };
+  if (AUTH_METHODS.length === 1) {
+    const OnlyMethod = AUTH_METHODS[0].Component;
+    return <OnlyMethod />;
+  }
 
-  const handleSendOtp = () => {
-    const validation = validateIndianMobile(phone);
-    if (!validation.valid) {
-      setError(validation.message);
-      return;
-    }
-    setError(undefined);
-    sendOtpMutation.mutate(phone, {
-      onSuccess: () => {
-        router.push({ pathname: '/verify-otp', params: { phone } });
-      },
-      onError: (authError) => {
-        setError(
-          authError.message ?? 'Something went wrong. Please try again.',
-        );
-      },
-    });
-  };
-
-  return (
-    <Card
-      testID="login-screen"
-      variant="flat"
-      className="m-md flex-1 justify-center"
-    >
-      <Text variant="heading" className="mb-md">
-        Enter your mobile number
-      </Text>
-      <Input
-        variant="phone"
-        value={phone}
-        onChangeText={handleChangePhone}
-        error={error}
-        onCountryCodePress={() => countryPickerRef.current?.present()}
-        autoFocus
-      />
-      <View className="mt-md">
-        <Button
-          onPress={handleSendOtp}
-          loading={sendOtpMutation.isPending}
-          fullWidth
-          accessibilityLabel="Send OTP"
-        >
-          Send OTP
-        </Button>
-      </View>
-      <CountryCodePicker ref={countryPickerRef} />
-    </Card>
-  );
+  return <AuthMethodChooser methods={AUTH_METHODS} />;
 }

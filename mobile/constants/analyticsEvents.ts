@@ -38,6 +38,11 @@ export const ANALYTICS_EVENTS = {
   // metric for a different object (an accepted outfit, not the style
   // score).
   STYLE_SCORE_SHARED: 'style_score_shared',
+  // SS-071 — first sign-out call site (features/auth/auth.queries.ts's
+  // useSignOutMutation, fired from app/(tabs)/profile.tsx's confirm step).
+  // Partially closes BL-049's "events with no call site" gap by shipping
+  // one that lands WITH its call site in the same ticket.
+  SIGN_OUT: 'sign_out',
 } as const;
 
 export type AnalyticsEventName =
@@ -63,4 +68,7 @@ export interface AnalyticsEventProperties {
   tryon_generated: { outfit_id?: string };
   category_filtered: { category: string };
   style_score_shared: { channel?: string };
+  // AuthMethodId (features/auth/auth.methods.ts) — never a phone/email, per
+  // this file's own no-PII discipline (see the comment block above).
+  sign_out: { method: 'phone_otp' };
 }

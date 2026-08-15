@@ -1,6 +1,5 @@
 import { cleanup, render } from '@testing-library/react-native';
 import TabsLayout from '../../../app/(tabs)/_layout';
-import { useAuthStore } from '../../../features/auth/auth.store';
 
 // SS-005 (Home Screen Shell + Bottom Tab Navigation): extends the existing
 // expo-router mock to also stub Tabs/Tabs.Screen (previously only mocked
@@ -21,6 +20,17 @@ jest.mock('expo-router', () => {
       react.createElement(reactNative.Text, { testID: 'redirect' }, href),
   };
 });
+
+// SS-071: this layout's guard now reads the shared useAuthRouting() decision
+// instead of the auth store's session/isSessionLoading fields directly —
+// mocked here rather than driving it indirectly through useAuthStore, which
+// would also require mocking useOnboardingCompletedQuery's React Query
+// plumbing for no benefit (see docs/tickets/SS-071-design.md's Files
+// table for this file).
+const mockUseAuthRouting = jest.fn();
+jest.mock('../../../features/auth/useAuthRouting', () => ({
+  useAuthRouting: () => mockUseAuthRouting(),
+}));
 
 // `useCustomTabBar()` (see CustomTabBar.tsx) constructs real
 // `<TabList>`/`<TabTrigger>` elements as part of its own hook body, even
@@ -77,32 +87,40 @@ jest.mock('react-native-safe-area-context', () => ({
 
 describe('TabsLayout (Auth Guard)', () => {
   afterEach(async () => {
-    // Unmount before resetting store state — otherwise the still-mounted
+    // Unmount before resetting mocks — otherwise the still-mounted
     // previous render's subscription triggers a state update outside act().
     await cleanup();
-    useAuthStore.setState({ session: null, isSessionLoading: true });
+    jest.clearAllMocks();
   });
 
-  it('renders the loading Card/Text and not <Redirect> while isSessionLoading is true (first-render race guard)', async () => {
-    useAuthStore.setState({ isSessionLoading: true, session: null });
+  it('renders the loading Card/Text and not <Redirect> while routing.status is "loading" (first-render race guard)', async () => {
+    mockUseAuthRouting.mockReturnValue({ status: 'loading' });
     const { getByText, queryByTestId } = await render(<TabsLayout />);
 
     expect(getByText('Loading…')).toBeOnTheScreen();
     expect(queryByTestId('redirect')).toBeNull();
   });
 
-  it('renders <Redirect href="/login" /> when isSessionLoading is false and session is null', async () => {
-    useAuthStore.setState({ isSessionLoading: false, session: null });
+  it('renders <Redirect href="/login" /> when routing.status is "unauthenticated"', async () => {
+    mockUseAuthRouting.mockReturnValue({ status: 'unauthenticated' });
     const { getByTestId } = await render(<TabsLayout />);
 
     expect(getByTestId('redirect')).toHaveTextContent('/login');
   });
 
-  it('renders the guarded child content (<Tabs>) when a valid session exists', async () => {
-    useAuthStore.setState({
-      isSessionLoading: false,
-      session: { user: { id: 'user-1' } } as never,
-    });
+  // SS-071 AC #4 — the cold-open case: a valid session with
+  // onboarding_completed: false, never having passed through an auth
+  // screen, is routed to /onboarding rather than dropped into the tabs.
+  it('renders <Redirect href="/onboarding" /> when routing.status is "onboarding"', async () => {
+    mockUseAuthRouting.mockReturnValue({ status: 'onboarding' });
+    const { getByTestId, queryByTestId } = await render(<TabsLayout />);
+
+    expect(getByTestId('redirect')).toHaveTextContent('/onboarding');
+    expect(queryByTestId('tabs')).toBeNull();
+  });
+
+  it('renders the guarded child content (<Tabs>) when routing.status is "app"', async () => {
+    mockUseAuthRouting.mockReturnValue({ status: 'app' });
     const { getByTestId, queryByTestId } = await render(<TabsLayout />);
 
     expect(getByTestId('tabs')).toBeOnTheScreen();

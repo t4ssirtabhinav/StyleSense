@@ -15,11 +15,6 @@ jest.mock('expo-router', () => ({
 
 const mockSendOtpMutate = jest.fn();
 const mockVerifyOtpMutate = jest.fn();
-const mockUseOnboardingCompletedQuery = jest.fn((userId: string | undefined) =>
-  userId
-    ? { isSuccess: true, data: false }
-    : { isSuccess: false, data: undefined },
-);
 
 jest.mock('../../../features/auth/auth.queries', () => ({
   useSendOtpMutation: () => ({ mutate: mockSendOtpMutate, isPending: false }),
@@ -27,8 +22,6 @@ jest.mock('../../../features/auth/auth.queries', () => ({
     mutate: mockVerifyOtpMutate,
     isPending: false,
   }),
-  useOnboardingCompletedQuery: (userId: string | undefined) =>
-    mockUseOnboardingCompletedQuery(userId),
 }));
 
 // SS-009: track() is asserted on directly for the REGISTER-event tests below.
@@ -40,11 +33,6 @@ jest.mock('../../../hooks/useAnalytics', () => ({
 describe('VerifyOtpScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
-      userId
-        ? { isSuccess: true, data: false }
-        : { isSuccess: false, data: undefined },
-    );
   });
 
   afterEach(async () => {
@@ -91,48 +79,40 @@ describe('VerifyOtpScreen', () => {
     ).toBeOnTheScreen();
   });
 
-  it('calls router.replace("/onboarding") when the profile-exists query resolves false', async () => {
+  // SS-071: the /onboarding-vs-/ decision moved to
+  // app/(auth)/_layout.tsx's forward guard (see
+  // __tests__/app/(auth)/_layout.test.tsx tests #10-#15, which cover both
+  // the cold-open case these two deleted tests never did and the
+  // /login-with-session case). This screen no longer performs that
+  // decision or any navigation of its own — the assertion below is the
+  // replacement: it locks in that the routing logic really did move, so
+  // the two mechanisms (a per-screen useEffect and the layout guard)
+  // cannot both ship at once.
+  it('performs no navigation itself after a successful verify — router.replace is never called', async () => {
     mockVerifyOtpMutate.mockImplementation(
       (
         _vars: unknown,
         { onSuccess }: { onSuccess: (session: unknown) => void },
       ) => {
-        onSuccess({ user: { id: 'user-1' } });
+        onSuccess({
+          user: {
+            id: 'user-1',
+            created_at: '2026-07-24T00:00:00.000Z',
+            last_sign_in_at: '2026-07-24T00:00:00.000Z',
+          },
+        });
       },
-    );
-    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
-      userId
-        ? { isSuccess: true, data: false }
-        : { isSuccess: false, data: undefined },
     );
     const { getByTestId } = await render(<VerifyOtpScreen />);
 
     await fireEvent.changeText(getByTestId('otp-hidden-input'), '123456');
 
     await waitFor(() =>
-      expect(mockReplace).toHaveBeenCalledWith('/onboarding'),
+      expect(mockTrack).toHaveBeenCalledWith('register', {
+        method: 'phone_otp',
+      }),
     );
-  });
-
-  it('calls router.replace("/") when the profile-exists query resolves true', async () => {
-    mockVerifyOtpMutate.mockImplementation(
-      (
-        _vars: unknown,
-        { onSuccess }: { onSuccess: (session: unknown) => void },
-      ) => {
-        onSuccess({ user: { id: 'user-1' } });
-      },
-    );
-    mockUseOnboardingCompletedQuery.mockImplementation((userId) =>
-      userId
-        ? { isSuccess: true, data: true }
-        : { isSuccess: false, data: undefined },
-    );
-    const { getByTestId } = await render(<VerifyOtpScreen />);
-
-    await fireEvent.changeText(getByTestId('otp-hidden-input'), '123456');
-
-    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 
   it('Resend is disabled at mount showing 30s, becomes enabled after the countdown, and resets on press', async () => {

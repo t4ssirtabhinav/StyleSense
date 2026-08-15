@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerUserStateReset } from '../auth/userStateReset';
 import type {
   BudgetRangeKey,
   GenderKey,
@@ -140,3 +141,8 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   reset: () => set({ ...INITIAL_STATE }),
 }));
+
+// SS-071 AC #6 — self-registers with the sign-out reset registry so a
+// wizard in progress for one user cannot survive into the next user's
+// session on the same device. See features/auth/userStateReset.ts.
+registerUserStateReset(() => useOnboardingStore.getState().reset());

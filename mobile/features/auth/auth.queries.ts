@@ -1,12 +1,15 @@
 import type { Session } from '@supabase/supabase-js';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   checkOnboardingCompleted,
   fetchUserPlanTier,
   sendOtp,
+  signOut,
   verifyOtp,
 } from './auth.service';
+import { useAuthStore } from './auth.store';
 import type { AuthError } from './auth.types';
+import { resetAllUserState } from './userStateReset';
 
 // The only place these React Query hooks are called from is components (per
 // CLAUDE.md's anti-pattern rule extended to this domain: no direct Supabase
@@ -56,5 +59,45 @@ export function usePlanTierQuery(userId: string | undefined) {
     queryKey: planTierQueryKey(userId),
     queryFn: () => fetchUserPlanTier(userId as string),
     enabled: Boolean(userId),
+  });
+}
+
+// SS-071 — AC #5/#6/#7. Ordering is load-bearing (design doc's "Sign-out"
+// section):
+//   1. cancelQueries() — settle in-flight fetches before the session dies
+//      (edge case: a mutation/query in flight during sign-out).
+//   2. signOut() — never rejects (see auth.service.ts's own comment on the
+//      verified SDK failure-path finding).
+//   3+4 (in `finally`, so they run even if step 2 unexpectedly throws):
+//      defensively null the in-memory session, resetAllUserState(), then
+//      queryClient.clear() — clear must be AFTER cancel and AFTER the
+//      service call, so a late-resolving query can't repopulate the cache
+//      post-clear. This is what makes AC #7 hold by construction: a failed
+//      network signOut still clears local state and still reaches login.
+//
+// useAuthStore's session is NOT in the userStateReset registry (that
+// registry is for user-DATA stores only) — it's normally cleared by
+// supabase.auth.signOut() -> SIGNED_OUT -> hooks/useAuth.ts's existing
+// onAuthStateChange listener. The explicit setSession(null) here is
+// defensive, not redundant: verified against the installed
+// @supabase/auth-js@2.108.2 (see auth.service.ts), a signOut() failure on
+// the "real" (non-ignorable) error branch skips the SDK's own
+// _removeSession() call and therefore never fires SIGNED_OUT — without
+// this line, that specific branch would leave the user looking
+// signed-in in the UI even though the mutation is telling profile.tsx to
+// navigate to /login.
+export function useSignOutMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      await queryClient.cancelQueries();
+      try {
+        await signOut();
+      } finally {
+        useAuthStore.getState().setSession(null);
+        resetAllUserState();
+        queryClient.clear();
+      }
+    },
   });
 }

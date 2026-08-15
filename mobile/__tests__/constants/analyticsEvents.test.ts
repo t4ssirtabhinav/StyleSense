@@ -1,10 +1,16 @@
 import { ANALYTICS_EVENTS } from '../../constants/analyticsEvents';
 
 describe('ANALYTICS_EVENTS', () => {
-  // SS-021 adds a 14th entry, STYLE_SCORE_SHARED, additive over the 13 the
-  // SS-009 comment above ANALYTICS_EVENTS originally enumerated.
-  it('has exactly 14 entries', () => {
-    expect(Object.keys(ANALYTICS_EVENTS)).toHaveLength(14);
+  // SS-021 added a 14th entry, STYLE_SCORE_SHARED, additive over the 13 the
+  // SS-009 comment above ANALYTICS_EVENTS originally enumerated. SS-071
+  // adds a 15th, SIGN_OUT — additive again, per AC #9/#11's "extend, never
+  // weaken" discipline.
+  it('has exactly 15 entries', () => {
+    expect(Object.keys(ANALYTICS_EVENTS)).toHaveLength(15);
+  });
+
+  it('includes sign_out', () => {
+    expect(Object.values(ANALYTICS_EVENTS)).toContain('sign_out');
   });
 
   it('every value is a unique, non-empty snake_case string', () => {
