@@ -56,7 +56,10 @@ export type AnalyticsEventName =
 export interface AnalyticsEventProperties {
   app_opened: Record<string, never>;
   install: Record<string, never>;
-  register: { method: 'phone_otp' };
+  // SS-072 — widened to the two AuthMethodId values that can register today
+  // (features/auth/auth.methods.ts). sign_out is deliberately NOT widened
+  // here (BL-182, out of scope — profile.tsx hardcodes 'phone_otp' there).
+  register: { method: 'phone_otp' | 'email_password' };
   first_item_added: { category?: string };
   first_suggestion_viewed: Record<string, never>;
   first_outfit_saved: Record<string, never>;

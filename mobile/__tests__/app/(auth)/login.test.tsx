@@ -23,6 +23,21 @@ jest.mock('../../../features/auth/auth.queries', () => ({
   }),
 }));
 
+// SS-072 — this file resolves the REAL features/auth/auth.methods registry
+// (by design, per SS-071's AC #1 — see that file's own comment), which now
+// registers EmailAuthForm as its second entry. EmailAuthForm transitively
+// imports hooks/useAnalytics -> lib/analytics -> posthog-react-native /
+// @sentry/react-native, an ESM dependency Jest can't parse without a
+// transform, which this file has never needed until now. Confirmed live
+// (docs/worklog/SS-072.md): without this mock, the whole suite fails to
+// load with "SyntaxError: Unexpected token 'export'" before a single test
+// runs. This is the ONLY sanctioned change to this file — no assertion
+// below is touched, matching __tests__/app/(auth)/verify-otp.test.tsx's own
+// existing mock of the same module.
+jest.mock('../../../hooks/useAnalytics', () => ({
+  useAnalytics: () => ({ track: jest.fn() }),
+}));
+
 // Same mocking approach as components/ui/__tests__/BottomSheet.test.tsx —
 // login.tsx renders CountryCodePicker (which wraps AppBottomSheet), and this
 // screen's own tests don't exercise the country picker's UI, so it's fully

@@ -2,11 +2,317 @@
 
 Ticket: `docs/tickets/raw/SS-072.md` · Branch: `feature/SS-072-email-password-auth` · Tier: standard (Est 8h) · Depends on: SS-071 (merged)
 
+---
+
+# REVISION 2 — 2026-08-17 (Confirm-email is ON and stays ON)
+
+> **How to read this document.** Everything from "Original design (2026-08-16)" onward is preserved verbatim as the record of the first pass's reasoning — it is not deleted, and most of it still stands. **Where this revision block conflicts with anything below it, this block wins.** The four places in the original that are now factually wrong carry an inline `> SUPERSEDED` callout pointing back here.
+
+## Why this revision exists
+
+The original design (and the `/new-feature` intake before it) was built on `BL-174`'s 2026-08-14 decision that **Confirm-email would be OFF**. That decision was recorded as if it were a fact about the live project; it was never actually applied. On 2026-08-16 the Developer read the live project and found `mailer_autoconfirm: false` — i.e. **confirmation ON** — and the Orchestrator re-confirmed it on 2026-08-17 against `/auth/v1/settings`.
+
+**User decision, 2026-08-17: keep confirmation ON.** This revision makes the code match that reality. It does not argue for flipping it, and nothing here is contingent on it being flipped.
+
+The consequence is not cosmetic. `supabase.auth.signUp()` now returns `session: null` on a **successful** signup. The shipped code treats that as an error (`email_confirmation_required`, with copy that says confirmation "isn't set up yet") — which is now wrong on both counts: it is not an error, and confirmation *is* set up. **The `session === null` branch is the primary path for 100% of signups, not a defensive fallback.**
+
+## What is NOT changing (re-confirmed, do not touch)
+
+- **Migration `021`** — applied live 2026-08-17, AC #5 proven live post-migration (phone-only signup unaffected). Leave the file and the deployed function alone. Its reachable trigger path is *still* the orphan-`public.users`-row case (`BL-184`), as the Developer's live work already established — GoTrue rejects or obfuscates a plain duplicate before the trigger ever runs.
+- **The three-layer duplicate-email defence** (client mapping → `021`'s `lower(email)` pre-check → `001`'s `email UNIQUE`). Unchanged in structure; only which layer is *reachable* shifts (see §Duplicate signup below).
+- **Deviation 1 — no new route.** Email/password still renders as `AUTH_METHODS[1].Component` under `/login`, inside SS-071's existing `GUARDED_ROUTES`. The "check your email" state is a **state of that component**, not a route. This is what keeps AC #6's routing holding by construction.
+- **Deviation 2 — the reshaped `AuthMethodChooser`** (primary form inline, secondaries as buttons). Untouched.
+- **Deviation 3 — `Input.tsx`'s `email`/`password` variants.** Untouched.
+- **The general shape of `auth.service.ts`** — `normalizeEmail` / `validateEmail` / `validatePassword` / `toEmailAuthError` / `signInWithEmail` keep their signatures and their bodies. Exactly one function's **return contract** changes: `signUpWithEmail`.
+
+## Ground-check — 2026-08-17
+
+Read out of the current working tree and `mobile/node_modules/@supabase/auth-js@2.108.2` today. **This pass has no Bash, no Supabase MCP and no WebSearch** — so every claim below is either verified against files in this repo, or explicitly labelled as unverified. Nothing load-bearing is asserted from memory without a label.
+
+### Verified in this repo
+
+| Claim | Where |
+|---|---|
+| `signUp()` sends `options.emailRedirectTo` to GoTrue as the request's `redirectTo` — so the app *can* control the confirmation link's landing URL from code | `GoTrueClient.js:696-708` |
+| `signUp()` does **no** client-side detection of an obfuscated duplicate response — it returns whatever the server sends, and only saves/broadcasts a session when `data.session` is truthy | `GoTrueClient.js:727-738` |
+| Obfuscation rule, from the SDK's own doc comment: an obfuscated/fake user is returned **only when both Confirm email and Confirm phone are enabled** (phone provider need not be in use); if **either** is disabled, the real `User already registered` error is returned. Applies to an existing **confirmed** user | `GoTrueClient.d.ts:284-286` |
+| `resend({ type: 'signup', email, options?: { emailRedirectTo, captchaToken } })` exists and is public | `GoTrueClient.d.ts:1360`, `types.d.ts:694-702` |
+| `verifyOtp()` accepts a **`{ token_hash, type }`** form (`VerifyTokenHashParams`) as well as `{ email, token, type }`; `EmailOtpType` includes `'email'` and `'signup'` (the latter marked deprecated in the doc comment — **use `'email'`**) | `types.d.ts:686-693`, `GoTrueClient.d.ts:1096-1102, 1218-1220` |
+| `exchangeCodeForSession(authCode)` is public but is documented as "used when `flowType` is set to `pkce`" | `GoTrueClient.d.ts:658-663, 827` |
+| **This project runs the `implicit` flow** — `GoTrueClient`'s default is `flowType: 'implicit'` and `mobile/lib/supabase.ts:33-40` does not override it | `GoTrueClient.js:21`; `lib/supabase.ts` |
+| **`detectSessionInUrl: false`** — the client will not parse a callback URL on any platform | `lib/supabase.ts:38` (`BL-170`) |
+| The SDK's URL-callback consumer is **private** (`_getSessionFromURL`), throws `'No browser detected.'` outside a browser, and expects either `access_token`+`refresh_token`+`expires_in`+`token_type` (implicit, URL **fragment**) or `code` (PKCE, query param) | `GoTrueClient.js:3164-3211, 3262-3267` |
+| `setSession({ access_token, refresh_token })` is public — the supported way to adopt implicit-flow tokens without `detectSessionInUrl` | `GoTrueClient.d.ts` (`setSession`) |
+| Native deep-link scheme `stylesense` is configured; `expo-linking@~56.0.14` and `expo-web-browser@^56.0.5` are already dependencies; web builds are `output: "static"` | `mobile/app.json:7,22-26`; `mobile/package.json:30,36` |
+| `hooks/useAuth.ts` adopts a session purely from `getSession()` + `onAuthStateChange` and never inspects the provider — so **any** mechanism that writes a session (including `verifyOtp`/`setSession`) routes identically | `hooks/useAuth.ts:42-87` |
+| `app/(auth)/_layout.tsx`'s `GUARDED_ROUTES` is still exactly `{/login, /(auth)/login, /verify-otp, /(auth)/verify-otp}` | `_layout.tsx:28-33` |
+
+### Explicitly NOT verified this pass
+
+Labelled per `docs/OPERATOR_RULEBOOK.md` §E. **None of these is load-bearing for what this revision asks the Developer to build** — they matter only to the split-out follow-up (§Confirmation-link handling), and each is listed there as a live check.
+
+- `[TRAINED KNOWLEDGE — NOT VERIFIED, no web access this pass]` GoTrue's default confirmation link points at `{SUPABASE_URL}/auth/v1/verify?token=…&type=signup&redirect_to=…`, which **confirms the account server-side** and then 302s to the redirect target carrying implicit tokens in the URL fragment.
+- `[TRAINED KNOWLEDGE — NOT VERIFIED]` Supabase's built-in SMTP is rate-limited to a small number of emails per hour (commonly cited as 2/hour) with a minimum interval between sends, and is documented by Supabase as unsuitable for production.
+- `[TRAINED KNOWLEDGE — NOT VERIFIED]` An obfuscated duplicate-signup response is distinguishable client-side by `user.identities` being an empty array. **The design deliberately does not depend on this heuristic** — see §Duplicate signup.
+- `[UNKNOWN — not readable from this repo]` Whether **Confirm phone** (`sms_autoconfirm`) is enabled on the live project. `/auth/v1/settings` does not expose it (the Orchestrator confirmed this on 2026-08-17). This single unknown is what decides whether AC #3's specific copy is reachable on a plain duplicate signup.
+
+## The revised flow — and the insight that keeps it small
+
+The temptation on discovering "confirmation is ON" is to conclude the app must now consume a confirmation redirect, which means a landing route, a redirect-URL allow-list, deep links, and a `lib/supabase.ts` change. That would roughly double this ticket.
+
+**It doesn't.** Confirming an account is done **by GoTrue, server-side, the moment the emailed link is opened in any browser.** The redirect that follows is a convenience that auto-signs-in the clicker; it is not what performs the confirmation. So a complete, honest, shippable flow exists with **zero new routes, zero deep-link config, and no change to `lib/supabase.ts`**:
+
+1. User submits **Create account** → `signUp` succeeds and returns `{ user, session: null }`.
+2. The form swaps to a **"Check your email"** state naming the exact address, with three actions: **Resend email**, **Wrong email? Start over**, **Sign in instead**.
+3. User opens the link on any device → GoTrue confirms the account → their browser lands on whatever `SITE_URL` is (a page StyleSense does not own yet — the copy tells them to expect that and close it).
+4. User returns to the app and **signs in** with the same email + password → live session → SS-071's guard routes them to `/onboarding`.
+5. If they try to sign in **before** confirming, GoTrue returns `email_not_confirmed` → the same "Check your email" state, with Resend.
+
+Step 4 is one extra user action versus the auto-sign-in flow. That is the entire cost of deferring confirmation-link handling, and it buys the ticket out of new external-facing redirect surface. The polished version (click link → land in the app already signed in) is genuinely separate work — see §Confirmation-link handling.
+
+> **The copy must set the expectation for step 3 explicitly.** "You'll see a confirmation page in your browser — you can close it and come back here to sign in." Without that line the user hits an unowned page and assumes it failed.
+
+## Revised Acceptance Criteria
+
+These **supersede** `docs/tickets/raw/SS-072.md`'s AC #2 and AC #3 and add AC #12–#14. Every other AC in the raw ticket stands unchanged. The raw ticket's own Technical Notes pre-authorized this reconciliation ("if that is what the live project actually does, AC #3's copy must be reconciled with observed behaviour rather than assumed"); the raw ticket file itself is left for a human to amend or not — **this design doc is the authoritative AC set for the Developer's follow-up pass.**
+
+**AC #2 (revised) — sign-up succeeds and lands in an explicit "check your email" state.** A new email plus a valid password creates an account. Because Confirm-email is ON, `signUp` returns no session; the form must render a first-class **Check your email** state naming the exact address it was sent to, explaining that the account is not usable until the link is opened, and telling the user to come back and sign in afterwards. It must never render a blank screen, an infinite spinner, or an error-shaped message — signup succeeding is not a failure. No navigation is performed (the user is still unauthenticated; SS-071's guard has nothing to do).
+
+**AC #3 (revised) — duplicate email is never dead-ended, and the raw error never surfaces.** Split into a hard part and a conditional part, because with Confirm-email ON, GoTrue may deliberately obfuscate the duplicate response as an anti-enumeration measure:
+
+- **Unconditional (hard):** the raw string `Database error saving new user` / `Database error creating new user`, a bare `500`, and any unhandled error shape must never reach the user — on any path, in either mode. And on **every** screen state reachable from a duplicate signup attempt, a visible control switches to **Sign in** with the email prefilled, so a duplicate can never dead-end.
+- **Conditional:** wherever Supabase returns an *identifiable* duplicate (`user_already_exists` / `email_exists`, or migration `021`'s `stylesense_email_conflict` / generic-trigger-500 path), the specific copy **"This email is already registered — sign in instead."** is shown. Where GoTrue instead returns an obfuscated success (`session: null`, no error, indistinguishable from a real signup), the **Check your email** state stands in — which is the correct and intended outcome for an existing *unconfirmed* account, and an acceptable one for an existing confirmed account precisely because the "Sign in instead" control is present in that state. The Developer must **observe live which of these the project actually does** and record it (see §Live verification).
+
+**AC #12 (new) — resend.** The Check-your-email state offers **Resend email**, backed by `supabase.auth.resend({ type: 'signup', email })`. It carries a client-side cooldown (60s) so the button cannot be hammered into the server's rate limit, and a server rate-limit rejection maps to SS-003's existing `rate_limited` copy — no new string. Success shows a confirmation line; it never silently does nothing.
+
+**AC #13 (new) — a mistyped address is recoverable in-app.** The Check-your-email state offers **Wrong email? Start over**, returning to the signup form with the email field cleared and focused. Scope of the guarantee, stated honestly: this lets the user sign up again with their *correct* address. It does **not** release the mistyped address, which stays claimed by an unconfirmed `auth.users` row and its auto-provisioned `public.users` row — that requires operator cleanup (SS-070's script plus a direct `public.users` delete, per `BL-184`). The UI must not imply otherwise.
+
+**AC #14 (new) — signing in before confirming is handled, not treated as a bad password.** A sign-in against an existing-but-unconfirmed account (`code: 'email_not_confirmed'`) routes into the same Check-your-email state with Resend available, **not** into the generic "Incorrect email or password." AC #7's no-enumeration rule is deliberately relaxed for exactly this one code and no other — the asymmetry is stated in §AC #7 below.
+
+**AC #7 (clarified, not revised).** Unchanged in substance: an unknown email and a wrong password still produce a byte-identical `{ code, message }`. The one exception is AC #14's `email_not_confirmed`, which reveals that the account exists. This was already accepted in the original design as a defensive-branch trade; with confirmation ON it is now a **common** path, so the trade is restated and re-accepted deliberately: telling a user who just signed up "Incorrect email or password" would strand them in a state they cannot diagnose or fix, and the account's existence is something they already know. The alternative — hiding it — trades a real, frequent usability failure for a marginal enumeration gain on an address the attacker already had to guess.
+
+## Files to create/modify — revision delta
+
+Only these. Everything else the original design listed is already shipped and correct.
+
+**Create**
+
+| Path | What |
+|---|---|
+| `mobile/features/auth/components/CheckYourEmailNotice.tsx` | The Check-your-email state as its own component: heading, the exact address, the "you'll see a page in your browser, close it and come back" line, and three controls — Resend (with cooldown), Wrong email? Start over, Sign in instead. Presentational + the resend mutation; **navigates nowhere**, same rule as `EmailAuthForm`. |
+| `mobile/__tests__/features/auth/components/CheckYourEmailNotice.test.tsx` | New suite (see Test plan). |
+
+**Modify**
+
+| Path | What |
+|---|---|
+| `mobile/features/auth/auth.types.ts` | Add the `EmailSignUpResult` union (below). `AuthErrorCode` is **unchanged** — `email_confirmation_required` stays a member, now used only for the sign-in-side `email_not_confirmed` mapping. |
+| `mobile/features/auth/auth.service.ts` | `signUpWithEmail` return contract changes to `EmailSignUpResult` (stop throwing on `session === null`). Add `resendConfirmationEmail(email)`. Update the two now-wrong copy constants. `signInWithEmail`, `toEmailAuthError`, the validators and every other function: unchanged. |
+| `mobile/features/auth/auth.queries.ts` | `useSignUpWithEmailMutation` retypes to `useMutation<EmailSignUpResult, AuthError, {email;password}>`. Add `useResendConfirmationEmailMutation`. |
+| `mobile/features/auth/components/EmailAuthForm.tsx` | Add `pendingConfirmationEmail` state; render `CheckYourEmailNotice` instead of the form when set. Two entrances into it (signup success with `status: 'confirmation_required'`; sign-in error `email_confirmation_required`). Analytics timing changes — see below. |
+| `mobile/__tests__/features/auth/emailAuth.service.test.ts` | Update the two tests that assert `signUpWithEmail` **throws** on a null session; add resend + new-copy tests. |
+| `mobile/__tests__/features/auth/components/EmailAuthForm.test.tsx` | Update the signup-success test (no longer expects a session/`register`-on-success-only-with-session); add the two entrances into the notice. |
+
+**Explicitly NOT touched, re-confirmed this pass:** `supabase/migrations/021_*.sql` · `mobile/lib/supabase.ts` (`detectSessionInUrl` and `flowType` both stay as they are — `BL-170`) · `mobile/app.json` (no new deep-link config in this pass) · `app/(auth)/_layout.tsx` (still no new route ⇒ no `GUARDED_ROUTES` change) · `AuthMethodChooser.tsx` · `components/ui/Input.tsx` · `auth.methods.ts` · `constants/analyticsEvents.ts` · all of `backend/`.
+
+## Concrete values to use, not invent
+
+### `EmailSignUpResult` — the contract change
+
+```ts
+// auth.types.ts
+export type EmailSignUpResult =
+  | { status: 'session'; session: Session }
+  | { status: 'confirmation_required'; email: string };
+```
+
+`signUpWithEmail` returns this instead of `Promise<Session>`. **A null session is a success, not a throw** — that single line is the whole behavioural reversal. The `status: 'session'` arm is kept (not deleted) so that if Confirm-email is ever turned off, the code already works with no edit; it is now the *unreachable-today* branch, the exact inverse of what shipped. `signInWithEmail` keeps returning `Promise<Session>` and keeps throwing on a null session — unchanged.
+
+The `email` carried in the `confirmation_required` arm is the **normalized** address (`normalizeEmail`'s output), because that is what GoTrue actually sent to and what `resend()` must be called with. Never display the raw typed string.
+
+### Copy strings — the two that are now factually wrong
+
+Replace, verbatim:
+
+| Constant | Was (now wrong) | Becomes |
+|---|---|---|
+| `EMAIL_CONFIRMATION_REQUIRED_MESSAGE` | `This account needs email confirmation, which isn't set up yet. Contact support to get in.` | **Delete.** It is no longer an error message; the state replaces it. Keep the `email_confirmation_required` *code* for the sign-in mapping, and give it a short internal message `Email not confirmed yet.` that is never rendered as a bare error — `EmailAuthForm` intercepts the code and renders the notice instead. |
+
+New copy constants (module-level in `auth.service.ts` or the notice component — one home, no duplication):
+
+- Heading: `Check your email`
+- Body: `We've sent a confirmation link to {email}. Open it to activate your account.`
+- Browser-expectation line: `The link opens a confirmation page in your browser — you can close it and come back here to sign in.`
+- Resend success: `Confirmation email sent again.`
+- Resend cooldown label: `Resend in {n}s`
+- Controls: `Resend email` · `Wrong email? Start over` · `Sign in instead`
+
+Unchanged and reused verbatim: `NETWORK_ERROR_MESSAGE`, `RATE_LIMITED_MESSAGE`, `UNKNOWN_ERROR_MESSAGE`, `EMAIL_ALREADY_REGISTERED_MESSAGE`, `INVALID_CREDENTIALS_MESSAGE`, `WEAK_PASSWORD_MESSAGE`, `INVALID_EMAIL_MESSAGE`.
+
+### `resendConfirmationEmail`
+
+```ts
+export async function resendConfirmationEmail(email: string): Promise<void> {
+  try {
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizeEmail(email),
+    });
+    if (error) throw error;
+  } catch (error) {
+    throw toEmailAuthError(error, 'signup');
+  }
+}
+```
+
+`type: 'signup'` is the correct member — `[VERIFIED 2026-08-17]` `ResendParams` restricts the email arm to `Extract<EmailOtpType, 'signup' | 'email_change'>` (`types.d.ts:694-702`). **No `emailRedirectTo` is passed**, deliberately: passing one that isn't in the project's Redirect-URL allow-list silently falls back to `SITE_URL`, which would add an untestable code path for zero benefit in this pass. It belongs with the split-out landing work.
+
+Reusing `toEmailAuthError(error, 'signup')` is intentional — it already maps `over_email_send_rate_limit` and `over_request_rate_limit` through `isRateLimited` to `RATE_LIMITED_MESSAGE` (`auth.service.ts:59-73`), which is exactly AC #12's requirement.
+
+### Resend cooldown
+
+**60 seconds**, client-side, one constant. `[TRAINED KNOWLEDGE — NOT VERIFIED this pass]` Supabase's built-in SMTP enforces both a per-hour cap and a minimum interval between sends; the design deliberately does not encode either number, because the cooldown's job is only to stop *accidental* hammering, and the server's real limit is handled by the `rate_limited` mapping regardless of what it turns out to be. The Developer records the live values from the dashboard's Auth → Rate Limits page (see §Live verification); if the real minimum interval is longer than 60s, raise the constant to match — never lower it.
+
+### Analytics (AC #9) — the timing question this revision forces
+
+`register` currently fires in `EmailAuthForm`'s `onSuccess` for signup. With confirmation ON, "success" now means *an unconfirmed account was created*, not *a user joined*. **Decision: keep firing `register` at signup, unchanged.** The event names the act of registering, `signUp` is still the registration call, and the alternative (firing it on first post-confirmation sign-in) is indistinguishable from a normal sign-in without new state to carry the intent across a session boundary — real scope for an analytics nicety. Stated here so it is a decision, not an oversight: **`register` counts will include accounts that never confirm.** Not worth a backlog row on its own at 4–5 beta users; noted in the worklog.
+
+## Duplicate signup — what actually happens now
+
+The original design's biggest closed unknown is re-opened by the reversal. The SDK's own rule `[VERIFIED 2026-08-17, GoTrueClient.d.ts:284-286]`: an obfuscated fake user is returned for an existing **confirmed** user **only when both Confirm-email and Confirm-phone are enabled**; if either is off, the real `User already registered` error comes back.
+
+Confirm-email is now **ON**. Confirm-phone is **unreadable from this repo** — `/auth/v1/settings` does not expose `sms_autoconfirm`. So there are two live possibilities and the design covers both without branching on an undocumented response shape:
+
+| Live state | `signUp` on a duplicate returns | What the user sees | AC #3 |
+|---|---|---|---|
+| Confirm-phone **off** | real error, `code: user_already_exists` / `email_exists` | `This email is already registered — sign in instead.` + the `Sign in instead` control | conditional part satisfied |
+| Confirm-phone **on** | obfuscated `{ user: <fake>, session: null, error: null }` | **Check your email** state, with `Sign in instead` visible | hard part satisfied; conditional part inapplicable by GoTrue's design |
+| Existing but **unconfirmed** account (either state) | `{ user, session: null, error: null }`, confirmation email re-sent | **Check your email** state — which is exactly right | correct outcome |
+
+**Deliberate non-decision: do not use the `user.identities.length === 0` heuristic to unmask an obfuscated response.** Three reasons: it is an undocumented shape heuristic and the original design's own rule was "branch on `error.code`, never on response shape"; it exists specifically to defeat an anti-enumeration measure the platform chose; and the resulting UX gain is nil, because the Check-your-email state already carries `Sign in instead`. This is why AC #3's "Sign in instead must be present in every duplicate-reachable state" is written as the *hard* half — it is what makes the obfuscated path safe without unmasking anything.
+
+The existing `toEmailAuthError` mapping table needs **no change**: every row still maps something real. Rows 1 and 2 (the `user_already_exists` and `021`-trigger paths) are now reachable in fewer situations, not zero — the `021` path in particular is still live via the orphan-row case (`BL-184`), which the Developer reproduced against the real project on 2026-08-17.
+
+## Confirmation-link handling — recommend splitting this out
+
+**Recommendation: do not build this in SS-072's follow-up pass. Ticket it as SS-073.** Flagging rather than silently absorbing it, per this pass's brief.
+
+**Why it is genuinely separate scope, not a paragraph:**
+
+1. **It is a new route** under `(auth)`, and the original design's Deviation 1 exists precisely because a new route in this group is a guard-interaction decision, not a file. This one is subtler than most: it must be reachable *while unauthenticated*, must establish a session, and must then hand off to `_layout.tsx`'s guard — which means deciding whether it belongs in `GUARDED_ROUTES` and testing both sides.
+2. **It needs out-of-repo configuration that nothing in this repo can verify**: a Supabase Auth **Redirect URLs** allow-list entry per origin, and a `SITE_URL` that points somewhere real. There is no hosted web origin (`BL-171`) — only `http://localhost:8081` and the native `stylesense://` scheme exist today.
+3. **Web and native diverge.** On web the implicit tokens arrive in the URL **fragment**, which expo-router's `useLocalSearchParams` does not read — it needs `window.location.hash`. On native they arrive through `expo-linking`. `[VERIFIED 2026-08-17]` the SDK's own consumer is private and refuses to run outside a browser (`GoTrueClient.js:3167-3168`), so neither platform gets this for free.
+4. **It cannot be verified without a real inbox**, and given §Outbound email below, delivery itself is the thing most likely to fail first.
+
+**The design SS-073 should start from** (so it isn't re-derived): prefer **`verifyOtp({ token_hash, type: 'email' })`** over both alternatives. It requires **no** change to `lib/supabase.ts` — `detectSessionInUrl` stays `false` (`BL-170` untouched) and `flowType` stays `implicit` — it works identically on web and native, and it works **cross-device** (the user can open the email on their phone after signing up on a laptop), which PKCE's `exchangeCodeForSession` cannot, because the code verifier lives in the originating browser's storage. Its cost is one Supabase **email-template** edit (`{{ .TokenHash }}` instead of `{{ .ConfirmationURL }}`). A landing screen that *also* falls back to `setSession({ access_token, refresh_token })` read from the URL fragment would additionally keep working under the default template on web — worth doing, and it is still a public API.
+
+**What SS-072 must ship instead:** the §Revised flow above, whose step 4 ("come back and sign in") is a complete substitute, at the cost of one extra user action. That is the correct trade for a 4–5 person beta.
+
+## Outbound email is now a hard dependency — flagging plainly
+
+This ticket's founding rationale, quoted from its own Source note, was: *"Email/password needs no vendor, no DLT, and no external provisioning, which is why Stage 1 recommended it over Google SSO."* **With confirmation ON, that is no longer true.** Every signup now depends on an email actually being delivered to a real inbox, through Supabase's built-in SMTP, which no one has replaced with a real provider — the very dependency `BL-173` cited as the reason password reset was deferred.
+
+Not re-litigating the decision (it is the user's, and it is made). Stating the operational consequence so it is not discovered by a beta user: **before any real person is asked to sign up, someone must confirm that a confirmation email actually arrives at a real mailbox** (Gmail, not a `.invalid` domain), and how many can be sent per hour. If it doesn't arrive, or the cap is 2/hour, the flow is unusable regardless of how good the client code is. This is a live check, not a code task, and it is the single highest-value thing to run first.
+
+## Edge cases — new or changed by this revision
+
+The original design's 16 cases all still apply except #3, which is inverted. New and changed:
+
+1. **(changed, was #3) Confirm-email ON is the normal case, not the defence.** `signUp` → `{ session: null }` → Check-your-email state. The old behaviour (throw an error saying confirmation "isn't set up yet") is now both a lie and a dead end.
+2. **(new) Signing in before confirming.** `email_not_confirmed` → Check-your-email state with Resend, not "Incorrect email or password" (AC #14).
+3. **(new) Mistyped email at signup.** User is stuck at Check-your-email with no email ever arriving. **Start over** returns them to the form. The typo'd address stays claimed by an unconfirmed `auth.users` row **and** its auto-provisioned `public.users` row — because `handle_new_auth_user` is `AFTER INSERT ON auth.users` and fires at signup, *before* confirmation. Neither is released by anything the app can do. Operator remedy only (`BL-184`); logged as `BL-189`.
+4. **(new) Unconfirmed accounts accumulate `public.users` rows.** Same mechanism as #3, but as a steady-state property: with confirmation ON, every abandoned signup leaves a profile row holding a `UNIQUE` email forever. This compounds `BL-184` and `BL-185` and is new information about them, not a restatement — before this reversal, a `public.users` row implied a usable account. `BL-189`.
+5. **(new) Resend hammering.** Client cooldown (60s) plus the server's own limit mapped to `rate_limited`. The button must be disabled during cooldown *and* during the mutation, and the cooldown timer must be cleared on unmount (no `setInterval` leak, no state update after unmount).
+6. **(new) Duplicate signup under obfuscation** lands the user in Check-your-email for an account that is already confirmed and whose password they don't know. `Sign in instead` is their exit, and it is why AC #3's hard half mandates that control. No email arrives in this case, which is confusing but not dead-ended.
+7. **(new) A second signup for an existing *unconfirmed* account** re-sends the confirmation email (GoTrue's behaviour) and returns the same session-less success — so it is indistinguishable from, and behaves identically to, pressing Resend. No special handling needed; do not try to detect it.
+8. **(new) The confirmation link lands on a page StyleSense does not own** (`SITE_URL`). Handled by copy, not code, in this pass. If `SITE_URL` is still a Supabase default pointing at something nonexistent, the user sees a browser error *after* their account was successfully confirmed — worth setting `SITE_URL` to something sane as an operator action (see §Live verification), but the account is confirmed either way.
+9. **(unchanged, restated) Rate-limited or offline resend** reuses SS-003's existing copy — no new strings.
+10. **(new) Mode switch while in Check-your-email.** The notice replaces the form entirely, so the mode switch is not on screen; the only exits are the three named controls. `Sign in instead` must land in `signin` mode with the email prefilled and the password empty.
+
+## Test plan — revision delta
+
+Jest + RNTL. Everything the original test plan listed still stands except the three items called out below.
+
+**`mobile/__tests__/features/auth/emailAuth.service.test.ts`** (update)
+- **R1. Replaces original item 16.** `signUp` resolving `{ data: { user, session: null }, error: null }` now **resolves** `{ status: 'confirmation_required', email }` — it must **not** throw. Assert the returned `email` is the *normalized* address even when the input had mixed case and surrounding whitespace.
+- R2. `signUp` resolving a real session still returns `{ status: 'session', session }` (the kept-but-currently-unreachable arm).
+- R3. `resendConfirmationEmail` calls `supabase.auth.resend` with exactly `{ type: 'signup', email: <normalized> }` and no `options`.
+- R4. A resend rejected with `code: 'over_email_send_rate_limit'` throws `{ code: 'rate_limited', message: RATE_LIMITED_MESSAGE }` — SS-003's existing constant, asserted by identity with the OTP path's message, not by a copied literal.
+- R5. Sign-in with `code: 'email_not_confirmed'` throws `{ code: 'email_confirmation_required' }` (mapping unchanged) — pins that AC #14's entrance still exists at the service layer.
+- R6. **AC #7 regression guard, unchanged and must still pass:** an unknown-email failure and a wrong-password failure still deep-equal each other.
+
+**`mobile/__tests__/features/auth/components/EmailAuthForm.test.tsx`** (update)
+- **R7. Replaces original item 23.** A successful signup renders the Check-your-email state (heading + the exact submitted address), does **not** render the form's password field, and still calls **neither** `router.push` nor `router.replace`.
+- R8. `register` still fires exactly once on that signup success, with `{ method: 'email_password' }`.
+- R9. A sign-in failing with `email_confirmation_required` renders the same Check-your-email state (AC #14) — and specifically **not** `Incorrect email or password.`
+- R10. Original item 24 amended: a *successful* sign-in fires no `register`, navigates nowhere, and does **not** render the notice.
+- R11. Original item 26 (`queryByText(/forgot|reset/i)` is null) must still pass **in all three states** — signin, signup, and the notice. `Resend` must not be worded in a way that trips this assertion.
+
+**`mobile/__tests__/features/auth/components/CheckYourEmailNotice.test.tsx`** (new)
+- R12. Renders the exact address passed to it, the heading, and the browser-expectation line.
+- R13. `Resend email` calls the resend mutation once; while pending and during the 60s cooldown the button is disabled; the cooldown label counts down. Use fake timers; assert no state update after unmount (timer cleared).
+- R14. A rate-limited resend renders SS-003's existing `rate_limited` copy, not a new string.
+- R15. `Wrong email? Start over` returns to the signup form with the email field **empty**.
+- R16. `Sign in instead` returns to the form in `signin` mode with the email **prefilled** and the password empty (AC #3's hard half).
+- R17. Loading / error states both render; there is no empty state (not a collection).
+
+**Unchanged gates (AC #11):** `tsc --noEmit`, `biome check` on this ticket's files, full jest suite green. No test deleted; R1/R7/R10 are *rewritten* assertions of changed behaviour, not weakened ones.
+
+## Live verification — what only a human/operator can close
+
+In priority order. Items 1 and 2 gate whether this flow is usable at all.
+
+1. **Does a confirmation email actually arrive at a real mailbox?** Sign up with a real address (not `.invalid`, not `example.com` — the Developer's 2026-08-17 run found the public `/signup` endpoint rejects those before password checks). Record: arrival, latency, sender, and the link's actual URL shape (which settles the `[TRAINED KNOWLEDGE]` items above for SS-073). **If this fails, nothing else matters.**
+2. **Read the live email rate limits** (dashboard → Auth → Rate Limits): emails per hour and the minimum interval between sends. Raise the 60s client cooldown if the real minimum is higher. Record both numbers.
+3. **Observe the duplicate-signup response under the current settings** — sign up twice with the same address (once confirmed, once unconfirmed) and record whether a real `user_already_exists` error or an obfuscated session-less success comes back. This is what determines which half of AC #3 is reachable, and it is the only way to read `sms_autoconfirm`.
+4. **Confirm the end-to-end path**: click the link, then return to the app and sign in — the §Revised flow's step 4. This is the actual AC #2/#6 proof.
+5. **Check `SITE_URL`** and set it to something that isn't a broken page (edge case 8). Operator action, not code.
+6. **`BL-183`'s HIBP half** is still open and still unclosed by this revision.
+
+## Open questions / blockers
+
+1. **Blocker for real users, not for the Developer:** outbound email delivery (§Outbound email). The Developer can write and test every line of this revision against mocks without it; **no beta user should be pointed at signup until live-verification item 1 passes.** `BL-188`.
+2. **Confirmation-link handling is recommended out of scope** (§Confirmation-link handling). If the user wants it in this ticket instead, say so — it roughly doubles the remaining pass, adds a route + guard decision + out-of-repo redirect config, and cannot be end-to-end verified without item 1 passing first anyway. `BL-187`.
+3. **AC #2 and AC #3 of the raw ticket are superseded by this document.** This pass does not edit `docs/tickets/raw/SS-072.md` (Ticket Design mode does not rewrite raw tickets). A human should decide whether to amend the raw file; QA must verify against **this** document's revised AC set, not the raw one, or it will fail a ticket that is behaving correctly.
+4. **`BL-174`'s original decision is now permanently reversed in effect.** It was reframed by the Orchestrator on 2026-08-17 and needs no further edit from this pass; `BL-190` carries the one sub-question it left open (the obfuscation re-check).
+5. **No conflict found between this revision and CLAUDE.md.** The notice is a `features/auth/components/` component using `components/ui/` primitives, loading/error states handled, no `StyleSheet.create`, no navigation from a component, no direct Supabase call outside the service layer.
+
+## Backlog delta (this revision)
+
+Rows added, starting at the reserved `BL-187`:
+
+| ID | Tag | Row |
+|---|---|---|
+| `BL-187` | `auth` | Confirmation-link landing / auto-sign-in not built — recommend a separate ticket. Preferred design (`verifyOtp({ token_hash, type: 'email' })`, no `lib/supabase.ts` change, cross-device-safe) recorded in SS-072's design §Confirmation-link handling. Active. |
+| `BL-188` | `infra` | No custom SMTP provider — with Confirm-email ON, every signup hard-depends on Supabase's built-in, rate-limited, non-production SMTP. Voids this ticket's "no external provisioning" premise; compounds `BL-173`. Active. |
+| `BL-189` | `schema` | With confirmation ON, an **unconfirmed** signup still auto-provisions a `public.users` row (trigger is `AFTER INSERT ON auth.users`), so an abandoned or mistyped signup claims a `UNIQUE` email/phone permanently. New, sharper instance of `BL-184`/`BL-185`. Active. |
+| `BL-190` | `auth` | Duplicate-signup obfuscation behaviour under Confirm-email ON is unverified live — `sms_autoconfirm` is not exposed by `/auth/v1/settings`, so which half of the revised AC #3 is reachable can only be observed empirically. Child of `BL-174`'s reopened question. Active. |
+
+Rows touched, not changed: `BL-174` (already reframed by the Orchestrator — this revision implements it; leave as is until the follow-up Developer pass lands), `BL-173` (compounded, not resolved — a user who mistypes their address now has no self-service path at all, which is the sharper form of the same gap), `BL-183` (HIBP half still open), `BL-184`/`BL-185` (both compounded by `BL-189`), `BL-170` (deliberately **not** touched by this revision — `detectSessionInUrl` stays `false`; it becomes live again only in `BL-187`'s work), `BL-169`/`BL-186` (already Resolved, unaffected).
+
+## Risk classification (revision)
+
+`Risk: high` — **confirmed, and with one reason added.** The original three one-way doors all stand (credential storage + enumeration surface; migration `021`'s `SECURITY DEFINER` trigger, now applied live; irreversible account creation). Added by this revision:
+
+4. **The signup flow now depends on an external delivery channel the project does not control or monitor.** An account created but never confirmed is a real, persistent artifact that claims a unique address (`BL-189`), and the only thing standing between a beta user and a permanently stuck signup is whether an email arrives from an unprovisioned SMTP service (`BL-188`).
+
+Full lane, every human gate preserved. Not lowered; there is nothing in this revision that reduces blast radius, and the surface it touches is the one `docs/OPERATOR_RULEBOOK.md` §C2 names first.
+
+**Verdict:** `Risk: high` (confirmed) — full lane.
+
+---
+
+# Original design (2026-08-16) — preserved
+
+> Everything below predates the 2026-08-17 reversal. It is kept intact as the record of the first pass's reasoning. Where it conflicts with the revision block above, **the revision block wins**; the four places where it is now factually wrong carry an inline `> SUPERSEDED` callout.
+
 ## Scope restatement
 
 Add email/password as the **second** entry in SS-071's auth-method registry, and harden the DB trigger that every signup path runs through. On the client: one self-contained form component with two modes (Create account / Sign in) sharing an email field, reached from `/login`, built out of SS-003's existing vocabulary — typed `AuthErrorCode` values, `Input` inline error states, `useMutation` hooks in `auth.queries.ts` over service functions in `auth.service.ts`. It performs **no navigation of its own**: a successful signup or sign-in writes a session, and SS-071's `(auth)` layout guard redirects to `/onboarding` or `/` exactly as it already does for phone OTP. On the database: migration `021` rewrites `handle_new_auth_user` so a signup carrying an already-registered email aborts its whole transaction with a recognizable error instead of an opaque `500 Database error saving new user` (`BL-169`), while leaving the phone-only (NULL email) path byte-for-byte unchanged.
 
 Three things are settled and are implemented as written, not re-litigated: email confirmation stays **off** (`BL-174`, with a defensive `session === null` branch anyway), duplicate email is **rejected outright, never merged** (`BL-169`), and there is **no password-reset flow and no "Forgot password?" affordance at all** (`BL-173`). No backend change, no account-linking UI (`BL-172`).
+
+> **SUPERSEDED 2026-08-17.** "Email confirmation stays off" was never true of the live project and is now a reaffirmed **ON**. The `session === null` branch is the primary signup path, not a defence. See the revision block's §The revised flow. The other two settled items stand unchanged.
 
 ## Ground-check — what I verified in the repo before designing
 
@@ -65,6 +371,8 @@ Note also `004_backfill_missing_user_rows.sql` inserts `(id, phone, email)` stra
 - `GoTrueClient.d.ts:443` — `signUp(credentials: SignUpWithPasswordCredentials): Promise<AuthResponse>`. `:566` — `signInWithPassword(credentials): Promise<AuthTokenResponsePassword>`. Both shapes are as the ticket assumed.
 - **Confirm-email semantics, from the SDK's own doc comment (`:279-283`):** "If **Confirm email** is enabled, a `user` is returned but `session` is null. If **Confirm email** is disabled, both a `user` and a `session` are returned." Confirms the design's premise *and* the necessity of the defensive `session === null` branch.
 - **The duplicate-signup obfuscation question is answered (`:284-286`):** an obfuscated/fake user object is returned **only when both Confirm email *and* Confirm phone are enabled**. "When either **Confirm email** or **Confirm phone** is disabled, the error message, `User already registered` is returned." Since this project runs with Confirm email **off**, `signUp` on a duplicate returns a **real, mappable error** — so **AC #3's specific copy is achievable and does not need reconciling downward.** This was the ticket's single largest unknown; it is closed.
+
+> **SUPERSEDED 2026-08-17.** The SDK quote itself is still accurate; its *premise* was not. Confirm-email is ON, so whether a duplicate is obfuscated now depends on Confirm-phone, which cannot be read from this repo. AC #3 **is** reconciled — see the revision block's §Duplicate signup and revised AC #3. This unknown is re-opened as `BL-190`.
 - **Errors carry a stable machine-readable `code`** (`errors.d.ts:20`: `code: ErrorCode | (string & {}) | undefined`) — branch on `error.code`, never on `error.message`. The SDK's own guidance says exactly this (`GoTrueClient.d.ts:562`). Relevant members of the `ErrorCode` union (`error-codes.d.ts:6`, read in full): `user_already_exists`, `email_exists`, `invalid_credentials`, `weak_password`, `email_not_confirmed`, `email_address_invalid`, `validation_failed`, `signup_disabled`, `over_request_rate_limit`, `over_email_send_rate_limit`, `unexpected_failure`.
 - `isAuthWeakPasswordError` + `AuthWeakPasswordError.reasons: WeakPasswordReasons[]` exist (`errors.d.ts:254-268`) and `AuthResponse` carries `weak_password?: WeakPassword | null` (`types.d.ts:187`) — a real weak-password signal, not a message heuristic.
 
@@ -237,6 +545,8 @@ signInWithEmail(email: string, password: string): Promise<Session>
 - Both call `normalizeEmail` **inside** the service, not only in the component, so every future caller gets the normalization (the ticket's case/whitespace edge case).
 - Both throw the typed `AuthError` and never a raw error, matching `sendOtp`/`verifyOtp`'s contract exactly (`auth.service.ts:82-125`).
 - **Null-session branches**, following `verifyOtp:114-122`'s precedent verbatim in spirit: `signUp` resolving `{ session: null, error: null }` throws `email_confirmation_required` (this is the Confirm-email-turned-back-on defence — a real branch, not dead code); `signInWithPassword` resolving with a null session and no error throws `unknown`.
+
+> **SUPERSEDED 2026-08-17.** `signUpWithEmail` must **not throw** on a null session — that is a successful signup awaiting confirmation. Its return type becomes `EmailSignUpResult`; see the revision block's §Concrete values. `signInWithEmail`'s null-session throw is unchanged.
 - Mapping helper `toEmailAuthError(error, mode)` reuses the existing `isNetworkFailure` (`:53`) and `isRateLimited` (`:58`), extending the latter's check to also match `error.code ∈ {over_request_rate_limit, over_email_send_rate_limit}`. It branches on **`error.code`**, never `error.message` (per the SDK's own guidance) — the one exception being the `stylesense_email_conflict` / `database error saving new user` message match documented above, which exists only because the trigger has no other channel.
 
 ### Error-code mapping table — use these, do not invent
@@ -248,10 +558,13 @@ signInWithEmail(email: string, password: string): Promise<Session>
 | `code` is `invalid_credentials` (sign-in), **and** any unmapped sign-in failure | `invalid_credentials` | `Incorrect email or password.` |
 | `code` is `weak_password`, or `isAuthWeakPasswordError(error)` | `weak_password` | `Please choose a stronger password (at least 8 characters).` |
 | `signUp` resolves `session: null` with no error; or `code` is `email_not_confirmed` | `email_confirmation_required` | `This account needs email confirmation, which isn't set up yet. Contact support to get in.` |
+
 | `code` is `email_address_invalid` / `validation_failed` | `unknown` (surfaced on the email field) | `Please enter a valid email address.` |
 | network-shaped | `network_error` | existing `NETWORK_ERROR_MESSAGE` — reused verbatim, no new string |
 | 429 / `over_request_rate_limit` / `over_email_send_rate_limit` | `rate_limited` | existing `RATE_LIMITED_MESSAGE` — reused verbatim |
 | anything else | `unknown` | existing `UNKNOWN_ERROR_MESSAGE` — reused verbatim |
+
+> **SUPERSEDED 2026-08-17 (one row only).** The `email_confirmation_required` row's *copy* is now false and is deleted — `signUp`'s null session is no longer routed through this table at all (it returns `{ status: 'confirmation_required' }`), and the `email_not_confirmed` half is intercepted by `EmailAuthForm` and rendered as the Check-your-email state rather than as a bare error. **Every other row in this table is unchanged and still correct.**
 
 **AC #7 (no enumeration on sign-in)** falls out of row 3: `invalid_credentials` is the mapping for both an unknown email and a wrong password *and* for every unmapped sign-in failure, and the copy is a single module-level constant, so a copy divergence is not expressible. The **timing** half of AC #7 is a GoTrue server property this client neither controls nor can measure from the repo — QA must assert the copy identity and state plainly that timing was not measured rather than claim it.
 
@@ -294,7 +607,7 @@ Every case from the ticket is carried forward, plus what the ground-check added 
 
 1. **Email differing only in case or with surrounding whitespace.** `normalizeEmail` (trim + lowercase) runs inside the service, so every path normalises; the trigger's check is `lower()`-based. Both land on AC #3's message, never on a second account.
 2. **A phone-first user signs up with an email.** Creates a **second, separate account** with its own empty wardrobe (`BL-172`). Not merged, not warned about speculatively. **No auto-link is reachable from this code path** — checked explicitly, per the brief: this ticket calls only `signUp` / `signInWithPassword` and never `linkIdentity`, and the trigger only ever inserts a row keyed on `NEW.id` (never `UPDATE`s an existing row's email onto a different id). The one construct that could have merged accounts — an `ON CONFLICT (email) DO UPDATE` — is exactly what `021` refuses to do.
-3. **Confirm-email is ON in the live project.** `signUp` resolves `session: null, error: null` → service throws `email_confirmation_required` → explicit honest message. Never a blank screen, never an infinite spinner. This is the defensive branch the intake mandated; it has a unit test.
+3. **Confirm-email is ON in the live project.** `signUp` resolves `session: null, error: null` → service throws `email_confirmation_required` → explicit honest message. Never a blank screen, never an infinite spinner. This is the defensive branch the intake mandated; it has a unit test. — > **SUPERSEDED 2026-08-17:** this is now the primary path and is a success, not a throw. See revision edge cases 1–10.
 4. **Signup/sign-in rate limiting.** Mapped to the existing `rate_limited` code and SS-003's existing copy — no new string.
 5. **Offline / network failure at either call.** Existing `network_error` mapping and copy; no crash; no partially-navigated state (the form navigates nowhere by design, so there is no partial navigation to be in).
 6. **A duplicate that races the client pre-check.** Covered for correctness by layer 3 (`email UNIQUE`), for message quality by layer 2 (`021`) on all non-simultaneous cases. The perfectly-simultaneous case yields the generic-500 fallback mapping, which still shows AC #3's copy. Documented above rather than papered over.
