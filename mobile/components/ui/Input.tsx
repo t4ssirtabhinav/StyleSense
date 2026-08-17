@@ -10,7 +10,13 @@ import Animated, {
 import { Text } from './Text';
 import { colors } from './tokens';
 
-export type InputVariant = 'text' | 'phone' | 'search' | 'otp';
+export type InputVariant =
+  | 'text'
+  | 'phone'
+  | 'search'
+  | 'otp'
+  | 'email'
+  | 'password';
 
 export interface InputProps {
   variant?: InputVariant;
@@ -34,6 +40,14 @@ export interface InputProps {
   // text variant only (SS-015: user_notes multiline field with a hard cap)
   multiline?: boolean;
   maxLength?: number;
+  // SS-072: email + password variants. Optional with a variant-named
+  // fallback below, but in practice a screen with both fields on it must
+  // pass distinct explicit labels — see the fallback's own comment.
+  accessibilityLabel?: string;
+  // password variant only — drives autoComplete/textContentType so a
+  // password manager offers "save new password" on signup vs. "fill" on
+  // sign-in, per docs/tickets/SS-072-design.md's Deviation 3.
+  passwordMode?: 'current' | 'new';
 }
 
 const DEFAULT_OTP_LENGTH = 6;
@@ -290,6 +304,117 @@ function TextVariantInput({
   );
 }
 
+// SS-072 (Deviation 3) — a password field is unrenderable with plain
+// TextVariantInput (no secureTextEntry forwarded), and the missing
+// autoCapitalize="none" on a bare text field would manufacture the exact
+// `User@x.com` case-variant duplicates this ticket exists to reject. Added
+// additively rather than passed-through raw props on the text variant, so
+// email/password stay design-system decisions rather than a bypassable
+// thin TextInput wrapper (see the design doc's own reasoning).
+function EmailInput({
+  value,
+  onChangeText,
+  placeholder,
+  error,
+  disabled,
+  autoFocus,
+  accessibilityLabel,
+}: InputProps) {
+  return (
+    <View>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        editable={!disabled}
+        autoFocus={autoFocus}
+        keyboardType="email-address"
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoComplete="email"
+        textContentType="emailAddress"
+        className={baseFieldClassName(Boolean(disabled), Boolean(error))}
+        style={{ borderColor: error ? ERROR_COLOR : undefined }}
+        accessibilityLabel={accessibilityLabel ?? 'Email'}
+      />
+      <ErrorText error={error} />
+    </View>
+  );
+}
+
+function passwordContainerClassName(
+  disabled: boolean,
+  hasError: boolean,
+): string {
+  return [
+    'flex-row items-center rounded-md border px-md py-sm',
+    disabled ? 'bg-surfaceSecondary' : 'bg-surfacePrimary',
+    hasError ? '' : 'border-textMuted',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+// [VERIFIED 2026-08-17 against installed react-native-web@`node_modules/
+// react-native-web/dist/cjs/exports/TextInput/index.js:352`] — autoComplete
+// is forwarded to the DOM `autocomplete` attribute verbatim, with no RN ->
+// web value remapping. RN's own TextInput.d.ts already uses the HTML-spec
+// values directly ('current-password' / 'new-password', not 'password' /
+// 'password-new'), so using them here needs no adjustment for web, this
+// app's primary target.
+function PasswordInput({
+  value,
+  onChangeText,
+  placeholder,
+  error,
+  disabled,
+  autoFocus,
+  accessibilityLabel,
+  passwordMode = 'current',
+}: InputProps) {
+  const [isVisible, setIsVisible] = useState(false);
+  const isNew = passwordMode === 'new';
+
+  return (
+    <View>
+      <View
+        className={passwordContainerClassName(
+          Boolean(disabled),
+          Boolean(error),
+        )}
+        style={{ borderColor: error ? ERROR_COLOR : undefined }}
+      >
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          editable={!disabled}
+          autoFocus={autoFocus}
+          secureTextEntry={!isVisible}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete={isNew ? 'new-password' : 'current-password'}
+          textContentType={isNew ? 'newPassword' : 'password'}
+          className="flex-1 font-body text-base text-textPrimary"
+          accessibilityLabel={accessibilityLabel ?? 'Password'}
+        />
+        <Pressable
+          onPress={() => setIsVisible((visible) => !visible)}
+          accessibilityRole="button"
+          accessibilityLabel={isVisible ? 'Hide password' : 'Show password'}
+        >
+          <Ionicons
+            name={isVisible ? 'eye-off' : 'eye'}
+            size={18}
+            color={colors.text.muted}
+          />
+        </Pressable>
+      </View>
+      <ErrorText error={error} />
+    </View>
+  );
+}
+
 export function Input(props: InputProps) {
   const { variant = 'text', label } = props;
 
@@ -300,6 +425,8 @@ export function Input(props: InputProps) {
       {variant === 'phone' ? <PhoneInput {...props} /> : null}
       {variant === 'search' ? <SearchInput {...props} /> : null}
       {variant === 'text' ? <TextVariantInput {...props} /> : null}
+      {variant === 'email' ? <EmailInput {...props} /> : null}
+      {variant === 'password' ? <PasswordInput {...props} /> : null}
     </View>
   );
 }

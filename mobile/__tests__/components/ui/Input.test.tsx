@@ -178,4 +178,71 @@ describe('Input', () => {
       expect(getByText('Name')).toBeOnTheScreen();
     });
   });
+
+  // SS-072 (Deviation 3) — email/password variants.
+  describe('variant="email"', () => {
+    it('sets autoCapitalize="none" and keyboardType="email-address" (the duplicate-prevention mechanism, not styling)', async () => {
+      const { getByLabelText } = await render(
+        <Input
+          variant="email"
+          value=""
+          onChangeText={jest.fn()}
+          accessibilityLabel="Email address"
+        />,
+      );
+      const field = getByLabelText('Email address');
+      expect(field.props.autoCapitalize).toBe('none');
+      expect(field.props.keyboardType).toBe('email-address');
+    });
+
+    it('renders the inline error string when set', async () => {
+      const { getByText } = await render(
+        <Input
+          variant="email"
+          value=""
+          onChangeText={jest.fn()}
+          error="Please enter a valid email address."
+        />,
+      );
+      expect(
+        getByText('Please enter a valid email address.'),
+      ).toBeOnTheScreen();
+    });
+  });
+
+  describe('variant="password"', () => {
+    it('renders a masked field by default and the show/hide toggle flips it, with the accessibility label changing', async () => {
+      const { getByLabelText, queryByLabelText } = await render(
+        <Input
+          variant="password"
+          value="hunter2"
+          onChangeText={jest.fn()}
+          accessibilityLabel="Password"
+        />,
+      );
+      const field = getByLabelText('Password');
+      expect(field.props.secureTextEntry).toBe(true);
+      expect(queryByLabelText('Show password')).toBeOnTheScreen();
+
+      await fireEvent.press(getByLabelText('Show password'));
+
+      expect(getByLabelText('Password').props.secureTextEntry).toBe(false);
+      expect(getByLabelText('Hide password')).toBeOnTheScreen();
+      expect(queryByLabelText('Show password')).toBeNull();
+    });
+
+    it('renders the inline error string when set', async () => {
+      const { getByText } = await render(
+        <Input
+          variant="password"
+          value=""
+          onChangeText={jest.fn()}
+          error="Password must be at least 8 characters."
+        />,
+      );
+      expect(
+        getByText('Password must be at least 8 characters.'),
+      ).toBeOnTheScreen();
+    });
+  });
 });

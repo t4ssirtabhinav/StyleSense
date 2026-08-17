@@ -3,12 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   checkOnboardingCompleted,
   fetchUserPlanTier,
+  resendConfirmationEmail,
   sendOtp,
+  signInWithEmail,
   signOut,
+  signUpWithEmail,
   verifyOtp,
 } from './auth.service';
 import { useAuthStore } from './auth.store';
-import type { AuthError } from './auth.types';
+import type { AuthError, EmailSignUpResult } from './auth.types';
 import { resetAllUserState } from './userStateReset';
 
 // The only place these React Query hooks are called from is components (per
@@ -27,6 +30,39 @@ export function useSendOtpMutation() {
 export function useVerifyOtpMutation() {
   return useMutation<Session, AuthError, { phone: string; token: string }>({
     mutationFn: ({ phone, token }) => verifyOtp(phone, token),
+  });
+}
+
+// SS-072 — same TError-generic-as-AuthError shape as the two mutations
+// above; signUpWithEmail/signInWithEmail always throw the typed AuthError,
+// never a raw Error (see auth.service.ts).
+//
+// REVISION 2 (2026-08-17): retyped from Session to EmailSignUpResult —
+// signUpWithEmail no longer throws on a null session (that is now a
+// success: { status: 'confirmation_required', email }). Consumers must
+// branch on `.status`.
+export function useSignUpWithEmailMutation() {
+  return useMutation<
+    EmailSignUpResult,
+    AuthError,
+    { email: string; password: string }
+  >({
+    mutationFn: ({ email, password }) => signUpWithEmail(email, password),
+  });
+}
+
+export function useSignInWithEmailMutation() {
+  return useMutation<Session, AuthError, { email: string; password: string }>({
+    mutationFn: ({ email, password }) => signInWithEmail(email, password),
+  });
+}
+
+// SS-072 REVISION 2 (AC #12) — backs CheckYourEmailNotice's Resend control.
+// TVariables is the email string directly (no object wrapper needed, unlike
+// the two mutations above — resendConfirmationEmail takes a single arg).
+export function useResendConfirmationEmailMutation() {
+  return useMutation<void, AuthError, string>({
+    mutationFn: (email) => resendConfirmationEmail(email),
   });
 }
 

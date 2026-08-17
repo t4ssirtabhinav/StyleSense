@@ -1,8 +1,10 @@
-import type { Session } from '@supabase/supabase-js';
+import { type Session, isAuthWeakPasswordError } from '@supabase/supabase-js';
 import { supabase } from '../../lib/supabase';
 import type {
   AuthError,
   AuthErrorCode,
+  EmailSignUpResult,
+  FieldValidationResult,
   PhoneValidationResult,
   PlanTier,
 } from './auth.types';
@@ -57,8 +59,18 @@ function isNetworkFailure(error: unknown): boolean {
 
 function isRateLimited(error: unknown): boolean {
   const status = (error as { status?: number } | null | undefined)?.status;
+  const code = (error as { code?: string } | null | undefined)?.code;
   const message = error instanceof Error ? error.message : String(error);
-  return status === 429 || /rate limit|too many/i.test(message);
+  // SS-072: extended (not duplicated) to also match the two rate-limit
+  // codes @supabase/auth-js's error-codes union carries for the email
+  // signup/signin path — sendOtp/verifyOtp's existing status/message checks
+  // above are untouched, so this is additive for every existing caller too.
+  return (
+    status === 429 ||
+    code === 'over_request_rate_limit' ||
+    code === 'over_email_send_rate_limit' ||
+    /rate limit|too many/i.test(message)
+  );
 }
 
 // Not confirmed against a live send (BL-001) — best-effort mapping of
@@ -119,6 +131,247 @@ export async function verifyOtp(
       new Error('verifyOtp resolved with a null session'),
       'unknown',
     );
+  }
+
+  return session;
+}
+
+// ---------------------------------------------------------------------
+// SS-072 — Email/Password Sign-Up & Sign-In.
+// docs/tickets/SS-072-design.md's "Service layer (auth.service.ts)" and
+// "Error-code mapping table" sections — this block implements both
+// verbatim; extend the table and this code together, never diverge them.
+// ---------------------------------------------------------------------
+
+const MIN_PASSWORD_LENGTH = 8;
+const PASSWORD_TOO_SHORT_MESSAGE = `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+const INVALID_EMAIL_MESSAGE = 'Please enter a valid email address.';
+const EMAIL_ALREADY_REGISTERED_MESSAGE =
+  'This email is already registered — sign in instead.';
+const INVALID_CREDENTIALS_MESSAGE = 'Incorrect email or password.';
+const WEAK_PASSWORD_MESSAGE =
+  'Please choose a stronger password (at least 8 characters).';
+// SS-072 REVISION 2: this is no longer an error message shown to the user —
+// signUpWithEmail's null-session branch is now a SUCCESS (see
+// EmailSignUpResult in auth.types.ts). This constant survives only as the
+// internal `message` on the `email_confirmation_required` AuthError that
+// signInWithEmail's mapping still produces for AC #14 (signing in before
+// confirming) — EmailAuthForm intercepts that code and renders
+// CheckYourEmailNotice instead of ever displaying this string as a bare
+// error. Never render this value directly.
+const EMAIL_CONFIRMATION_REQUIRED_MESSAGE = 'Email not confirmed yet.';
+
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Migration 021's deterministic token — see
+// supabase/migrations/021_harden_handle_new_auth_user_email_conflict.sql.
+const TRIGGER_CONFLICT_TOKEN_RE = /stylesense_email_conflict/i;
+// [VERIFIED LIVE 2026-08-17 against the shared project — see
+// docs/worklog/SS-072.md's Developer entry] A natural Postgres
+// unique_violation raised from deep inside handle_new_auth_user (the exact
+// SECURITY DEFINER AFTER INSERT trigger 021 rewrites) was observed to
+// surface to the client only as a generic wrapped 500, worded "Database
+// error CREATING new user" via the Admin API's create_user path — not
+// "saving" as the raw ticket/BL-169 assumed. Matches both deliberately,
+// since the wording may differ between the Admin API and the public
+// /signup endpoint (unverified which the latter uses).
+const GENERIC_TRIGGER_500_RE = /database error (saving|creating) new user/i;
+
+export function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+export function validateEmail(email: string): FieldValidationResult {
+  const normalized = normalizeEmail(email);
+  if (!normalized || !EMAIL_SHAPE_RE.test(normalized)) {
+    return { valid: false, message: INVALID_EMAIL_MESSAGE };
+  }
+  return { valid: true };
+}
+
+export function validatePassword(password: string): FieldValidationResult {
+  // Passwords are never trimmed (docs/tickets/SS-072-design.md's Password
+  // policy section) — a password of 8 spaces is a valid password.
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return { valid: false, message: PASSWORD_TOO_SHORT_MESSAGE };
+  }
+  return { valid: true };
+}
+
+function errorCode(error: unknown): string | undefined {
+  return (error as { code?: string } | null | undefined)?.code;
+}
+
+function errorStatus(error: unknown): number | undefined {
+  return (error as { status?: number } | null | undefined)?.status;
+}
+
+function errorMessageOf(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  // GoTrue's real errors are always Error instances (AuthApiError extends
+  // Error), but this also reads a plain `{ message }` shape defensively —
+  // deliberately more permissive than isNetworkFailure/isRateLimited above
+  // (untouched, existing behaviour), since this helper's only job is
+  // matching the 021 trigger's message content, not classifying an error.
+  const message = (error as { message?: string } | null | undefined)?.message;
+  return message ?? String(error);
+}
+
+// Branches on `error.code` per the installed SDK's own guidance
+// (GoTrueClient.d.ts) — never on `error.message` — with exactly one
+// documented exception: the generic-500 fallback below, which exists only
+// because a trigger-raised failure has no other channel to identify itself
+// through (see the design doc's "honest unknown about 021's client-visible
+// error").
+function toEmailAuthError(
+  error: unknown,
+  mode: 'signup' | 'signin',
+): AuthError {
+  if (isNetworkFailure(error)) {
+    return { code: 'network_error', message: NETWORK_ERROR_MESSAGE };
+  }
+  if (isRateLimited(error)) {
+    return { code: 'rate_limited', message: RATE_LIMITED_MESSAGE };
+  }
+
+  const code = errorCode(error);
+  const status = errorStatus(error);
+  const message = errorMessageOf(error);
+
+  if (code === 'user_already_exists' || code === 'email_exists') {
+    return {
+      code: 'email_already_registered',
+      message: EMAIL_ALREADY_REGISTERED_MESSAGE,
+    };
+  }
+
+  if (
+    mode === 'signup' &&
+    (code === 'unexpected_failure' || status === 500) &&
+    (TRIGGER_CONFLICT_TOKEN_RE.test(message) ||
+      GENERIC_TRIGGER_500_RE.test(message))
+  ) {
+    return {
+      code: 'email_already_registered',
+      message: EMAIL_ALREADY_REGISTERED_MESSAGE,
+    };
+  }
+
+  if (code === 'weak_password' || isAuthWeakPasswordError(error)) {
+    return { code: 'weak_password', message: WEAK_PASSWORD_MESSAGE };
+  }
+
+  if (code === 'email_not_confirmed') {
+    return {
+      code: 'email_confirmation_required',
+      message: EMAIL_CONFIRMATION_REQUIRED_MESSAGE,
+    };
+  }
+
+  if (code === 'email_address_invalid' || code === 'validation_failed') {
+    return { code: 'unknown', message: INVALID_EMAIL_MESSAGE };
+  }
+
+  if (mode === 'signin') {
+    // AC #7 (no account enumeration): `invalid_credentials` and every
+    // OTHER unmapped sign-in failure share this exact { code, message } —
+    // a copy/code divergence between "unknown email" and "wrong password"
+    // is not expressible because both fall through to this one branch.
+    return {
+      code: 'invalid_credentials',
+      message: INVALID_CREDENTIALS_MESSAGE,
+    };
+  }
+
+  return { code: 'unknown', message: UNKNOWN_ERROR_MESSAGE };
+}
+
+export async function signUpWithEmail(
+  email: string,
+  password: string,
+): Promise<EmailSignUpResult> {
+  const normalizedEmail = normalizeEmail(email);
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email: normalizedEmail,
+      password,
+    });
+    if (error) {
+      throw error;
+    }
+
+    if (!data.session) {
+      // SS-072 REVISION 2: Confirm-email is ON, live-confirmed — this is
+      // the PRIMARY path for 100% of signups today, not a defensive
+      // fallback. A null session here means the account was created
+      // successfully and a confirmation email is on its way; it is a
+      // SUCCESS, never a throw. See docs/tickets/SS-072-design.md's
+      // REVISION 2, "The revised flow". `normalizedEmail` (not the raw
+      // typed string) is what was actually sent to GoTrue and is what
+      // resendConfirmationEmail must be called with.
+      return { status: 'confirmation_required', email: normalizedEmail };
+    }
+
+    // Kept but currently unreachable while Confirm-email stays ON — the
+    // exact inverse of what shipped in the first pass. If Confirm-email is
+    // ever turned off, this arm already works with no further edit.
+    return { status: 'session', session: data.session };
+  } catch (error) {
+    throw toEmailAuthError(error, 'signup');
+  }
+}
+
+// SS-072 REVISION 2 (AC #12) — backs CheckYourEmailNotice's Resend control.
+// `type: 'signup'` is the correct member for a pending email confirmation
+// (@supabase/auth-js's ResendParams restricts the email arm to
+// Extract<EmailOtpType, 'signup' | 'email_change'>). Deliberately no
+// `options.emailRedirectTo` — see docs/tickets/SS-072-design.md's REVISION
+// 2, "Concrete values to use, not invent" for why (an out-of-allow-list
+// redirect silently falls back to SITE_URL; that belongs with the
+// split-out SS-073 work). Reuses toEmailAuthError('signup') so
+// over_email_send_rate_limit/over_request_rate_limit map to the existing
+// RATE_LIMITED_MESSAGE — no new copy for that case (AC #12).
+export async function resendConfirmationEmail(email: string): Promise<void> {
+  try {
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizeEmail(email),
+    });
+    if (error) throw error;
+  } catch (error) {
+    throw toEmailAuthError(error, 'signup');
+  }
+}
+
+export async function signInWithEmail(
+  email: string,
+  password: string,
+): Promise<Session> {
+  const normalizedEmail = normalizeEmail(email);
+  let session: Session | null;
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
+    });
+    if (error) {
+      throw error;
+    }
+    session = data.session;
+  } catch (error) {
+    throw toEmailAuthError(error, 'signin');
+  }
+
+  if (!session) {
+    // No documented case produces this (unlike signUp's Confirm-email
+    // branch above), but the same defensive-branch discipline applies —
+    // never a silent pass-through of a falsy session.
+    throw {
+      code: 'unknown',
+      message: UNKNOWN_ERROR_MESSAGE,
+    } satisfies AuthError;
   }
 
   return session;

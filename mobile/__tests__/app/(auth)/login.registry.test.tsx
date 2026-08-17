@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render } from '@testing-library/react-native';
 import LoginScreen from '../../../app/(auth)/login';
 
-// SS-071 AC #2 — a separate file from login.test.tsx specifically so that
-// file stays mock-free of features/auth/auth.methods (proving AC #1's "the
-// real one-entry registry renders exactly today's tree" unmodified, without
-// this file's mock ever touching it).
+// SS-072 (Deviation 2) rewrite of SS-071's original 2-case file — same
+// reasoning as before: this file mocks features/auth/auth.methods so
+// login.test.tsx (which resolves the REAL registry) stays untouched, and
+// exercises AuthMethodChooser's new "primary inline by default, secondary
+// as a button below it" shape instead of the old flat button menu.
 //
 // jest.mock() factories are hoisted above this file's own imports, so
 // `Text` can't be referenced directly here (Jest's out-of-scope-variable
@@ -36,14 +37,17 @@ describe('LoginScreen — method registry (2 entries)', () => {
     await cleanup();
   });
 
-  it('renders both method labels on the chooser', async () => {
-    const { getByText } = await render(<LoginScreen />);
+  it('renders the primary method inline on a bare mount, and the secondary method as a button below it (AC #1 — phone is primary AND default)', async () => {
+    const { getByText, queryByText } = await render(<LoginScreen />);
 
-    expect(getByText('Continue with mobile number')).toBeOnTheScreen();
+    expect(getByText('Phone form')).toBeOnTheScreen();
     expect(getByText('Continue with fake method')).toBeOnTheScreen();
+    // Not a two-button menu: the secondary method's OWN form is not
+    // rendered until its button is pressed.
+    expect(queryByText('Fake method form')).toBeNull();
   });
 
-  it("pressing the second method's label renders its component, reachable via a Back affordance", async () => {
+  it("pressing the secondary method's label renders its component and hides the primary's, reachable via a Back affordance", async () => {
     const { getByText, getByLabelText, queryByText } = await render(
       <LoginScreen />,
     );
@@ -51,11 +55,13 @@ describe('LoginScreen — method registry (2 entries)', () => {
     await fireEvent.press(getByText('Continue with fake method'));
 
     expect(getByText('Fake method form')).toBeOnTheScreen();
-    expect(queryByText('Continue with mobile number')).toBeNull();
+    expect(queryByText('Phone form')).toBeNull();
+    expect(queryByText('Continue with fake method')).toBeNull();
 
     await fireEvent.press(getByLabelText('Back'));
 
-    expect(getByText('Continue with mobile number')).toBeOnTheScreen();
+    expect(getByText('Phone form')).toBeOnTheScreen();
     expect(getByText('Continue with fake method')).toBeOnTheScreen();
+    expect(queryByText('Fake method form')).toBeNull();
   });
 });
