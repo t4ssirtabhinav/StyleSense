@@ -223,7 +223,13 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# [VERIFIED 2026-08-18 live, GET /auth/v1/settings: mailer_autoconfirm=false] Live project has this
+# ON, reaffirmed 2026-08-17 (BL-174) rather than flipped off -- this file previously drifted from
+# that reality and is corrected here to match. Deliberately NOT pushed via `supabase config push`
+# (see BL-188/BL-183): that command overwrites the entire live auth config atomically, and this
+# project's live minimum_password_length/password_requirements have never been read back (BL-183),
+# so a blind push risks silently clobbering an unverified live password policy as a side effect.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
@@ -234,14 +240,23 @@ otp_length = 6
 otp_expiry = 3600
 
 # Use a production-ready SMTP server
-# [auth.email.smtp]
-# enabled = true
-# host = "smtp.sendgrid.net"
-# port = 587
-# user = "apikey"
-# pass = "env(SENDGRID_API_KEY)"
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+# BL-188: Resend chosen (RESEND_API_KEY already provisioned as a GitHub secret since 2026-07-04,
+# unwired until now). NOT pushed to the live project via `supabase config push` -- see the note on
+# enable_confirmations above; applied manually in the Supabase Dashboard instead (Auth > Emails >
+# SMTP Settings) so only this one setting changes, not the whole auth config.
+# [VERIFIED 2026-08-18 via WebSearch, resend.com/docs] Until a StyleSense domain is verified with
+# Resend, the sandbox sender `onboarding@resend.dev` can only deliver to the email address the
+# Resend account itself is registered under -- NOT arbitrary recipients. This unblocks the
+# developer's own live testing (SS-073's AC#8) but not the other 4-5 beta users; that needs a
+# purchased+verified domain, tracked as the follow-up half of this row.
+[auth.email.smtp]
+enabled = true
+host = "smtp.resend.com"
+port = 587
+user = "resend"
+pass = "env(RESEND_API_KEY)"
+admin_email = "onboarding@resend.dev"
+sender_name = "StyleSense"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]
