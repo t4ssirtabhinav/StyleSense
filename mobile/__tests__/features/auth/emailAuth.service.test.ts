@@ -1,5 +1,8 @@
 import { AuthWeakPasswordError } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 import {
+  adoptSessionFromUrlFragment,
+  confirmEmailToken,
   resendConfirmationEmail,
   signInWithEmail,
   signUpWithEmail,
@@ -9,6 +12,8 @@ import type { AuthError } from '../../../features/auth/auth.types';
 const mockSignUp = jest.fn();
 const mockSignInWithPassword = jest.fn();
 const mockResend = jest.fn();
+const mockVerifyOtp = jest.fn();
+const mockSetSession = jest.fn();
 
 // Same deferred-wrapper reasoning as auth.service.test.ts: jest.mock()
 // factories are hoisted above this file's own top-level const
@@ -19,14 +24,32 @@ jest.mock('../../../lib/supabase', () => ({
       signUp: (arg: unknown) => mockSignUp(arg),
       signInWithPassword: (arg: unknown) => mockSignInWithPassword(arg),
       resend: (arg: unknown) => mockResend(arg),
+      verifyOtp: (arg: unknown) => mockVerifyOtp(arg),
+      setSession: (arg: unknown) => mockSetSession(arg),
     },
   },
 }));
 
+// SS-073 — deterministic native-scheme output, independent of app.json's
+// real scheme resolution (which under jest depends on expo-constants'
+// mocked config and isn't this test's concern).
+jest.mock('expo-linking', () => ({
+  createURL: (path: string) => `stylesense://${path}`,
+}));
+
 const FAKE_SESSION = { access_token: 'tok', user: { id: 'u1' } } as never;
+const ORIGINAL_PLATFORM_OS = Platform.OS;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  Platform.OS = ORIGINAL_PLATFORM_OS;
+  // test-only global, reset between tests.
+  (global as { window?: unknown }).window = undefined;
+});
+
+afterEach(() => {
+  Platform.OS = ORIGINAL_PLATFORM_OS;
+  (global as { window?: unknown }).window = undefined;
 });
 
 // docs/tickets/SS-072-design.md's Test plan #8-18 (the mapping table, one
@@ -44,7 +67,24 @@ describe('signUpWithEmail', () => {
     expect(mockSignUp).toHaveBeenCalledWith({
       email: 'user@x.com',
       password: 'raw-Password-Not-Trimmed ',
+      options: { emailRedirectTo: 'stylesense://confirm' },
     });
+  });
+
+  // SS-073 Test plan #8 — regression guard so a future edit can't silently
+  // drop emailRedirectTo from either SS-072 call site.
+  it("SS-073: calls supabase.auth.signUp with options.emailRedirectTo equal to getConfirmationRedirectUrl()'s output", async () => {
+    mockSignUp.mockResolvedValue({
+      data: { user: { id: 'u1' }, session: null },
+      error: null,
+    });
+
+    await signUpWithEmail('user@x.com', 'password123');
+
+    const call = mockSignUp.mock.calls[0][0] as {
+      options?: { emailRedirectTo?: string };
+    };
+    expect(call.options?.emailRedirectTo).toBe('stylesense://confirm');
   });
 
   // R2 — kept but currently unreachable while Confirm-email stays ON; the
@@ -238,8 +278,11 @@ describe('signUpWithEmail', () => {
 });
 
 describe('resendConfirmationEmail', () => {
-  // R3.
-  it('R3: calls supabase.auth.resend with exactly { type: "signup", email: <normalized> } and no options', async () => {
+  // R3 — SS-073 REVISION: resend now DOES carry options.emailRedirectTo
+  // (added by this ticket, see auth.service.ts's SS-073 block below); the
+  // pre-SS-073 "no options" assertion is intentionally replaced, not
+  // weakened — the type/email shape it pinned is still asserted exactly.
+  it('R3 (SS-073 revision): calls supabase.auth.resend with { type: "signup", email: <normalized>, options: { emailRedirectTo } }', async () => {
     mockResend.mockResolvedValue({ error: null });
 
     await resendConfirmationEmail('  User@X.com ');
@@ -247,10 +290,9 @@ describe('resendConfirmationEmail', () => {
     expect(mockResend).toHaveBeenCalledWith({
       type: 'signup',
       email: 'user@x.com',
+      options: { emailRedirectTo: 'stylesense://confirm' },
     });
     expect(mockResend).toHaveBeenCalledTimes(1);
-    const call = mockResend.mock.calls[0][0] as Record<string, unknown>;
-    expect(call).not.toHaveProperty('options');
   });
 
   // R4 — asserted by identity with the OTP/signup rate-limited path's
@@ -411,6 +453,137 @@ describe('signInWithEmail', () => {
     await expect(signInWithEmail('user@x.com', 'password123')).rejects.toEqual({
       code: 'unknown',
       message: 'Something went wrong. Please try again.',
+    });
+  });
+});
+
+// docs/tickets/SS-073-design.md's Test plan #1-8 (the confirmEmailToken /
+// adoptSessionFromUrlFragment block).
+
+describe('confirmEmailToken', () => {
+  it('calls supabase.auth.verifyOtp with exactly { token_hash, type: "email" } (AC #3)', async () => {
+    mockVerifyOtp.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+      error: null,
+    });
+
+    await confirmEmailToken('the-token-hash');
+
+    expect(mockVerifyOtp).toHaveBeenCalledWith({
+      token_hash: 'the-token-hash',
+      type: 'email',
+    });
+    expect(mockVerifyOtp).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves the session on success', async () => {
+    mockVerifyOtp.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+      error: null,
+    });
+
+    await expect(confirmEmailToken('the-token-hash')).resolves.toEqual(
+      FAKE_SESSION,
+    );
+  });
+
+  it('a { data: { session: null }, error: null } response throws invalid_or_expired_confirmation_link (defensive-branch discipline)', async () => {
+    mockVerifyOtp.mockResolvedValue({
+      data: { session: null },
+      error: null,
+    });
+
+    await expect(confirmEmailToken('the-token-hash')).rejects.toEqual({
+      code: 'invalid_or_expired_confirmation_link',
+      message:
+        'This link may have expired or already been used. Your account may already be confirmed — try signing in.',
+    });
+  });
+
+  it('an unmapped/expired-token-shaped rejection throws invalid_or_expired_confirmation_link with the non-technical copy, never the raw SDK message (AC #5)', async () => {
+    mockVerifyOtp.mockRejectedValue({
+      code: 'otp_expired',
+      status: 403,
+      message: 'Token has expired or is invalid',
+    });
+
+    let thrown: unknown;
+    try {
+      await confirmEmailToken('the-token-hash');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toEqual({
+      code: 'invalid_or_expired_confirmation_link',
+      message:
+        'This link may have expired or already been used. Your account may already be confirmed — try signing in.',
+    });
+    expect((thrown as { message: string }).message).not.toContain(
+      'Token has expired or is invalid',
+    );
+  });
+
+  it("a network-failure-shaped rejection throws network_error (SS-003's existing message, by identity)", async () => {
+    mockVerifyOtp.mockRejectedValue(new Error('Network request failed'));
+
+    await expect(confirmEmailToken('the-token-hash')).rejects.toEqual({
+      code: 'network_error',
+      message:
+        'No internet connection. Please check your network and try again.',
+    });
+  });
+});
+
+describe('adoptSessionFromUrlFragment', () => {
+  it('on a non-web Platform.OS resolves null without calling supabase.auth.setSession at all', async () => {
+    Platform.OS = 'ios';
+
+    await expect(adoptSessionFromUrlFragment()).resolves.toBeNull();
+    expect(mockSetSession).not.toHaveBeenCalled();
+  });
+
+  it('on web with no access_token/refresh_token in window.location.hash resolves null without calling setSession', async () => {
+    Platform.OS = 'web';
+    global.window = { location: { hash: '' } } as never;
+
+    await expect(adoptSessionFromUrlFragment()).resolves.toBeNull();
+    expect(mockSetSession).not.toHaveBeenCalled();
+  });
+
+  it('on web with both tokens present in the hash calls setSession exactly once and resolves the returned session', async () => {
+    Platform.OS = 'web';
+    global.window = {
+      location: { hash: '#access_token=at1&refresh_token=rt1' },
+    } as never;
+    mockSetSession.mockResolvedValue({
+      data: { session: FAKE_SESSION },
+      error: null,
+    });
+
+    await expect(adoptSessionFromUrlFragment()).resolves.toEqual(FAKE_SESSION);
+    expect(mockSetSession).toHaveBeenCalledWith({
+      access_token: 'at1',
+      refresh_token: 'rt1',
+    });
+    expect(mockSetSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('a setSession rejection on web with both tokens present maps through toConfirmationLinkError', async () => {
+    Platform.OS = 'web';
+    global.window = {
+      location: { hash: '#access_token=at1&refresh_token=rt1' },
+    } as never;
+    mockSetSession.mockRejectedValue({
+      code: 'otp_expired',
+      status: 403,
+      message: 'Token has expired or is invalid',
+    });
+
+    await expect(adoptSessionFromUrlFragment()).rejects.toEqual({
+      code: 'invalid_or_expired_confirmation_link',
+      message:
+        'This link may have expired or already been used. Your account may already be confirmed — try signing in.',
     });
   });
 });

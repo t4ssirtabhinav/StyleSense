@@ -25,11 +25,24 @@ import { useAuthRouting } from '../../features/auth/useAuthRouting';
 // against both forms anyway (design doc edge case #13) as a defensive
 // belt-and-braces measure against a future expo-router version changing
 // that behaviour silently.
+// SS-073 (AC #2) — `/confirm` is deliberately added here, not left
+// unguarded. The instant any session exists (this exact click's own new
+// session, or an unrelated one already live), this guard redirects away
+// BEFORE confirm.tsx ever renders or calls confirmEmailToken/
+// adoptSessionFromUrlFragment — so a confirm link opened in a browser
+// with a *different* user's session live can never silently swap the
+// active session underneath them, and the *same* user's already-live
+// session can't loop or double-navigate either. See
+// docs/tickets/SS-073-design.md's "The guard decision" section for the
+// full reasoning; this is the same mechanism as /login and /verify-otp
+// above, not new guard logic.
 const GUARDED_ROUTES = new Set([
   '/login',
   '/(auth)/login',
   '/verify-otp',
   '/(auth)/verify-otp',
+  '/confirm',
+  '/(auth)/confirm',
 ]);
 
 export default function AuthLayout() {

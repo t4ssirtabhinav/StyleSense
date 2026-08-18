@@ -19,7 +19,13 @@ export type AuthErrorCode =
   | 'email_already_registered'
   | 'invalid_credentials'
   | 'weak_password'
-  | 'email_confirmation_required';
+  | 'email_confirmation_required'
+  // SS-073 — additive only. Deliberately distinct from
+  // 'email_confirmation_required' (already taken by SS-072's sign-in-side
+  // mapping for "you haven't confirmed yet") — this one covers a
+  // confirmation LINK itself being expired/already-used/malformed, a
+  // different failure than "you tried to sign in before confirming".
+  | 'invalid_or_expired_confirmation_link';
 
 export interface AuthError {
   code: AuthErrorCode;

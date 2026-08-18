@@ -110,4 +110,49 @@ describe('AuthLayout ((auth) forward guard)', () => {
     expect(getByTestId('auth-stack')).toBeOnTheScreen();
     expect(queryByTestId('redirect')).toBeNull();
   });
+
+  // SS-073 Test plan #17-20 — AC #2's "pinned by tests on both sides":
+  // /confirm is now a GUARDED_ROUTE, mirroring /login and /verify-otp
+  // exactly (no code distinguishes "same user's session" from "a
+  // different user's session" — both are the 'app' status and both are
+  // resolved identically, by construction, so one test covers both).
+
+  it('SS-073: pathname /confirm, useAuthRouting() returns { status: "app" } -> redirects to / (same-user or different-user session, both resolved identically)', async () => {
+    mockPathname = '/confirm';
+    mockUseAuthRouting.mockReturnValue({ status: 'app' });
+
+    const { getByTestId, queryByTestId } = await render(<AuthLayout />);
+
+    expect(getByTestId('redirect')).toHaveTextContent('/');
+    expect(queryByTestId('auth-stack')).toBeNull();
+  });
+
+  it('SS-073: pathname /confirm, useAuthRouting() returns { status: "onboarding" } -> redirects to /onboarding', async () => {
+    mockPathname = '/confirm';
+    mockUseAuthRouting.mockReturnValue({ status: 'onboarding' });
+
+    const { getByTestId, queryByTestId } = await render(<AuthLayout />);
+
+    expect(getByTestId('redirect')).toHaveTextContent('/onboarding');
+    expect(queryByTestId('auth-stack')).toBeNull();
+  });
+
+  it('SS-073: pathname /confirm, useAuthRouting() returns { status: "unauthenticated" } -> renders the Stack (falls through to confirm.tsx), no redirect — the cold-open case', async () => {
+    mockPathname = '/confirm';
+    mockUseAuthRouting.mockReturnValue({ status: 'unauthenticated' });
+
+    const { getByTestId, queryByTestId } = await render(<AuthLayout />);
+
+    expect(getByTestId('auth-stack')).toBeOnTheScreen();
+    expect(queryByTestId('redirect')).toBeNull();
+  });
+
+  it('SS-073: pathname /(auth)/confirm (route-group-prefixed form) behaves identically to /confirm — redirects to / when a session is live', async () => {
+    mockPathname = '/(auth)/confirm';
+    mockUseAuthRouting.mockReturnValue({ status: 'app' });
+
+    const { getByTestId } = await render(<AuthLayout />);
+
+    expect(getByTestId('redirect')).toHaveTextContent('/');
+  });
 });

@@ -1,4 +1,6 @@
 import { type Session, isAuthWeakPasswordError } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
+import { Platform } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import type {
   AuthError,
@@ -297,6 +299,13 @@ export async function signUpWithEmail(
     const { data, error } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
+      // SS-073 — points the confirmation email's {{ .RedirectTo }} template
+      // variable at this app's /confirm route (web origin or native
+      // scheme). See getConfirmationRedirectUrl's own comment for why this
+      // must also be on the Supabase Redirect URLs allow-list to take
+      // effect, and BL-171 for why the web value is a dev-only localhost
+      // origin today.
+      options: { emailRedirectTo: getConfirmationRedirectUrl() },
     });
     if (error) {
       throw error;
@@ -338,6 +347,9 @@ export async function resendConfirmationEmail(email: string): Promise<void> {
     const { error } = await supabase.auth.resend({
       type: 'signup',
       email: normalizeEmail(email),
+      // SS-073 — same reasoning as signUpWithEmail above; a resend must
+      // point at /confirm too, not fall back to whatever SITE_URL is.
+      options: { emailRedirectTo: getConfirmationRedirectUrl() },
     });
     if (error) throw error;
   } catch (error) {
@@ -458,4 +470,129 @@ export async function signOut(): Promise<void> {
     // Network/unknown failure calling signOut() itself — same contract:
     // resolve, never reject.
   }
+}
+
+// ---------------------------------------------------------------------
+// SS-073 — Email Confirmation-Link Landing Screen & Auto-Sign-In.
+// docs/tickets/SS-073-design.md's "Concrete values to use, not invent"
+// section — this block implements it verbatim.
+// ---------------------------------------------------------------------
+
+// [VERIFIED 2026-08-18 against Supabase's current Auth documentation —
+// docs.supabase.com/docs/guides/auth/auth-email-templates (the {{
+// .TokenHash }}/{{ .RedirectTo }} variable table) and
+// docs.supabase.com/docs/guides/auth/passwords (a live worked example).
+// The design doc flagged this string as trained-knowledge/unverified;
+// checked here before use, per the design doc's Open Question #1.]
+//
+// Confirmed: `{{ .TokenHash }}` is documented as "useful for constructing
+// your own email link", and `{{ .RedirectTo }}` is documented as "the
+// redirect URL passed when signUp ... is called" (i.e.
+// getConfirmationRedirectUrl()'s own output) — so
+// `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email` is a correct
+// use of both variables for this app's architecture, where /confirm itself
+// (not a separate server route) performs the client-side verifyOtp
+// exchange. Note for the record: the docs' own worked example for a
+// Next.js app uses a different base pattern —
+// `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next={{ .RedirectTo }}`
+// — because that architecture's /auth/confirm is a fixed SERVER route
+// that does its own subsequent redirect to `next`. This app has no such
+// server route; `emailRedirectTo` (-> `{{ .RedirectTo }}`) already points
+// directly at this app's /confirm screen, which handles both the exchange
+// and (via the guard) the subsequent hand-off itself, so no separate
+// `next` parameter is needed here. The exact template body applied is
+// recorded verbatim in docs/worklog/SS-073.md per AC #9.
+//
+// Template body actually applied in the Supabase dashboard:
+//   {{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email
+
+// SS-073 — distinct name is load-bearing: `verifyOtp` (above) already
+// exists for the SMS path (`type: 'sms'`); this is the email-confirmation
+// path (`type: 'email'`), a different call shape and a different error
+// mapping (toConfirmationLinkError, not toAuthError/toEmailAuthError).
+export async function confirmEmailToken(tokenHash: string): Promise<Session> {
+  let session: Session | null;
+  try {
+    const { data, error } = await supabase.auth.verifyOtp({
+      token_hash: tokenHash,
+      // NOT 'signup' — deprecated per the installed SDK's own doc comment
+      // (SS-072's Architect pass already verified this; carried forward,
+      // not re-verified independently this pass).
+      type: 'email',
+    });
+    if (error) throw error;
+    session = data.session;
+  } catch (error) {
+    throw toConfirmationLinkError(error);
+  }
+  if (!session) {
+    // Defensive-branch discipline, matching the existing SMS verifyOtp's
+    // null-session handling above.
+    throw toConfirmationLinkError(
+      new Error('verifyOtp resolved with a null session'),
+    );
+  }
+  return session;
+}
+
+// Web-only fallback for Supabase's DEFAULT confirmation template (implicit
+// tokens delivered in the URL fragment rather than a token_hash query
+// param) — inert (resolves null, never throws) on native, so confirm.tsx
+// can call it unconditionally behind a Platform.OS check without a second
+// code path. Never calls the SDK's private _getSessionFromURL (confirmed
+// unusable outside a browser by SS-072's Architect pass — throws 'No
+// browser detected.' per GoTrueClient.js:3164-3211).
+export async function adoptSessionFromUrlFragment(): Promise<Session | null> {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') {
+    return null;
+  }
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const access_token = hash.get('access_token');
+  const refresh_token = hash.get('refresh_token');
+  if (!access_token || !refresh_token) {
+    return null;
+  }
+  try {
+    const { data, error } = await supabase.auth.setSession({
+      access_token,
+      refresh_token,
+    });
+    if (error) throw error;
+    return data.session;
+  } catch (error) {
+    throw toConfirmationLinkError(error);
+  }
+}
+
+// New, narrow mapping — deliberately NOT toEmailAuthError('signup'|'signin'),
+// which has no branch for a stale/malformed link and would wrongly report
+// e.g. weak_password or email_already_registered codes that don't apply
+// here.
+function toConfirmationLinkError(error: unknown): AuthError {
+  if (isNetworkFailure(error)) {
+    return { code: 'network_error', message: NETWORK_ERROR_MESSAGE };
+  }
+  return {
+    code: 'invalid_or_expired_confirmation_link',
+    message:
+      'This link may have expired or already been used. Your account may already be confirmed — try signing in.',
+  };
+}
+
+// Feeds `emailRedirectTo` on both signUpWithEmail's and
+// resendConfirmationEmail's call sites above, so a confirmation email's
+// {{ .RedirectTo }} template variable points at this app's own /confirm
+// route rather than falling back to SITE_URL (which is not owned by
+// /confirm — see docs/tickets/SS-073-design.md's "Redirect URL not
+// configured" edge case).
+function getConfirmationRedirectUrl(): string {
+  if (Platform.OS === 'web') {
+    // BL-171: no hosted origin exists yet — this resolves to whatever
+    // origin the app is actually being served from today (localhost:8081
+    // in dev), which is exactly what needs to be on the Redirect URLs
+    // allow-list. Re-derives correctly with zero code change once a real
+    // origin exists.
+    return `${window.location.origin}/confirm`;
+  }
+  return Linking.createURL('confirm'); // resolves to stylesense://confirm
 }

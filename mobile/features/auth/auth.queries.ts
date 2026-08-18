@@ -1,7 +1,9 @@
 import type { Session } from '@supabase/supabase-js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  adoptSessionFromUrlFragment,
   checkOnboardingCompleted,
+  confirmEmailToken,
   fetchUserPlanTier,
   resendConfirmationEmail,
   sendOtp,
@@ -63,6 +65,25 @@ export function useSignInWithEmailMutation() {
 export function useResendConfirmationEmailMutation() {
   return useMutation<void, AuthError, string>({
     mutationFn: (email) => resendConfirmationEmail(email),
+  });
+}
+
+// SS-073 — same TError-generic-as-AuthError shape as every other mutation
+// in this file. confirmEmailToken/adoptSessionFromUrlFragment always throw
+// the typed AuthError, never a raw Error (see auth.service.ts).
+export function useConfirmEmailTokenMutation() {
+  return useMutation<Session, AuthError, string>({
+    mutationFn: (tokenHash) => confirmEmailToken(tokenHash),
+  });
+}
+
+// TVariables is `void` — adoptSessionFromUrlFragment takes no arguments
+// (it reads window.location.hash itself). Resolves `Session | null`
+// (`null` means "no fragment tokens present", not a failure — confirm.tsx
+// branches on that to fall through to its own `failed` state).
+export function useAdoptSessionFromUrlFragmentMutation() {
+  return useMutation<Session | null, AuthError, void>({
+    mutationFn: () => adoptSessionFromUrlFragment(),
   });
 }
 
