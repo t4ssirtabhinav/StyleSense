@@ -184,7 +184,8 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
             await client.table("wardrobe_items")
             .select(
                 "id, category, color_primary, color_secondary, pattern, "
-                "fabric, occasion_tags, season_tags, wear_count, last_worn_at"
+                "fabric, occasion_tags, season_tags, wear_count, last_worn_at, "
+                "do_not_style, is_archived, condition, custom_tags"
             )
             .execute()
         )

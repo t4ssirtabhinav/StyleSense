@@ -603,13 +603,19 @@ class IWardrobeRepository(ABC):
         """(SS-020) RLS-scoped via the caller's own JWT (mirrors every
         other method on this port). Selects ``id, category, color_primary,
         color_secondary, pattern, fabric, occasion_tags, season_tags,
-        wear_count, last_worn_at`` for the caller's own rows -- fetches ALL
-        rows regardless of ``processing_status`` (Open Question #7): Engine
-        v2's own eligibility stage already excludes items missing
-        ``category``/``color_primary``, counting them in the gap report, so
-        including untagged items is safe (excluded downstream, not silently
-        dropped) and the gap-report count becomes a useful "how much of your
-        wardrobe isn't tagged yet" signal."""
+        wear_count, last_worn_at, do_not_style, is_archived, condition,
+        custom_tags`` (the last four added by SS-040) for the caller's own
+        rows -- fetches ALL rows regardless of ``processing_status`` (Open
+        Question #7): Engine v2's own eligibility stage already excludes
+        items missing ``category``/``color_primary``, counting them in the
+        gap report, so including untagged items is safe (excluded
+        downstream, not silently dropped) and the gap-report count becomes a
+        useful "how much of your wardrobe isn't tagged yet" signal.
+        ``do_not_style``/``is_archived`` are read by
+        ``engine_v2_eligibility.filter_eligible`` to exclude items from the
+        eligible pool (SS-040) -- this select list is the single point of
+        failure for that feature: omitting a column here silently makes it
+        a no-op regardless of what the pydantic model declares."""
         raise NotImplementedError
 
     @abstractmethod

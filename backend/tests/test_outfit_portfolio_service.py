@@ -782,3 +782,59 @@ async def test_empty_exclude_fingerprints_forwarded_as_none() -> None:
         exclude_fingerprints=[],
     )
     assert captured["exclude_fingerprints"] is None
+
+
+# ---------------------------------------------------------------------------
+# SS-040: _fetch_wardrobe must not drop or reset the new lifecycle columns
+# in transit between the repo row and the engine call.
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_wardrobe_preserves_lifecycle_flags() -> None:
+    captured: dict[str, Any] = {}
+
+    class _CapturingEngine(EngineV2):
+        async def generate_portfolio(self, *args: Any, **kwargs: Any) -> Any:
+            captured["wardrobe"] = args[0] if args else kwargs.get("wardrobe")
+            return await super().generate_portfolio(*args, **kwargs)
+
+    log_repo = _FakeSuggestionLogRepo()
+    occasion_normalizer = OccasionNormalizer(_FakeOccasionRepo(_occasion_snapshot()))
+    engine = _CapturingEngine(
+        garment_registry=GarmentRegistryAdapter(_FakeGarmentRegistryRepo()),
+        fabric_repo=_FakeFabricRepo(),
+        wear_history_repo=_FakeWearHistoryRepo(),
+        suggestion_log_repo=log_repo,
+        app_config=_dummy_app_config(),
+    )
+    app_config = _dummy_app_config()
+    rows = _wardrobe_rows()
+    rows[0] = {**rows[0], "do_not_style": True}
+    service = OutfitPortfolioService(
+        wardrobe_repo=_FakeWardrobeRepo(rows=rows),
+        occasion_normalizer=occasion_normalizer,
+        engine=engine,
+        app_config=app_config,
+        routing_mix_monitor=RoutingMixMonitor(),
+        cost_budget_gate=CostBudgetGate(_FakeRateLimiter(), app_config),
+        provider_registry=_FakeRegistry(_FakeStylingProvider([])),
+        provider_quota=ProviderQuotaTracker(),
+        narration_cache=NarrationCacheOrchestrator(_FakeNarrationCacheRepo()),
+        suggestion_log_repo=log_repo,
+        weather_service=_FakeWeatherService(),  # type: ignore[arg-type]
+    )
+    await service.generate_portfolio_for_request(
+        user_id="u1",
+        jwt="fake-jwt",
+        occasion="office",
+        season=None,
+        as_of=None,
+        style_preferences_override=None,
+        config_snapshot=_empty_snapshot(),
+    )
+    wardrobe = captured["wardrobe"]
+    assert wardrobe is not None
+    by_id = {item.id: item for item in wardrobe}
+    assert by_id[rows[0]["id"]].do_not_style is True
+    # every other row must degrade to the default rather than being dropped
+    assert by_id[rows[1]["id"]].do_not_style is False
