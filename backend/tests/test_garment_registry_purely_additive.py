@@ -19,6 +19,24 @@ Scoped narrowly to the registry's own identifiers (table/function names),
 deliberately NOT a generic word search -- "kurta", "saree", etc. already
 appear legitimately as existing `wardrobe_category` ENUM values in shipped
 code and would be false positives (design §6.2).
+
+**SS-044 checked this file deliberately, per its own design doc's "Files to
+modify" instruction, rather than leaving it silently stale.** SS-044
+(migration 022_garment_category_resolution.sql) is what makes SS-038's
+existing `garment_types`/`garment_type_aliases` reads genuinely RESOLVE
+against live `wardrobe_items.category` values (they were a 100% miss
+before -- BL-132) -- but it changes zero backend source files' READ SET.
+Approach (a) (alias rows, not an ENUM->TEXT migration) needs no code
+change on the resolution path (design finding 5): the two ALREADY-
+allowlisted consumer files below still read exactly `garment_types`/
+`garment_type_aliases` and nothing else; the other six identifiers
+(`garment_unknown_types`, `garment_set_components`,
+`garment_normalize_one`, `garment_normalize_shape`, `garment_is_known`,
+`garment_log_unknown`) remain genuinely untouched by any backend/mobile
+source outside tests/scripts -- SS-044 does not call any of the SQL-side
+normalisation/logging functions either. Every assertion below is
+STILL TRUE after SS-044 and needs no functional change; this comment
+records that it was checked, not skipped.
 """
 
 from __future__ import annotations

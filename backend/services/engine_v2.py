@@ -45,15 +45,26 @@ as new findings:**
 - Coverage x modesty scoring -- no live data (``garment_types.coverage`` is
   empty for all seeded rows, ``users.body_type``/modesty preference
   unpopulated) -- new ``BL-133``.
-- **``volume_balance``/``register_coherence``/``BL-129``'s register-
-  coherence ranking fix are architecturally correct and unit-tested but
-  100% LIVE-INERT today** -- no live ``wardrobe_items.category`` value
-  currently resolves through ``garment_types`` (SS-034 seeded new-vocabulary
-  keys under different names than the 21-value enum still in live use), so
-  every real wardrobe hits the graceful-neutral-degrade path for these three
-  terms until Wave 2's taxonomy migration (new ``BL-132``). This is
-  expected and documented, NOT a bug to work around -- do not add
-  workarounds to make it "appear" active against current live data.
+- **``volume_balance``/``register_coherence`` are now LIVE -- resolved by
+  ``SS-044`` (``supabase/migrations/022_garment_category_resolution.sql``,
+  closing ``BL-132``).** Every one of the 21 live ``wardrobe_items.category``
+  enum values now resolves through ``garment_types``, via a
+  ``garment_type_aliases`` row added by 022 (approach (a): additive alias
+  rows, not an ENUM->TEXT column migration -- see the design doc's
+  "Migration approach" section for why (b) was rejected). ``022`` also
+  backfills ``styling_rules.volume_class`` on every existing ``014`` row
+  (``BL-191`` -- the term was still structurally inert even with a perfect
+  key mapping until this backfill landed) and seeds the ``feet`` slot for
+  the first time (``BL-156``, 13 new bucket rows + 9 fine-grained footwear
+  children). ``GarmentRegistryAdapter.get_garment_attributes`` needed ZERO
+  code change for this -- it already resolved
+  ``snapshot.rows`` (canonical key) then ``snapshot.aliases`` before this
+  migration existed. This is a real, live behaviour change for every user's
+  suggestions, not a no-op: ``register_coherence`` now actively down-ranks
+  mixed-register pairings (e.g. a western top with an ethnic bottom) that
+  scored a flat 1.0 before. Verified against the linked project's live data
+  by ``backend/scripts/ss044_verify_category_resolution.py``, not merely by
+  unit test.
 
 **Cost-accounting posture (an inference, not literally specified by the
 design doc's own step-11 text):** ``generate_portfolio`` never calls an AI
