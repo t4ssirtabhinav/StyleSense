@@ -111,14 +111,28 @@ def filter_eligible(
     addition to whatever the occasion already excludes. Mandatory
     relax-if-empty guardrail (design §3 step 3): if the post-weather set is
     empty and the pre-weather set was non-empty, the weather exclusions are
-    discarded entirely and ``weather_exclusions_relaxed=True`` is returned."""
+    discarded entirely and ``weather_exclusions_relaxed=True`` is returned.
+
+    (SS-040) Lifecycle exclusion (``do_not_style``/``is_archived``) runs
+    FIRST, before the missing-category/colour count -- an archived item
+    that also lacks a category must not be counted in
+    ``excluded_missing_color_or_category``. Single ``not (do_not_style or
+    is_archived)`` predicate: an item with both flags is removed once and
+    counted once in ``excluded_lifecycle``. Lifecycle exclusions are NEVER
+    relaxed by the weather guardrail below -- ``pre_weather`` is derived
+    from the already-lifecycle-filtered pool, so the relax-if-empty
+    fallback can never resurrect a do-not-style/archived item. The user's
+    explicit instruction beats the engine's weather inference."""
     deduped = _dedupe_by_id(wardrobe)
 
+    stylable = [item for item in deduped if not (item.do_not_style or item.is_archived)]
+    excluded_lifecycle = len(deduped) - len(stylable)
+
     excluded_missing = sum(
-        1 for item in deduped if item.category is None or item.color_primary is None
+        1 for item in stylable if item.category is None or item.color_primary is None
     )
     missing_filtered = [
-        item for item in deduped if item.category is not None and item.color_primary is not None
+        item for item in stylable if item.category is not None and item.color_primary is not None
     ]
 
     hard_families = HARD_EXCLUDED_COLOR_FAMILIES.get(occasion.key, frozenset())
@@ -173,4 +187,5 @@ def filter_eligible(
         eligible_items=eligible,
         excluded_missing_color_or_category=excluded_missing,
         weather_exclusions_relaxed=weather_exclusions_relaxed,
+        excluded_lifecycle=excluded_lifecycle,
     )

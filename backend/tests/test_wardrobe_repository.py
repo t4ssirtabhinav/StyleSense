@@ -422,3 +422,27 @@ async def test_delete_item_returns_false_when_no_row_matched(
         deleted = await repo.delete_item(jwt="caller-jwt", item_id="item-1")
 
     assert deleted is False
+
+
+# --- SS-040: get_items_for_styling's select list must carry the lifecycle
+# columns -- this is the single point of failure for the whole feature; if
+# this test is ever reverted/weakened, do_not_style/is_archived silently
+# become a permanent no-op even though every other layer is wired. ---------
+
+
+async def test_get_items_for_styling_selects_lifecycle_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        await repo.get_items_for_styling(jwt="caller-jwt", user_id="user-1")
+
+    select_call = next(c for c in fake_client.calls if c[0] == "select")
+    selected = select_call[1][0]
+    for column in ("do_not_style", "is_archived", "condition", "custom_tags"):
+        assert column in selected

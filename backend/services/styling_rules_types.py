@@ -72,6 +72,16 @@ class WardrobeItemInput(BaseModel):
     season_tags: list[SeasonTag] = Field(default_factory=list)
     wear_count: int = 0
     last_worn_at: date | None = None
+    # (SS-040) Lifecycle flags, read by engine_v2_eligibility.filter_eligible.
+    # Optional-with-False-default: migration 023 declares both NOT NULL
+    # DEFAULT false, but a caller/fixture omitting them, or a PostgREST
+    # select list that forgets them, must degrade to "stylable" rather than
+    # drop the item (outfit_portfolio_service._fetch_wardrobe skips rows
+    # that fail validation).
+    do_not_style: bool = False
+    is_archived: bool = False
+    condition: str | None = None
+    custom_tags: list[str] = Field(default_factory=list)
 
 
 class OccasionStylingInput(BaseModel):

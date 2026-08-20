@@ -2994,3 +2994,126 @@ def test_outfits_fingerprint_shape_check_rejects_non_hex(db_conn: Any) -> None:
                 "INSERT INTO outfits (id, user_id, outfit_fingerprint) VALUES (%s, %s, %s)",
                 (str(uuid.uuid4()), owner, "not-a-valid-fingerprint"),
             )
+
+
+# ==========================================================================
+# SS-040 -- Item Lifecycle & Cost-Per-Wear Schema (trimmed) (023)
+#
+# Like the rest of this module, these are SKIPPED unless psycopg2 and
+# SUPABASE_DB_URL are both available -- documentation-grade, not a CI gate
+# (design's finding 9: live-DB schema tests here are not enforcing; the
+# pure-Python eligibility/repository-select-list tests are the real gate).
+# ==========================================================================
+
+
+def test_wardrobe_items_has_lifecycle_columns(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'wardrobe_items'
+              AND column_name IN (
+                'do_not_style', 'is_archived', 'condition', 'custom_tags',
+                'render_transform'
+              )
+            """
+        )
+        rows = {r[0]: r[1:] for r in cur.fetchall()}
+
+    assert set(rows) == {
+        "do_not_style",
+        "is_archived",
+        "condition",
+        "custom_tags",
+        "render_transform",
+    }
+
+    data_type, is_nullable, column_default = rows["do_not_style"]
+    assert data_type == "boolean"
+    assert is_nullable == "NO"
+    assert column_default is not None and "false" in column_default.lower()
+
+    data_type, is_nullable, column_default = rows["is_archived"]
+    assert data_type == "boolean"
+    assert is_nullable == "NO"
+    assert column_default is not None and "false" in column_default.lower()
+
+    data_type, is_nullable, _ = rows["condition"]
+    assert data_type == "text"
+    assert is_nullable == "YES"
+
+    data_type, is_nullable, column_default = rows["custom_tags"]
+    assert data_type == "ARRAY"
+    assert is_nullable == "NO"
+    assert column_default is not None
+
+    data_type, is_nullable, column_default = rows["render_transform"]
+    assert data_type == "jsonb"
+    assert is_nullable == "YES"
+    assert column_default is None
+
+
+def test_custom_tags_gin_index_exists(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'wardrobe_items'
+              AND indexname = 'idx_wardrobe_custom_tags'
+            """
+        )
+        row = cur.fetchone()
+
+    assert row is not None, "idx_wardrobe_custom_tags index not found on wardrobe_items"
+    indexdef = row[0].lower()
+    assert "using gin" in indexdef
+    assert "custom_tags" in indexdef
+
+
+def test_rls_still_denies_cross_user_read_of_new_columns(db_conn: Any) -> None:
+    """Turns AC #5 into an executable claim: RLS is row-level, so the new
+    SS-040 columns are covered by the existing user_owns_wardrobe policy
+    with no policy change (design finding 4) -- proven, not just asserted,
+    by extending test_rls_denies_cross_user_read's exact technique to
+    select the new columns specifically."""
+    user_a = str(uuid.uuid4())
+    user_b = str(uuid.uuid4())
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, email) VALUES (%s, %s), (%s, %s)",
+            (
+                user_a,
+                f"{user_a}@test.stylesense.invalid",
+                user_b,
+                f"{user_b}@test.stylesense.invalid",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO wardrobe_items (user_id, image_url, category, do_not_style, custom_tags)
+            VALUES (%s, %s, 'western_top', true, ARRAY['office'])
+            """,
+            (user_b, f"https://example.com/{uuid.uuid4()}.jpg"),
+        )
+
+        cur.execute("SET ROLE authenticated")
+        try:
+            cur.execute(
+                "SET request.jwt.claims = %s",
+                (f'{{"sub": "{user_a}", "role": "authenticated"}}',),
+            )
+            cur.execute(
+                "SELECT do_not_style, custom_tags FROM wardrobe_items WHERE user_id = %s",
+                (user_b,),
+            )
+            rows_visible_to_a = cur.fetchall()
+        finally:
+            cur.execute("RESET ROLE")
+
+    assert rows_visible_to_a == [], (
+        "RLS should prevent user A from reading user B's do_not_style/custom_tags, "
+        f"but {len(rows_visible_to_a)} row(s) were visible"
+    )

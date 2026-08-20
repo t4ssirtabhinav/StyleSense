@@ -856,6 +856,39 @@ export type Database = {
           },
         ]
       }
+      suggestion_narration_cache: {
+        Row: {
+          created_at: string
+          engine_version: string
+          expires_at: string
+          hit_count: number
+          language: string
+          narrations: Json
+          occasion_key: string
+          signature_hash: string
+        }
+        Insert: {
+          created_at?: string
+          engine_version: string
+          expires_at: string
+          hit_count?: number
+          language?: string
+          narrations: Json
+          occasion_key: string
+          signature_hash: string
+        }
+        Update: {
+          created_at?: string
+          engine_version?: string
+          expires_at?: string
+          hit_count?: number
+          language?: string
+          narrations?: Json
+          occasion_key?: string
+          signature_hash?: string
+        }
+        Relationships: []
+      }
       suggestion_outcomes: {
         Row: {
           client_occurred_at: string | null
@@ -1136,12 +1169,16 @@ export type Database = {
           category: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary: string | null
           color_secondary: string | null
+          condition: string | null
           cost_per_wear: number | null
           created_at: string | null
+          custom_tags: string[]
+          do_not_style: boolean
           fabric: string | null
           id: string
           image_clean_url: string | null
           image_url: string
+          is_archived: boolean
           is_favourite: boolean | null
           last_worn_at: string | null
           occasion_tags: string[] | null
@@ -1149,6 +1186,7 @@ export type Database = {
           processing_status: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date: string | null
           purchase_price: number | null
+          render_transform: Json | null
           season_tags: string[] | null
           subcategory: string | null
           thumbnail_url: string | null
@@ -1162,12 +1200,16 @@ export type Database = {
           category?: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary?: string | null
           color_secondary?: string | null
+          condition?: string | null
           cost_per_wear?: number | null
           created_at?: string | null
+          custom_tags?: string[]
+          do_not_style?: boolean
           fabric?: string | null
           id?: string
           image_clean_url?: string | null
           image_url: string
+          is_archived?: boolean
           is_favourite?: boolean | null
           last_worn_at?: string | null
           occasion_tags?: string[] | null
@@ -1175,6 +1217,7 @@ export type Database = {
           processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
           purchase_price?: number | null
+          render_transform?: Json | null
           season_tags?: string[] | null
           subcategory?: string | null
           thumbnail_url?: string | null
@@ -1188,12 +1231,16 @@ export type Database = {
           category?: Database["public"]["Enums"]["wardrobe_category"] | null
           color_primary?: string | null
           color_secondary?: string | null
+          condition?: string | null
           cost_per_wear?: number | null
           created_at?: string | null
+          custom_tags?: string[]
+          do_not_style?: boolean
           fabric?: string | null
           id?: string
           image_clean_url?: string | null
           image_url?: string
+          is_archived?: boolean
           is_favourite?: boolean | null
           last_worn_at?: string | null
           occasion_tags?: string[] | null
@@ -1201,6 +1248,7 @@ export type Database = {
           processing_status?: Database["public"]["Enums"]["wardrobe_processing_status"]
           purchase_date?: string | null
           purchase_price?: number | null
+          render_transform?: Json | null
           season_tags?: string[] | null
           subcategory?: string | null
           thumbnail_url?: string | null
@@ -1283,6 +1331,12 @@ export type Database = {
           cutoff: string
           retention_days: number
           sessions_deleted: number
+        }[]
+      }
+      purge_suggestion_narration_cache: {
+        Args: { p_batch_size?: number; p_max_batches?: number }
+        Returns: {
+          rows_deleted: number
         }[]
       }
       suggestion_log_retention_days: { Args: never; Returns: number }
