@@ -12,10 +12,16 @@ failure of the whole scoring pipeline over one registry read.
 then ``snapshot.aliases`` (alias -> key -> row) -- mirrors the SQL-side
 normalisation function's (014's) step-2-before-step-3 resolution order,
 WITHOUT writing to the SQL-side unknown-slug capture table (this is a
-read-only hot-path consumer; logging every fallback category -- 100% of
-them today, since no live ``wardrobe_items.category`` value resolves
-through ``garment_types`` yet -- would spam that table for no review value,
-see ``BL-132``).
+read-only hot-path consumer). **SS-044** (migration
+``022_garment_category_resolution.sql``) seeded a ``garment_type_aliases``
+row for every one of the 21 live ``wardrobe_category`` enum values, closing
+``BL-132`` -- a fallback-path miss is no longer the 100%-of-the-time case it
+was before that migration landed; logging every miss would still spam the
+SQL-side unknown-slug capture table for no review value on the residual
+cases (a category value outside the live enum, or the near-zero
+pre-022-migration window), so this adapter still deliberately does not
+write to that capture table -- the read-only-consumer posture is unchanged
+by SS-044, only the miss RATE is.
 
 Module-scope singleton, constructed with ZERO I/O -- mirrors
 ``app_config_service``'s precedent exactly.
@@ -66,9 +72,7 @@ def _to_garment_attributes(row: GarmentTypeRow) -> GarmentAttributes | None:
             volume_class=volume_class,
         )
     except Exception as exc:  # noqa: BLE001 -- never break the hot scoring loop over one bad row
-        logger.warning(
-            "garment_registry_row_invalid", extra={"key": row.key, "error": str(exc)}
-        )
+        logger.warning("garment_registry_row_invalid", extra={"key": row.key, "error": str(exc)})
         return None
 
 

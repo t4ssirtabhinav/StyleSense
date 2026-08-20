@@ -1416,19 +1416,40 @@ def test_garment_normalize_one_keeps_and_logs_unknown(db_conn: Any) -> None:
 def test_garment_log_unknown_increments_on_repeat(db_conn: Any) -> None:
     probe_slug = f"probe_{uuid.uuid4().hex[:8]}"
     with db_conn.cursor() as cur:
-        cur.execute(
-            "SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,)
-        )
-        cur.execute(
-            "SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,)
-        )
-        cur.execute(
-            "SELECT occurrences FROM garment_unknown_types WHERE slug = %s", (probe_slug,)
-        )
+        cur.execute("SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,))
+        cur.execute("SELECT public.garment_log_unknown(%s, 'test', NULL)", (probe_slug,))
+        cur.execute("SELECT occurrences FROM garment_unknown_types WHERE slug = %s", (probe_slug,))
         rows = cur.fetchall()
 
     assert len(rows) == 1, "atomic upsert must never produce two rows for the same slug"
     assert rows[0][0] == 2
+
+
+# ==========================================================================
+# SS-044 T10 -- 022_garment_category_resolution.sql structural guards
+# (BL-156's structural guard: at least one `feet`-slot row now exists; and
+# no `register` was seeded empty). Skipped, like the rest of this module,
+# unless psycopg2 and SUPABASE_DB_URL are both available.
+# ==========================================================================
+
+
+def test_garment_types_has_at_least_one_feet_slot_row(db_conn: Any) -> None:
+    """BL-156's structural guard -- 014 seeded zero `feet`-slot rows; 022
+    must have added some (the 4 footwear buckets plus the 9 fine-grained
+    children)."""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM garment_types WHERE slot = 'feet'")
+        (count,) = cur.fetchone()
+    assert count >= 1, "expected at least one slot='feet' garment_types row after 022"
+
+
+def test_garment_types_no_row_has_an_empty_register(db_conn: Any) -> None:
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT key FROM garment_types WHERE cardinality(register) = 0")
+        offenders = [row[0] for row in cur.fetchall()]
+    assert offenders == [], (
+        f"rows with an empty register (should be impossible, CHECK-enforced): {offenders}"
+    )
 
 
 def test_garment_normalisation_functions_are_security_definer_with_pinned_search_path(
@@ -2239,7 +2260,9 @@ def test_pattern_and_fabric_aliases_are_disjoint_from_their_keys(db_conn: Any) -
 
 def test_fabric_weight_check_is_closed(db_conn: Any) -> None:
     with db_conn.cursor() as cur, pytest.raises(psycopg2.errors.CheckViolation):
-        cur.execute("INSERT INTO fabrics (key, label, weight) VALUES ('probe_weight', 'Probe', 'bogus')")
+        cur.execute(
+            "INSERT INTO fabrics (key, label, weight) VALUES ('probe_weight', 'Probe', 'bogus')"
+        )
     db_conn.rollback()
 
     with db_conn.cursor() as cur:
@@ -2320,9 +2343,7 @@ def test_pattern_canonical_key_wins_over_a_colliding_alias(db_conn: Any) -> None
     Postgres has no cross-table CHECK. Mirrors 007's own test of the same
     intent for occasions."""
     with db_conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO pattern_aliases (alias, pattern_key) VALUES ('solid', 'floral')"
-        )
+        cur.execute("INSERT INTO pattern_aliases (alias, pattern_key) VALUES ('solid', 'floral')")
         cur.execute("SELECT public.pattern_normalize_one('solid')")
         assert cur.fetchone()[0] == "solid"
 
@@ -2402,7 +2423,9 @@ def test_attribute_log_unknown_increments_on_repeat(db_conn: Any) -> None:
         )
         rows = cur.fetchall()
 
-    assert len(rows) == 1, "atomic upsert must never produce two rows for the same (attribute, slug)"
+    assert len(rows) == 1, (
+        "atomic upsert must never produce two rows for the same (attribute, slug)"
+    )
     assert rows[0][0] == 2
 
 
@@ -2637,7 +2660,9 @@ def test_wear_stats_sync_update_does_not_re_enter_the_normalisation_trigger(db_c
     assert pattern_after == pattern_before
     assert fabric_after == fabric_before == probe_fabric
     assert wear_count == 1
-    assert occurrences == 1, "the wear-stats sync UPDATE must not re-enter the pattern/fabric trigger"
+    assert occurrences == 1, (
+        "the wear-stats sync UPDATE must not re-enter the pattern/fabric trigger"
+    )
 
 
 def test_occasion_normalisation_still_works_alongside_the_new_triggers(db_conn: Any) -> None:
@@ -2710,7 +2735,9 @@ def test_no_foreign_key_from_wardrobe_items_pattern_or_fabric(db_conn: Any) -> N
         )
         rows = cur.fetchall()
 
-    assert rows == [], f"no FK from wardrobe_items to patterns/fabrics may ever exist, found: {rows}"
+    assert rows == [], (
+        f"no FK from wardrobe_items to patterns/fabrics may ever exist, found: {rows}"
+    )
 
 
 def test_every_existing_item_value_is_a_key_or_a_captured_unknown(db_conn: Any) -> None:
@@ -2844,8 +2871,12 @@ def test_garment_types_and_fabrics_rls_grant_no_per_user_ownership(db_conn: Any)
 
     assert set(quals) == {"garment_types", "garment_type_aliases", "fabrics"}
     for table, qual in quals.items():
-        assert "auth.uid()" not in (qual or ""), f"{table}'s SELECT policy unexpectedly scopes by owner"
-        assert "authenticated" in (qual or ""), f"{table}'s SELECT policy does not mention 'authenticated'"
+        assert "auth.uid()" not in (qual or ""), (
+            f"{table}'s SELECT policy unexpectedly scopes by owner"
+        )
+        assert "authenticated" in (qual or ""), (
+            f"{table}'s SELECT policy does not mention 'authenticated'"
+        )
 
 
 # ==========================================================================

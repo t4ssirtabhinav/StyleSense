@@ -6,6 +6,7 @@ from datetime import date
 
 from adapters.interfaces import FabricAttributes
 from services.engine_v2_attribute_scoring import (
+    category_completeness_score,
     fabric_weather_score,
     register_coherence_score,
     score_assembled_candidate,
@@ -33,7 +34,9 @@ def _item(
     return WardrobeItemInput(id=id, category=category, color_primary=color, fabric=fabric)  # type: ignore[arg-type]
 
 
-def _occasion(*, key: str = "office", kind: str = "professional", formality: int = 6) -> OccasionStylingInput:
+def _occasion(
+    *, key: str = "office", kind: str = "professional", formality: int = 6
+) -> OccasionStylingInput:
     return OccasionStylingInput(key=key, kind=kind, formality=formality)  # type: ignore[arg-type]
 
 
@@ -171,8 +174,12 @@ def test_register_coherence_unresolved_pair_is_neutral() -> None:
 _FABRIC_ATTRS = {
     "silk": FabricAttributes(key="silk", weight="medium", breathability=5, season_affinity=None),
     "khadi": FabricAttributes(key="khadi", weight="light", breathability=9, season_affinity=None),
-    "cotton": FabricAttributes(key="cotton", weight="light", breathability=9, season_affinity=("summer",)),
-    "wool": FabricAttributes(key="wool", weight="heavy", breathability=1, season_affinity=("winter",)),
+    "cotton": FabricAttributes(
+        key="cotton", weight="light", breathability=9, season_affinity=("summer",)
+    ),
+    "wool": FabricAttributes(
+        key="wool", weight="heavy", breathability=1, season_affinity=("winter",)
+    ),
 }
 
 
@@ -191,7 +198,9 @@ def test_fabric_weather_score_no_populated_fabric_anywhere_is_1() -> None:
     assert fabric_weather_score([item], _FABRIC_ATTRS, season="summer") == 1.0
 
 
-def test_fabric_weather_score_silk_khadi_season_signal_skipped_but_breathability_contributes() -> None:
+def test_fabric_weather_score_silk_khadi_season_signal_skipped_but_breathability_contributes() -> (
+    None
+):
     """BL-125's decided gate: season_affinity IS NULL (silk, khadi) skips
     ONLY that sub-signal; breathability still contributes."""
     silk_item = _item("silk_item", fabric="silk")
@@ -252,6 +261,130 @@ def test_score_assembled_candidate_rule_scores_match_engine_v2_weights_exactly()
     assert rule_names == set(ENGINE_V2_RULE_WEIGHTS)
     assert 0.0 <= scored.total_score <= 1.0
     assert scored.item_ids == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# SS-044 T7-T9 -- real 21-value enum categories through a fixture registry
+# that mirrors migration 022, not registry-native keys. Guards BL-132's
+# actual closure: these two terms produce non-neutral output against real
+# enum categories, and category_completeness_score (CATEGORY_SLOT) is
+# unchanged by the migration (finding 6's hazard).
+# ---------------------------------------------------------------------------
+
+
+def _registry_022_lookup(category: str) -> GarmentAttributes | None:
+    """A fixture ``garment_lookup`` mirroring what
+    ``GarmentRegistryAdapter.get_garment_attributes`` resolves post-022,
+    for exactly the categories T7-T9 use -- transcribed from
+    ``docs/tickets/SS-044-design.md`` section 1's alias table and section
+    3's ``volume_class`` backfill lists, not the registry-native fixtures
+    ``_attrs`` above uses."""
+    table: dict[str, GarmentAttributes] = {
+        "ethnic_lehenga": GarmentAttributes(
+            key="lehenga_choli_set",
+            assembly_slot="one_piece",
+            garment_slot="set",
+            layer=0,
+            register=("ethnic",),
+            base_formality=9,
+            pairs_with=(),
+            requires_with=(),
+            excludes_with=(),
+            volume_class="voluminous",
+        ),
+        "ethnic_anarkali": GarmentAttributes(
+            key="anarkali",
+            assembly_slot="top",
+            garment_slot="torso_base",
+            layer=0,
+            register=("ethnic",),
+            base_formality=7,
+            pairs_with=(),
+            requires_with=(),
+            excludes_with=(),
+            volume_class="voluminous",
+        ),
+        "western_top": GarmentAttributes(
+            key="modern_top",
+            assembly_slot="top",
+            garment_slot="torso_base",
+            layer=0,
+            register=("western", "athleisure", "streetwear"),
+            base_formality=2,
+            pairs_with=(),
+            requires_with=(),
+            excludes_with=(),
+            volume_class="fitted",
+        ),
+        "ethnic_kurta": GarmentAttributes(
+            key="kurta",
+            assembly_slot="top",
+            garment_slot="torso_base",
+            layer=0,
+            register=("ethnic", "indo_western"),
+            base_formality=4,
+            pairs_with=(),
+            requires_with=(),
+            excludes_with=(),
+            volume_class="relaxed",
+        ),
+        "ethnic_dupatta": GarmentAttributes(
+            key="dupatta",
+            assembly_slot="accessory",
+            garment_slot="drape",
+            layer=2,
+            register=("ethnic",),
+            base_formality=5,
+            pairs_with=(),
+            requires_with=(),
+            excludes_with=(),
+            volume_class="relaxed",
+        ),
+    }
+    return table.get(category)
+
+
+def test_t7_volume_balance_score_non_neutral_for_two_voluminous_enum_categories() -> None:
+    """AC #3, first half: a real (21-value enum) two-item candidate of
+    ethnic_lehenga + ethnic_anarkali -- both resolve to voluminous, neither
+    streetwear -- scores < 1.0, proving the term is no longer structurally
+    neutral once 022 lands."""
+    a = _item("a", category="ethnic_lehenga")
+    b = _item("b", category="ethnic_anarkali")
+    score = volume_balance_score([a, b], _registry_022_lookup)
+    assert score < 1.0
+
+
+def test_t8_register_coherence_score_low_for_disjoint_and_high_for_shared_register() -> None:
+    """AC #3, second half -- verified independently of T7, per the
+    ticket's own instruction."""
+    western = _item("a", category="western_top")
+    ethnic = _item("b", category="ethnic_kurta")
+    assert register_coherence_score([western, ethnic], _registry_022_lookup) == 0.5
+
+    kurta = _item("c", category="ethnic_kurta")
+    dupatta = _item("d", category="ethnic_dupatta")
+    assert register_coherence_score([kurta, dupatta], _registry_022_lookup) == 1.0
+
+
+def test_t9_category_completeness_score_unchanged_for_real_enum_wardrobe() -> None:
+    """Regression guard (finding 6's hazard): CATEGORY_SLOT must not have
+    been disturbed by the migration -- category_completeness_score's
+    footwear/outerwear detection still works against real enum values."""
+    occasion = _occasion(kind="professional")
+    rules = resolve_styling_rules(occasion)
+    items_with_footwear = [
+        _item("a", category="western_top"),
+        _item("b", category="western_bottom"),
+        _item("c", category="footwear_formal"),
+    ]
+    items_without_footwear = [
+        _item("a", category="western_top"),
+        _item("b", category="western_bottom"),
+    ]
+    with_footwear_score = category_completeness_score(items_with_footwear, rules)
+    without_footwear_score = category_completeness_score(items_without_footwear, rules)
+    assert with_footwear_score > without_footwear_score
 
 
 def test_score_assembled_candidate_carries_gap_flags_through() -> None:
