@@ -422,3 +422,89 @@ async def test_delete_item_returns_false_when_no_row_matched(
         deleted = await repo.delete_item(jwt="caller-jwt", item_id="item-1")
 
     assert deleted is False
+
+
+# --- SS-040: get_items_for_styling's select list must carry the lifecycle
+# columns -- this is the single point of failure for the whole feature; if
+# this test is ever reverted/weakened, do_not_style/is_archived silently
+# become a permanent no-op even though every other layer is wired. ---------
+
+
+async def test_get_items_for_styling_selects_lifecycle_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        await repo.get_items_for_styling(jwt="caller-jwt", user_id="user-1")
+
+    select_call = next(c for c in fake_client.calls if c[0] == "select")
+    selected = select_call[1][0]
+    for column in ("do_not_style", "is_archived", "condition", "custom_tags"):
+        assert column in selected
+
+
+# --- SS-048: get_items_for_rails --------------------------------------------
+
+
+async def test_get_items_for_rails_selects_created_at_and_lifecycle_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(response_data=[])
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        await repo.get_items_for_rails(jwt="caller-jwt", user_id="user-1")
+
+    assert fake_client.postgrest.auth_calls == ["caller-jwt"]
+    assert fake_client.table_names == ["wardrobe_items"]
+    select_call = next(c for c in fake_client.calls if c[0] == "select")
+    selected = select_call[1][0]
+    # `created_at` is the field get_items_for_styling's own select list
+    # omits -- the single point of failure for SS-048's newest_pieces rail.
+    for column in ("created_at", "do_not_style", "is_archived", "wear_count", "color_primary"):
+        assert column in selected
+
+
+async def test_get_items_for_rails_returns_rows_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
+
+    fake_client = _FakeAsyncClient(
+        response_data=[
+            {
+                "id": "item-1",
+                "category": "ethnic_kurta",
+                "color_primary": "#1E3A8A",
+                "created_at": "2026-08-01T00:00:00Z",
+                "wear_count": 0,
+                "do_not_style": False,
+                "is_archived": False,
+            }
+        ]
+    )
+    repo = SupabaseWardrobeRepository()
+
+    with _patch_acreate_client(fake_client):
+        rows = await repo.get_items_for_rails(jwt="caller-jwt", user_id="user-1")
+
+    assert rows == [
+        {
+            "id": "item-1",
+            "category": "ethnic_kurta",
+            "color_primary": "#1E3A8A",
+            "created_at": "2026-08-01T00:00:00Z",
+            "wear_count": 0,
+            "do_not_style": False,
+            "is_archived": False,
+        }
+    ]

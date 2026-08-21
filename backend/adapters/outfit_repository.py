@@ -135,3 +135,13 @@ class SupabaseOutfitRepository(IOutfitRepository):
         )
         rows = cast(list[dict[str, Any]], response.data or [])
         return len(rows) > 0
+
+    async def get_item_ids_for_user(self, *, jwt: str, user_id: str) -> list[list[str]]:
+        """(SS-048) RLS-scoped via the caller's own JWT (``user_owns_outfits``
+        already restricts this to their own rows -- no explicit ``.eq``
+        filter needed, mirrors every other method in this repository's
+        family). Returns one ``item_ids`` array per ``outfits`` row."""
+        client = await _client_for(jwt)
+        response = await client.table("outfits").select("item_ids").execute()
+        rows = cast(list[dict[str, Any]], response.data or [])
+        return [cast(list[str], row.get("item_ids") or []) for row in rows]

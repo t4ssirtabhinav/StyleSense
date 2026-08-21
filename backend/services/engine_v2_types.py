@@ -113,6 +113,9 @@ class EligibilityResult:
     # (SS-022) True when a heavy-rain white/silk exclusion would have
     # emptied the eligible pool and was relaxed. Additive, default False.
     weather_exclusions_relaxed: bool = False
+    # (SS-040) Count of DISTINCT items removed by the do_not_style/is_archived
+    # lifecycle filter. An item with both flags set counts ONCE.
+    excluded_lifecycle: int = 0
 
 
 @dataclass(frozen=True)

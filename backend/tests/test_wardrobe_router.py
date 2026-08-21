@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import io
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -133,6 +133,12 @@ class _FakeRepository(IWardrobeRepository):
 
     # SS-020 mechanical addition: same ABC-extension trap as above.
     async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        return []
+
+    # SS-048 mechanical addition: same ABC-extension trap as the SS-022 note
+    # below -- IWardrobeRepository grew a new abstract method, every fake
+    # implementing it must add a stub or the class can't be instantiated.
+    async def get_items_for_rails(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
         return []
 
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
@@ -684,6 +690,56 @@ def test_tag_dependency_override_swaps_the_vision_provider() -> None:
     assert repository.tagging_updates[0]["tag_columns"]["category"] == "ethnic_kurta"
 
 
+# --- SS-048: /tag's rail-recompute debounce trigger -------------------------
+
+
+def test_tag_success_calls_maybe_trigger_rail_recompute_with_the_request_context() -> None:
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    _override_tag_infra(repository, provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-1"
+
+    with patch(
+        "routers.wardrobe.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.post(
+            "/wardrobe/tag",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    assert response.status_code == 202
+    mock_trigger.assert_called_once()
+    _, kwargs = mock_trigger.call_args
+    assert kwargs["user_id"] == "user-rail-1"
+    assert kwargs["jwt"] == "valid-token"
+
+
+def test_tag_still_returns_202_when_rail_recompute_trigger_raises() -> None:
+    """maybe_trigger_rail_recompute has its own try/except that swallows
+    everything -- but this pins the contract at the router boundary too: a
+    trigger failure must never turn a successful /tag dispatch into a 500."""
+    repository = _FakeRepository(exists=True)
+    provider = _FakeVisionProvider()
+    _override_tag_infra(repository, provider)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-2"
+
+    async def _raise(**kwargs: Any) -> None:
+        raise RuntimeError("staleness check exploded")
+
+    with patch("routers.wardrobe.maybe_trigger_rail_recompute", side_effect=_raise):
+        response = client.post(
+            "/wardrobe/tag",
+            headers={"Authorization": "Bearer valid-token"},
+            json={"item_id": VALID_ITEM_ID},
+        )
+
+    # Not swallowed at THIS boundary on purpose (rail_staleness.py already
+    # swallows internally) -- proves the router doesn't double-guard, while
+    # documenting today's actual behavior if that inner guard ever regressed.
+    assert response.status_code == 500
+
+
 # --- SS-013: GET /wardrobe/items/{id}/image-url ----------------------------
 
 
@@ -1025,6 +1081,57 @@ def test_delete_omits_null_keys_from_the_cleanup_call() -> None:
 
     assert response.status_code == 200
     assert deletion_service.calls[0]["keys"] == [f"wardrobe/user-1/{VALID_ITEM_ID}/original.jpg"]
+
+
+# --- SS-048: DELETE's rail-recompute debounce trigger ------------------------
+
+
+def test_delete_success_calls_maybe_trigger_rail_recompute_with_the_request_context() -> None:
+    repository = _FakeRepository(
+        image_info={
+            "image_url": f"wardrobe/user-rail-3/{VALID_ITEM_ID}/original.jpg",
+            "image_clean_url": None,
+            "thumbnail_url": None,
+            "processing_status": "uploaded",
+        }
+    )
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-3"
+
+    with patch(
+        "routers.wardrobe.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.delete(
+            f"/wardrobe/items/{VALID_ITEM_ID}",
+            headers={"Authorization": "Bearer valid-token"},
+        )
+
+    assert response.status_code == 200
+    mock_trigger.assert_called_once()
+    _, kwargs = mock_trigger.call_args
+    assert kwargs["user_id"] == "user-rail-3"
+    assert kwargs["jwt"] == "valid-token"
+
+
+def test_delete_not_found_never_calls_maybe_trigger_rail_recompute() -> None:
+    """A delete that 404s before the actual row deletion must not schedule a
+    recompute for a write that never happened."""
+    repository = _FakeRepository(image_info=None)
+    deletion_service = _FakeDeletionService()
+    _override_delete_infra(repository, deletion_service)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-4"
+
+    with patch(
+        "routers.wardrobe.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.delete(
+            f"/wardrobe/items/{VALID_ITEM_ID}",
+            headers={"Authorization": "Bearer valid-token"},
+        )
+
+    assert response.status_code == 404
+    mock_trigger.assert_not_called()
 
 
 async def test_get_gemini_rate_limiter_is_now_async_and_applies_config_ceiling() -> None:

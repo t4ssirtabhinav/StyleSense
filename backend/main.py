@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import outfit_suggestions, wardrobe
+from routers import outfit_suggestions, suggestion_rails, wardrobe
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -35,6 +35,7 @@ app.add_middleware(
 
 app.include_router(outfit_suggestions.router)
 app.include_router(wardrobe.router)
+app.include_router(suggestion_rails.router)
 
 
 @app.get("/health")
