@@ -191,6 +191,19 @@ class SupabaseWardrobeRepository(IWardrobeRepository):
         )
         return cast(list[dict[str, Any]], response.data or [])
 
+    async def get_items_for_rails(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        """(SS-048) Fetches ALL rows regardless of ``processing_status`` --
+        same rationale as ``get_items_for_styling``. Separate select list
+        (adds ``created_at``, drops the styling-only columns
+        ``get_items_for_styling`` needs but the rails layer does not)."""
+        client = await _client_for(jwt)
+        response = (
+            await client.table("wardrobe_items")
+            .select("id, category, color_primary, created_at, wear_count, do_not_style, is_archived")
+            .execute()
+        )
+        return cast(list[dict[str, Any]], response.data or [])
+
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         client = await _client_for(jwt)
         response = await client.table("users").select("style_preferences").limit(1).execute()

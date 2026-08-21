@@ -169,3 +169,23 @@ WEATHER_HEAVY_RAIN_SPEC: ConfigSpec[WeatherHeavyRainConfig] = ConfigSpec(
     model=WeatherHeavyRainConfig,
     default=WeatherHeavyRainConfig(),
 )
+
+
+class RailPrecomputeDebounceConfig(BaseModel):
+    """(SS-048) The debounce window ``services.rail_staleness
+    .maybe_trigger_rail_recompute`` uses to decide whether a wardrobe write
+    should schedule a ``suggestion_rails`` recompute. ``600`` (10 minutes)
+    transcribed verbatim from ``docs/competitive/08-CHEAP-SUGGESTION-ENGINE.md``
+    §5.2's own precompute-schedule table ("On wardrobe write (debounced ~10
+    min)"), not invented. No seed migration -- a missing/malformed row
+    degrades to this coded default, same posture as
+    ``SuggestionNarrationCacheTtlConfig``."""
+
+    seconds: int = 600
+
+
+RAIL_PRECOMPUTE_DEBOUNCE_SPEC: ConfigSpec[RailPrecomputeDebounceConfig] = ConfigSpec(
+    key="rail_precompute_debounce_seconds",
+    model=RailPrecomputeDebounceConfig,
+    default=RailPrecomputeDebounceConfig(),
+)
