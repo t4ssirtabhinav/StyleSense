@@ -123,6 +123,11 @@ class _FakeWardrobeRepo(IWardrobeRepository):
     async def get_city(self, *, jwt: str, user_id: str) -> str | None:
         return None
 
+    # SS-048 mechanical addition: same ABC-extension trap as above -- not
+    # exercised by this script's own latency path (no rail computed here).
+    async def get_items_for_rails(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
 
 class _FakeOccasionRepo(IOccasionRepository):
     def __init__(self, snapshot: OccasionRegistrySnapshot) -> None:

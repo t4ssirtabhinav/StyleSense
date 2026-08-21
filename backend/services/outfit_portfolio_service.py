@@ -40,6 +40,7 @@ from services.engine_v2_effort_dial import resolve_effort_tier_for_request
 from services.engine_v2_portfolio import compute_outfit_fingerprint
 from services.ist_window import ist_today
 from services.occasion_normalizer import OccasionNormalizer
+from services.occasion_resolution import resolve_occasion_input
 from services.price_table import PriceTable
 from services.provider_quota import ProviderQuotaTracker
 from services.routing_mix_monitor import RoutingMixMonitor
@@ -52,6 +53,7 @@ from services.suggestion_narration_cache import (
     compute_narration_signature,
     signature_order,
 )
+from services.wardrobe_fetch import fetch_wardrobe_for_styling
 from services.weather_rules import WeatherContext, weather_cache_bucket
 from services.weather_service import WeatherService
 
@@ -60,9 +62,6 @@ logger = logging.getLogger(__name__)
 # (SS-022) Headroom over OpenMeteoWeatherAdapter's own 3.0s provider timeout
 # -- covers the cache round-trip + provider round-trip + users.city DB read.
 _WEATHER_RESOLVE_TIMEOUT_SECONDS = 4.0
-
-_FALLBACK_OCCASION_KIND = "everyday"
-_FALLBACK_OCCASION_FORMALITY = 5
 
 
 class OutfitPortfolioService:
@@ -281,48 +280,23 @@ class OutfitPortfolioService:
             return None
 
     async def _resolve_occasion(self, raw_occasion: str, *, jwt: str) -> OccasionStylingInput:
-        """§2 step 1. An unresolvable/unknown occasion (not in
-        ``snapshot.kinds``, no alias hit) still gets a full
-        kind/formality/styling_rules triple -- degrades to
-        ``kind="everyday", formality=5, styling_rules={}`` rather than a
-        400/500 (mirrors ``default_styling_rules_for``'s own kind-based
-        fallback philosophy). The occasion key itself is passed through
-        VERBATIM (not replaced with a sentinel) so downstream novelty/
-        gap-flag logging still records the unmodelled key for later review."""
-        snapshot = await self._occasion_normalizer.get_registry(jwt=jwt)
-        resolved_key = self._occasion_normalizer.resolve(raw_occasion, snapshot)
-        if not resolved_key:
-            resolved_key = _FALLBACK_OCCASION_KIND
-
-        if resolved_key in snapshot.kinds:
-            return OccasionStylingInput(
-                key=resolved_key,
-                kind=snapshot.kinds[resolved_key],  # type: ignore[arg-type]
-                formality=snapshot.formalities.get(resolved_key, _FALLBACK_OCCASION_FORMALITY),
-                styling_rules=snapshot.styling_rules.get(resolved_key, {}),
-            )
-
-        return OccasionStylingInput(
-            key=resolved_key,
-            kind=_FALLBACK_OCCASION_KIND,  # type: ignore[arg-type]
-            formality=_FALLBACK_OCCASION_FORMALITY,
-            styling_rules={},
+        """(SS-048) Delegates to ``services.occasion_resolution
+        .resolve_occasion_input`` -- extracted VERBATIM so the rail
+        precompute job (``services/rail_precompute_service.py``) resolves an
+        occasion the exact same way this live endpoint does, not a parallel
+        copy. Pure extract-method refactor: behavior is byte-identical to
+        the pre-SS-048 body (see that module's own docstring)."""
+        return await resolve_occasion_input(
+            raw_occasion, jwt=jwt, occasion_normalizer=self._occasion_normalizer
         )
 
     async def _fetch_wardrobe(self, *, jwt: str, user_id: str) -> dict[str, WardrobeItemInput]:
-        rows = await self._wardrobe_repo.get_items_for_styling(jwt=jwt, user_id=user_id)
-        items: dict[str, WardrobeItemInput] = {}
-        for row in rows:
-            try:
-                item = WardrobeItemInput.model_validate(row)
-            except Exception as exc:  # noqa: BLE001 -- one malformed row must never fail the whole request
-                logger.warning(
-                    "outfit_portfolio_wardrobe_row_skipped",
-                    extra={"user_id": user_id, "error": str(exc)},
-                )
-                continue
-            items[item.id] = item
-        return items
+        """(SS-048) Delegates to ``services.wardrobe_fetch
+        .fetch_wardrobe_for_styling`` -- extracted VERBATIM, same rationale
+        as ``_resolve_occasion`` above."""
+        return await fetch_wardrobe_for_styling(
+            jwt=jwt, user_id=user_id, wardrobe_repo=self._wardrobe_repo
+        )
 
     async def _resolve_preferences(
         self, override: dict[str, Any] | None, *, jwt: str, user_id: str

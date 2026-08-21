@@ -45,6 +45,12 @@ class _FakeWardrobeRepo(IWardrobeRepository):
     async def get_items_for_styling(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
+    # SS-048 mechanical addition: same ABC-extension trap as the SS-022 note
+    # below -- IWardrobeRepository grew a new abstract method, every fake
+    # implementing it must add a stub or the class can't be instantiated.
+    async def get_items_for_rails(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         raise NotImplementedError
 

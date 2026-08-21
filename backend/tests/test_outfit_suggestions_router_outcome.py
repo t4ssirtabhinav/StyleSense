@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -195,3 +196,90 @@ def test_service_unexpected_exception_maps_to_500() -> None:
         json={"session_id": "s1", "rank": 1, "outcome_type": "saved"},
     )
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# SS-048 -- /outcome's rail-recompute debounce trigger (saved/worn only)
+# ---------------------------------------------------------------------------
+
+
+def test_saved_outcome_calls_maybe_trigger_rail_recompute() -> None:
+    fake_service = _FakeOutfitOutcomeService()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-1"
+    app.dependency_overrides[get_outfit_outcome_service] = lambda: fake_service
+
+    with patch(
+        "routers.outfit_suggestions.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.post(
+            "/outfit-suggestions/outcome",
+            headers={"Authorization": "Bearer any-token"},
+            json={"session_id": "s1", "rank": 1, "outcome_type": "saved"},
+        )
+
+    assert response.status_code == 200
+    mock_trigger.assert_called_once()
+    _, kwargs = mock_trigger.call_args
+    assert kwargs["user_id"] == "user-rail-1"
+    assert kwargs["jwt"] == "any-token"
+
+
+def test_worn_outcome_calls_maybe_trigger_rail_recompute() -> None:
+    fake_service = _FakeOutfitOutcomeService(
+        result={"outfit_id": "outfit-1", "outcome_recorded": True, "already_saved": False}
+    )
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-2"
+    app.dependency_overrides[get_outfit_outcome_service] = lambda: fake_service
+
+    with patch(
+        "routers.outfit_suggestions.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.post(
+            "/outfit-suggestions/outcome",
+            headers={"Authorization": "Bearer any-token"},
+            json={"session_id": "s1", "rank": 1, "outcome_type": "worn"},
+        )
+
+    assert response.status_code == 200
+    mock_trigger.assert_called_once()
+
+
+def test_dismissed_outcome_does_not_call_maybe_trigger_rail_recompute() -> None:
+    fake_service = _FakeOutfitOutcomeService(
+        result={"outfit_id": None, "outcome_recorded": True, "already_saved": False}
+    )
+    app.dependency_overrides[get_current_user_id] = lambda: "user-rail-3"
+    app.dependency_overrides[get_outfit_outcome_service] = lambda: fake_service
+
+    with patch(
+        "routers.outfit_suggestions.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.post(
+            "/outfit-suggestions/outcome",
+            headers={"Authorization": "Bearer any-token"},
+            json={"session_id": "s1", "rank": 1, "outcome_type": "dismissed"},
+        )
+
+    assert response.status_code == 200
+    mock_trigger.assert_not_called()
+
+
+def test_cross_tenant_not_found_does_not_call_maybe_trigger_rail_recompute() -> None:
+    """A 'saved' outcome that fails as not-found never actually wrote
+    anything -- must not schedule a recompute for a write that didn't
+    happen."""
+    fake_service = _FakeOutfitOutcomeService(raise_not_found=True)
+    app.dependency_overrides[get_current_user_id] = lambda: "attacker-user"
+    app.dependency_overrides[get_outfit_outcome_service] = lambda: fake_service
+
+    with patch(
+        "routers.outfit_suggestions.maybe_trigger_rail_recompute", new_callable=AsyncMock
+    ) as mock_trigger:
+        response = client.post(
+            "/outfit-suggestions/outcome",
+            headers={"Authorization": "Bearer any-token"},
+            json={"session_id": "victims-session", "rank": 1, "outcome_type": "saved"},
+        )
+
+    assert response.status_code == 404
+    mock_trigger.assert_not_called()

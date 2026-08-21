@@ -25,9 +25,17 @@ from typing import Any, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
 
-from adapters.interfaces import ICostLedger, IOccasionRepository, IRateLimiter, IWardrobeRepository
+from adapters.interfaces import (
+    ICostLedger,
+    IOccasionRepository,
+    IRateLimiter,
+    ISuggestionRailsRepository,
+    IWardrobeRepository,
+)
 from adapters.occasion_repository import SupabaseOccasionRepository
+from adapters.outfit_repository import SupabaseOutfitRepository
 from adapters.r2_storage import R2StorageClient
+from adapters.suggestion_rails_repository import SupabaseSuggestionRailsRepository
 from adapters.supabase_cost_ledger import SupabaseCostLedger
 from adapters.upstash_rate_limiter import UpstashRateLimiter
 from adapters.wardrobe_repository import SupabaseWardrobeRepository
@@ -42,10 +50,14 @@ from services.app_config_specs import GEMINI_QUOTA_CEILING_SPEC
 from services.circuit_breaker import CircuitBreaker
 from services.cost_budget_gate import CostBudgetGate, GateDecision
 from services.cost_config_specs import AI_PRICE_TABLE_SPEC
+from services.engine_v2 import build_default_engine_v2
+from services.garment_registry_adapter import garment_registry_adapter
 from services.gemini_rate_limiter import GeminiRateLimiter
 from services.ist_window import ist_today
 from services.occasion_normalizer import OccasionNormalizer
 from services.price_table import PriceTable
+from services.rail_precompute_service import RailPrecomputeService
+from services.rail_staleness import maybe_trigger_rail_recompute
 from services.rate_limiter import DailyRateLimiter
 from services.tag_cache import TagCache
 from services.wardrobe_bg_removal_service import MODEL as BG_REMOVAL_MODEL
@@ -75,6 +87,26 @@ _gemini_rate_limiter = GeminiRateLimiter()
 # TTL registry cache only pays for itself across requests. Holds no caller
 # credentials -- the JWT is a per-call argument.
 _occasion_normalizer = OccasionNormalizer(SupabaseOccasionRepository())
+
+# (SS-048) Same "zero-I/O at construction, real in-process state that only
+# means anything across requests" reasoning as _occasion_normalizer above --
+# each router builds its own repository instances (no shared mutable state
+# with routers/suggestion_rails.py itself), except garment_registry_adapter
+# and _engine_v2, which ARE deliberately shared module-level objects across
+# this backend (see services/engine_v2.py's own module docstring for the
+# former; the latter holds no per-request state, just wired dependencies).
+_rail_wardrobe_repository = SupabaseWardrobeRepository()
+_rail_outfit_repository = SupabaseOutfitRepository()
+_rails_repository = SupabaseSuggestionRailsRepository()
+_rail_engine_v2 = build_default_engine_v2()
+_rail_precompute_service = RailPrecomputeService(
+    engine=_rail_engine_v2,
+    wardrobe_repo=_rail_wardrobe_repository,
+    outfit_repo=_rail_outfit_repository,
+    garment_registry=garment_registry_adapter,
+    rails_repo=_rails_repository,
+    occasion_normalizer=_occasion_normalizer,
+)
 
 
 def _safe_bearer_token(authorization: str | None) -> str | None:
@@ -221,6 +253,16 @@ def get_deletion_service(
     storage: R2StorageClient = Depends(get_r2_storage_client),
 ) -> WardrobeDeletionService:
     return WardrobeDeletionService(storage)
+
+
+def get_rails_repository() -> ISuggestionRailsRepository:
+    """(SS-048) Backs the debounce staleness check both write-path call
+    sites below run before dispatching their own BackgroundTasks work."""
+    return _rails_repository
+
+
+def get_rail_precompute_service() -> RailPrecomputeService:
+    return _rail_precompute_service
 
 
 def get_tagging_service(
@@ -406,6 +448,8 @@ async def tag_wardrobe_item(
     service: WardrobeTaggingService = Depends(get_tagging_service),
     cost_budget_gate: CostBudgetGate = Depends(get_cost_budget_gate),
     config_snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
+    rails_repo: ISuggestionRailsRepository = Depends(get_rails_repository),
+    rail_precompute_service: RailPrecomputeService = Depends(get_rail_precompute_service),
 ) -> dict[str, Any]:
     jwt = _extract_bearer_token(authorization)
 
@@ -443,6 +487,22 @@ async def tag_wardrobe_item(
             request_id=request_id,
             reservation=gate_decision.reservation,
             price_table=price_table,
+        )
+
+        # (SS-048) Registered AFTER service.tag above -- BackgroundTasks runs
+        # its tasks sequentially, in registration order, so the debounced
+        # recompute (if triggered) runs on /tag's own completion, not
+        # racing it. Awaited directly (not itself a background task); a
+        # failed staleness check is swallowed inside this call and must
+        # never fail this request (see services/rail_staleness.py).
+        await maybe_trigger_rail_recompute(
+            jwt=jwt,
+            user_id=user_id,
+            background_tasks=background_tasks,
+            rails_repo=rails_repo,
+            rail_precompute_service=rail_precompute_service,
+            config_snapshot=config_snapshot,
+            app_config=app_config_service,
         )
 
         return {"status": "processing", "item_id": request.item_id}
@@ -557,6 +617,9 @@ async def delete_wardrobe_item(
     user_id: str = Depends(get_current_user_id),
     repository: IWardrobeRepository = Depends(get_wardrobe_repository),
     deletion_service: WardrobeDeletionService = Depends(get_deletion_service),
+    config_snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
+    rails_repo: ISuggestionRailsRepository = Depends(get_rails_repository),
+    rail_precompute_service: RailPrecomputeService = Depends(get_rail_precompute_service),
 ) -> dict[str, Any]:
     """SS-015 (resolves BL-068). Captures the item's three R2 keys *before*
     deleting the DB row, then deletes the row, then fires the storage
@@ -594,6 +657,18 @@ async def delete_wardrobe_item(
         ]
         background_tasks.add_task(
             deletion_service.cleanup_storage, user_id=user_id, item_id=item_id, keys=keys
+        )
+
+        # (SS-048) Same "registered after the write's own BackgroundTask,
+        # awaited directly, never fails this request" posture as /tag above.
+        await maybe_trigger_rail_recompute(
+            jwt=jwt,
+            user_id=user_id,
+            background_tasks=background_tasks,
+            rails_repo=rails_repo,
+            rail_precompute_service=rail_precompute_service,
+            config_snapshot=config_snapshot,
+            app_config=app_config_service,
         )
 
         return {"status": "deleted", "item_id": item_id}

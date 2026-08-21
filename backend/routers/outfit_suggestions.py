@@ -35,7 +35,12 @@ import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from adapters.interfaces import IOutfitRepository, ISuggestionLogRepository, IWardrobeRepository
+from adapters.interfaces import (
+    IOutfitRepository,
+    ISuggestionLogRepository,
+    ISuggestionRailsRepository,
+    IWardrobeRepository,
+)
 from adapters.occasion_repository import SupabaseOccasionRepository
 from adapters.open_meteo_weather_adapter import OpenMeteoWeatherAdapter
 from adapters.outfit_repository import SupabaseOutfitRepository
@@ -43,6 +48,7 @@ from adapters.suggestion_log_repository import SupabaseSuggestionLogRepository
 from adapters.suggestion_narration_cache_repository import (
     SupabaseSuggestionNarrationCacheRepository,
 )
+from adapters.suggestion_rails_repository import SupabaseSuggestionRailsRepository
 from adapters.upstash_rate_limiter import UpstashRateLimiter
 from adapters.wardrobe_repository import SupabaseWardrobeRepository
 from ai.adapters.styling_provider_registry import StylingProviderRegistry
@@ -57,11 +63,14 @@ from services.ai_routing_specs import (
 from services.app_config import AppConfigSnapshot, app_config_service
 from services.cost_budget_gate import CostBudgetGate
 from services.engine_v2 import build_default_engine_v2
+from services.garment_registry_adapter import garment_registry_adapter
 from services.occasion_normalizer import OccasionNormalizer
 from services.outfit_outcome_service import OutcomeNotFoundError, OutfitOutcomeService
 from services.outfit_portfolio_service import OutfitPortfolioService
 from services.outfit_suggestion_service import OutfitSuggestionService
 from services.provider_quota import ProviderQuotaTracker
+from services.rail_precompute_service import RailPrecomputeService
+from services.rail_staleness import maybe_trigger_rail_recompute
 from services.routing_mix_monitor import RoutingMixMonitor
 from services.styling_router import RoutingContext, StylingRouter
 from services.suggestion_narration_cache import NarrationCacheOrchestrator
@@ -105,6 +114,21 @@ _weather_service = WeatherService(
     provider=OpenMeteoWeatherAdapter(),
     cache=WeatherCache(),
     app_config=app_config_service,
+)
+
+# (SS-048) Reuses this router's own _wardrobe_repository/_outfit_repository/
+# _occasion_normalizer/_engine_v2 singletons above -- no shared mutable state
+# with routers/wardrobe.py or routers/suggestion_rails.py's own (separate)
+# instances, except garment_registry_adapter, deliberately shared process-wide
+# (see services/engine_v2.py's own module docstring).
+_rails_repository = SupabaseSuggestionRailsRepository()
+_rail_precompute_service = RailPrecomputeService(
+    engine=_engine_v2,
+    wardrobe_repo=_wardrobe_repository,
+    outfit_repo=_outfit_repository,
+    garment_registry=garment_registry_adapter,
+    rails_repo=_rails_repository,
+    occasion_normalizer=_occasion_normalizer,
 )
 
 
@@ -417,6 +441,16 @@ def get_outfit_repository() -> IOutfitRepository:
     return _outfit_repository
 
 
+def get_rails_repository() -> ISuggestionRailsRepository:
+    """(SS-048) Backs the debounce staleness check /outcome runs (for
+    'saved'/'worn') before returning its response."""
+    return _rails_repository
+
+
+def get_rail_precompute_service() -> RailPrecomputeService:
+    return _rail_precompute_service
+
+
 def get_outfit_outcome_service(
     suggestion_log_repo: ISuggestionLogRepository = Depends(get_suggestion_log_repository),
     outfit_repo: IOutfitRepository = Depends(get_outfit_repository),
@@ -451,9 +485,13 @@ class RecordOutcomeResponse(BaseModel):
 @router.post("/outcome", status_code=200, response_model=RecordOutcomeResponse)
 async def record_outfit_outcome(
     request: RecordOutcomeRequest,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
     authorization: str | None = Header(default=None),
     service: OutfitOutcomeService = Depends(get_outfit_outcome_service),
+    config_snapshot: AppConfigSnapshot = Depends(get_app_config_snapshot),
+    rails_repo: ISuggestionRailsRepository = Depends(get_rails_repository),
+    rail_precompute_service: RailPrecomputeService = Depends(get_rail_precompute_service),
 ) -> RecordOutcomeResponse:
     """``'shuffled_away'`` is in the DB's CHECK enum but is deliberately not
     exposed here -- this ticket has no shuffle gesture (design §1). Never a
@@ -472,6 +510,22 @@ async def record_outfit_outcome(
             client_occurred_at=request.client_occurred_at,
             name=request.name,
         )
+        # (SS-048) Only 'saved'/'worn' are the writes never_tried_pairs/
+        # not_yet_worn depend on (design doc's Debounce trigger wiring) --
+        # 'dismissed'/'shared' don't change outfits.item_ids or wear_count,
+        # so they don't warrant a recompute. Awaited directly, own
+        # try/except (services/rail_staleness.py) -- never fails this
+        # response.
+        if request.outcome_type in ("saved", "worn"):
+            await maybe_trigger_rail_recompute(
+                jwt=jwt_token,
+                user_id=user_id,
+                background_tasks=background_tasks,
+                rails_repo=rails_repo,
+                rail_precompute_service=rail_precompute_service,
+                config_snapshot=config_snapshot,
+                app_config=app_config_service,
+            )
         return RecordOutcomeResponse.model_validate(result)
     except OutcomeNotFoundError:
         # Deliberately 404, never 403 -- a 403 would confirm the session

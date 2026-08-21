@@ -234,6 +234,22 @@ class IOutfitRepository(ABC):
         "already logged for today" case, §6)."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def get_item_ids_for_user(self, *, jwt: str, user_id: str) -> list[list[str]]:
+        """(SS-048) ``SELECT item_ids FROM outfits``, RLS-scoped via the
+        caller's own JWT (mirrors ``insert_outfit``'s posture -- NOT
+        ``service_role``). Every ``saved``/``worn``/``shared`` outcome on
+        ``POST /outfit-suggestions/outcome`` already writes an ``outfits``
+        row (``insert_outfit`` above), so this is already the complete union
+        of "saved outfit or accepted suggestion" the
+        ``never_tried_pairs`` rail needs to exclude -- no second table join.
+        One entry per ``outfits`` row (its own ``item_ids`` array,
+        duplicates/order preserved); ``services.suggestion_rails_query
+        .build_never_tried_pairs`` does the set-membership check itself.
+        Returns ``[]`` on a user with no saved outfits, never raises for
+        that case (an empty result is not an error)."""
+        raise NotImplementedError
+
 
 class ISuggestionLogRepository(ABC):
     """(SS-033) ALWAYS uses service_role -- the second port in this file to
@@ -619,6 +635,23 @@ class IWardrobeRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_items_for_rails(self, *, jwt: str, user_id: str) -> list[dict[str, Any]]:
+        """(SS-048) RLS-scoped via the caller's own JWT, mirrors
+        ``get_items_for_styling``'s posture exactly. Selects ``id, category,
+        color_primary, created_at, wear_count, do_not_style, is_archived``
+        -- the same lifecycle-aware columns ``get_items_for_styling`` reads,
+        plus ``created_at`` (the one field that port's own select list omits
+        -- SS-048's ``newest_pieces`` rail needs it, nothing before this
+        ticket did). Fetches ALL rows regardless of ``processing_status``,
+        same rationale as ``get_items_for_styling``'s own Open Question #7:
+        ``services.suggestion_rails_query``'s pure functions and
+        ``rail_precompute_service.py`` are the ones that filter/exclude, not
+        this select. This is a SEPARATE method, not a widened
+        ``get_items_for_styling`` -- that method's existing select list is
+        untouched (Open/Closed)."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_style_preferences(self, *, jwt: str, user_id: str) -> dict[str, Any] | None:
         """(SS-020) Selects ``users.style_preferences``, RLS-scoped, mirrors
         ``get_plan_tier``'s existing shape. Returns ``None`` when the row/
@@ -818,4 +851,78 @@ class IWeatherProvider(ABC):
         """MUST NEVER RAISE -- every timeout/HTTP/parse failure returns
         ``None``. Same never-raise contract as ``ISuggestionLogRepository``
         and ``ISuggestionNarrationCacheRepository`` (SS-020)."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# SS-048 -- ISuggestionRailsRepository.
+#
+# JWT-scoped (never service_role), mirrors IOutfitRepository's posture:
+# suggestion_rails' user_owns_rails FOR ALL policy (024) is the real
+# enforcement, this port is not a privileged bypass. Placed here (not
+# ai/ports/interfaces.py) -- a Postgres persistence port, not an AI provider
+# capability, same precedent as every other repository in this file.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SuggestionRailUpsert:
+    """One ``suggestion_rails`` row to write. ``engine_version`` is
+    ``ENGINE_VERSION`` for the two engine-backed rails (``todays_picks``,
+    ``newest_pieces``) and ``None`` for the two query-layer rails
+    (``never_tried_pairs``, ``not_yet_worn`` -- no engine involvement, no
+    analogous version primitive exists for them, design doc's Open
+    Questions). ``payload`` is always ``{"items": [...]}`` -- never an
+    empty/missing dict, matching the column's own ``DEFAULT
+    '{"items": []}'::jsonb``."""
+
+    rail_key: str
+    engine_version: str | None
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SuggestionRailRow:
+    """One ``suggestion_rails`` row, as read back."""
+
+    rail_key: str
+    computed_at: datetime
+    engine_version: str | None
+    payload: dict[str, Any]
+
+
+class ISuggestionRailsRepository(ABC):
+    """(SS-048) RLS-scoped via the caller's own JWT (never ``service_role``)
+    -- mirrors ``IOutfitRepository``'s posture: ``suggestion_rails`` is data
+    ABOUT the user's own wardrobe/styling, kept private to its owner via
+    ``user_owns_rails`` (migration ``024``), not accounting data with no
+    per-user write policy."""
+
+    @abstractmethod
+    async def upsert_rails(
+        self, *, jwt: str, user_id: str, rails: list[SuggestionRailUpsert]
+    ) -> None:
+        """Upsert on ``(user_id, rail_key)`` (``uq_suggestion_rails_user_rail``,
+        migration ``024``) -- overwrites any existing row for the same rail,
+        never creates a duplicate. ``computed_at`` is set by this method to
+        ``now()`` at write time, not supplied by the caller. A no-op
+        (returns immediately) when ``rails`` is empty."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_rails(self, *, jwt: str, user_id: str) -> list[SuggestionRailRow]:
+        """Every ``suggestion_rails`` row for the caller's own JWT (RLS
+        restricts this to their own, mirrors every other method on this
+        port's family). Returns ``[]`` for a brand-new user with no rows yet
+        -- never raises for that case, never a 404 (``GET
+        /suggestion-rails``'s own contract, design doc's Router contract)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_most_recent_computed_at(self, *, jwt: str, user_id: str) -> datetime | None:
+        """``MAX(computed_at)`` across the caller's up-to-4 rows, or
+        ``None`` when no row exists yet. Backs
+        ``services.rail_staleness.maybe_trigger_rail_recompute``'s debounce
+        check -- a ``None`` return means "never computed, trigger
+        immediately", not an error."""
         raise NotImplementedError
