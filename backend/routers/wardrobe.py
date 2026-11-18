@@ -139,9 +139,7 @@ def _budget_denied_detail(scope: str | None) -> str:
     return "Daily AI spending limit reached. Resets at midnight IST, or upgrade to premium for a higher ceiling."
 
 
-async def _resolve_plan_tier(
-    repository: IWardrobeRepository, *, jwt: str, user_id: str
-) -> str:
+async def _resolve_plan_tier(repository: IWardrobeRepository, *, jwt: str, user_id: str) -> str:
     """Never raises (SS-029 design edge case 9) -- a tier-lookup failure
     must not become an accidental unlimited-spend path. Falls back to
     'free' (fail-closed direction) and logs."""
@@ -368,9 +366,7 @@ async def remove_background(
             config_snapshot=config_snapshot,
         )
         if not gate_decision.allowed:
-            raise HTTPException(
-                status_code=429, detail=_budget_denied_detail(gate_decision.scope)
-            )
+            raise HTTPException(status_code=429, detail=_budget_denied_detail(gate_decision.scope))
         assert gate_decision.reservation is not None  # allowed=True always carries one
 
         image_key = f"wardrobe/{user_id}/{request.item_id}/original.jpg"
@@ -421,7 +417,9 @@ async def tag_wardrobe_item(
         # BackgroundTask -- a denial never queues a Gemini call.
         plan_tier = await _resolve_plan_tier(repository, jwt=jwt, user_id=user_id)
         price_table = PriceTable(app_config_service.read(config_snapshot, AI_PRICE_TABLE_SPEC))
-        estimate = price_table.estimate(provider=TAG_PROVIDER, model=GEMINI_TAG_MODEL, at=ist_today())
+        estimate = price_table.estimate(
+            provider=TAG_PROVIDER, model=GEMINI_TAG_MODEL, at=ist_today()
+        )
         request_id = str(uuid.uuid4())
         gate_decision: GateDecision = await cost_budget_gate.reserve(
             user_id=user_id,
@@ -430,9 +428,7 @@ async def tag_wardrobe_item(
             config_snapshot=config_snapshot,
         )
         if not gate_decision.allowed:
-            raise HTTPException(
-                status_code=429, detail=_budget_denied_detail(gate_decision.scope)
-            )
+            raise HTTPException(status_code=429, detail=_budget_denied_detail(gate_decision.scope))
         assert gate_decision.reservation is not None  # allowed=True always carries one
 
         background_tasks.add_task(

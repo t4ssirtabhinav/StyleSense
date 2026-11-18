@@ -18,7 +18,7 @@ Do not re-read the raw ticket doc, the architecture HTML, or the epics docx — 
 
 ## What to do
 
-0. **Open a checkpoint first.** Before writing any code, append an in-progress block to `docs/worklog/SS-XXX.md` listing the units you're about to build, taken from the design doc's "Files to create/modify" (group related files into units — types+queries, then the component, then its tests — not one line per file):
+0. **Open a checkpoint first.** Before writing any code, append an in-progress block to `docs/worklog/SS-XXX.md` listing the units you're about to build. On a `heavy` ticket the design doc has an **Implementation units** section — copy it verbatim, one checklist item per numbered unit. Otherwise derive the units from "Files to create/modify", grouping related files (types+queries, then the component, then its tests) rather than one line per file. On a `sketch` ticket one or two units is right — don't manufacture more to look thorough:
 
    ```markdown
    ### Developer — IN PROGRESS (YYYY-MM-DD)
@@ -30,7 +30,7 @@ Do not re-read the raw ticket doc, the architecture HTML, or the epics docx — 
    This block is what lets an interrupted phase resume instead of restarting (see "Checkpointing" below). Tick each item as its WIP commit lands.
 1. Implement the files listed in the design doc's "Files to create/modify" section, following CLAUDE.md's folder conventions exactly.
 2. Write the tests listed in the design doc's "Test plan" section — Jest + React Native Testing Library for frontend (`features/<domain>/` or `components/ui/`), Pytest for backend (`routers/`/`services/`). A ticket without tests for its acceptance criteria is not done.
-3. Handle every edge case listed in the design doc — don't skip the unglamorous ones (empty states, offline, malformed input).
+3. Handle every edge case listed in the design doc — don't skip the unglamorous ones (empty states, offline, malformed input). **Scale the self-attack to the stakes** (`docs/OPERATOR_RULEBOOK.md` §F5): on `Risk: high` — or anything auth/payment/schema-adjacent regardless of tier — run the full boundary sweep (empty / max / duplicate / concurrent / stale / mid-operation crash) before reporting done. On a `sketch`-tier ticket that is none of those, the design doc's listed edge cases are enough; don't manufacture a sweep a 2-hour bug fix doesn't warrant.
 4. Before reporting done, run the relevant checks yourself and fix failures. **Redirect full output to a file and read only the summary** — a green 300-test suite has nothing in it you need beyond the last few lines, and pulling all of it into context is pure waste:
    - Frontend: `cd mobile && npx tsc --noEmit && npx jest <relevant test files> --silent > /tmp/jest.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/jest.log`
    - Backend: `cd backend && ./venv/Scripts/pytest tests/ -q --tb=short > /tmp/pytest.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/pytest.log` (plus `./venv/Scripts/ruff check .` and `./venv/Scripts/mypy .`, which are quiet when clean)

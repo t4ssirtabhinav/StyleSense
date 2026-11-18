@@ -150,9 +150,7 @@ class OutfitOutcomeService:
         item deleted between suggestion and swipe) -- write what resolved,
         leave the rest as {item_id, missing: True} (design edge cases)."""
         try:
-            styling_rows = await self._wardrobe_repo.get_items_for_styling(
-                jwt=jwt, user_id=user_id
-            )
+            styling_rows = await self._wardrobe_repo.get_items_for_styling(jwt=jwt, user_id=user_id)
         except Exception as exc:  # noqa: BLE001 -- a snapshot-read failure must never fail the save
             logger.warning("outfit_outcome_styling_rows_failed", extra={"error": str(exc)})
             styling_rows = []
@@ -179,7 +177,9 @@ class OutfitOutcomeService:
                 entry["color_primary"] = styling_row.get("color_primary")
             if info is not None:
                 image_path = (
-                    info.get("thumbnail_url") or info.get("image_clean_url") or info.get("image_url")
+                    info.get("thumbnail_url")
+                    or info.get("image_clean_url")
+                    or info.get("image_url")
                 )
                 if image_path is not None:
                     entry["image_path"] = image_path

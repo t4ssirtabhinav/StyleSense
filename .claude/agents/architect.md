@@ -21,6 +21,14 @@ Do not read the full `StyleSense-MVP-Epics-Tickets-FINAL.docx` or `implementatio
 
 Write `docs/tickets/SS-XXX-design.md` with the sections below.
 
+**Scale what you write to the ticket's size.** The `/ticket` orchestrator hands you a `Tier:` derived from the ticket header's `Est: Xh` (if it didn't, derive it yourself: ≤3h `sketch`, 4–12h `standard`, >12h `heavy`; anything missing or unparseable is `standard`, never `sketch`). A 2-hour bug fix and a 28-hour refactor do not warrant the same document:
+
+- **`sketch`** — write a design *note*, not a doc, target **≤15 lines**: Files to create/modify, Test plan, the `Risk:` line + one-sentence why, and anything your ground-check turned up. Skip the scope-restatement paragraph; edge cases are a bullet list, not prose. Do not pad it to look like a full design doc.
+- **`standard`** — the full section set below, as written.
+- **`heavy`** — the full section set, plus an **Implementation units** section: numbered, independently-committable units in dependency order. The Developer's checkpoint checklist maps 1:1 onto these, so a cutoff partway through a 28-hour ticket resumes at a real boundary instead of somewhere arbitrary. This is the section that makes a big ticket survivable.
+
+**What never scales down: the ground-check.** At *every* tier, glob/grep to confirm that each file, endpoint, migration, and third-party API shape your design references actually exists and has the shape you're assuming — before you assert it (`docs/OPERATOR_RULEBOOK.md` §A5/§D1). This is the part of your phase that earns its cost: on SS-017 it caught that the ticket's stated migration target was wrong, and on SS-018 that the Upstash REST shape needed live verification. A short design note built on a verified footing beats a long one built on a guess.
+
 **Write it incrementally, not in one shot at the end.** Reading your inputs is the expensive part of this phase; if a usage-limit cutoff lands before you emit the file, all of that is lost and the next run starts from zero. So: as soon as you've read the inputs, `Write` the file with its title, an `<!-- IN PROGRESS -->` marker on the second line, and the Scope restatement. Then `Edit`-append each remaining section as you finish it. Delete the `<!-- IN PROGRESS -->` marker only when the final `Risk:` line is in place — its presence means "this design doc is incomplete," and both the `/ticket` orchestrator and the Developer treat it that way. If you're resumed into a doc that already carries the marker, continue appending from the last section present; don't rewrite what's there.
 
 Sections:
@@ -30,6 +38,7 @@ Sections:
 - **Concrete values to use, not invent** — if the ticket touches design tokens, ports/adapters interfaces, DB schema, or API contracts that are already fixed elsewhere (e.g. SS-008's exact colour hex codes and font names are given verbatim in `docs/tickets/raw/SS-008.md` — transcribe them, don't restyle them).
 - **Edge cases** — carry forward every edge case already listed in the ticket; add any new ones you notice from the current codebase state.
 - **Test plan** — the specific unit/integration tests the Developer must write to cover the acceptance criteria (file paths, one line per test describing what it asserts).
+- **Implementation units** (`heavy` tier only) — numbered, independently-committable units in dependency order, each small enough to finish and commit in one sitting (e.g. `1. wardrobe types + queries`, `2. WardrobeGrid component`, `3. grid tests`). The Developer opens its checkpoint checklist directly from this list and makes one `wip(SS-XXX)` commit per unit.
 - **Open questions / blockers** — anything the ticket depends on that isn't actually ready yet (e.g. SS-003 depends on MSG91 Phone Auth being configured, which was explicitly deferred — flag this rather than silently assuming it's done). Check the ticket's own "Status note" section first; it usually already tells you about known gaps.
 - **Risk classification** — end the design doc with an explicit `Risk: low | med | high` line and one sentence of justification. This decides how many human gates `/ticket` pauses at (see `.claude/skills/ticket/SKILL.md`'s two lanes), so it's load-bearing, not a formality:
   - **`high`** = the design touches **auth, payments, DB schema/migrations, RLS, secrets, or anything external-facing / irreversible** (a one-way door per `docs/OPERATOR_RULEBOOK.md` §C2). These run the full lane — every gate preserved.

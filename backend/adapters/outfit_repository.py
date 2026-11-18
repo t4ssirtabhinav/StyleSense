@@ -70,9 +70,7 @@ class SupabaseOutfitRepository(IOutfitRepository):
     async def insert_outfit(self, *, jwt: str, outfit: OutfitInsert) -> tuple[str, bool]:
         client = await _client_for(jwt)
         try:
-            response = (
-                await client.table("outfits").insert(_outfit_payload(outfit)).execute()
-            )
+            response = await client.table("outfits").insert(_outfit_payload(outfit)).execute()
             rows = cast(list[dict[str, Any]], response.data or [])
             if not rows:
                 raise RuntimeError("outfits insert returned no row")
@@ -96,9 +94,7 @@ class SupabaseOutfitRepository(IOutfitRepository):
             if not existing_rows:
                 # Should be unreachable (the conflict just proved the row
                 # exists), but never invent an id -- surface the real error.
-                raise RuntimeError(
-                    "outfit dedupe conflict but no existing row found"
-                ) from exc
+                raise RuntimeError("outfit dedupe conflict but no existing row found") from exc
             return str(existing_rows[0]["id"]), True
 
     async def insert_wear_rows(

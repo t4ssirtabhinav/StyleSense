@@ -120,8 +120,14 @@ def test_shuffled_away_outcome_type_returns_422_not_in_exposed_literal() -> None
 
 
 class _FakeOutfitOutcomeService:
-    def __init__(self, result: dict[str, Any] | None = None, *, raise_not_found: bool = False) -> None:
-        self._result = result or {"outfit_id": "outfit-1", "outcome_recorded": True, "already_saved": False}
+    def __init__(
+        self, result: dict[str, Any] | None = None, *, raise_not_found: bool = False
+    ) -> None:
+        self._result = result or {
+            "outfit_id": "outfit-1",
+            "outcome_recorded": True,
+            "already_saved": False,
+        }
         self._raise_not_found = raise_not_found
         self.calls: list[dict[str, Any]] = []
 

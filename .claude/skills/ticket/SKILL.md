@@ -16,13 +16,32 @@ Every ticket carries a `Risk:` field (`low` | `med` | `high`), set by the Archit
 
 If the Architect hasn't tagged a ticket yet (first run, ticket predates this field), treat it as **Full lane** until the Architect assigns a Risk — never guess a ticket *down* into the fast lane. A QA verdict of **BLOCKED** stops both lanes and loops back to Developer regardless of risk; and a **PASS PENDING MANUAL VERIFICATION** always pauses both lanes for the human (fast lane doesn't skip a genuinely-needed visual check — it just doesn't add gates a low-risk ticket never needed).
 
+## Two axes — scrutiny and volume
+
+Every ticket header already carries both signals. Read them together, once, when you open the raw ticket; they govern different things and don't interact:
+
+- **`Risk: low|med|high` → scrutiny.** How many human gates the pipeline pauses at (the two lanes above) and which model reasons through the design (Model triage below).
+- **`Est: Xh` → volume.** How much each phase *writes*, and whether the ticket may run in a parallel worktree. Derive a tier:
+
+| `Est:` | Tier | Architect writes | Developer | QA |
+|---|---|---|---|---|
+| ≤3h | `sketch` | ≤15-line design note | skips the boundary sweep unless `Risk: high` | compact verdict |
+| 4–12h | `standard` | full design doc | unchanged | full AC table |
+| >12h | `heavy` | full doc + numbered Implementation units | one checkpoint per numbered unit | full AC table |
+
+Pass `Tier: sketch|standard|heavy` into every subagent's prompt alongside the backlog rows you already hand over. **Errors resolve upward:** a missing or unparseable `Est:` is `standard`, never `sketch`.
+
+The two axes compose without bleeding into each other. A `Risk: high` / `Est: 2h` auth fix gets Opus, every gate, and the full boundary sweep — but a short design note. A `Risk: low` / `Est: 28h` refactor gets Sonnet and fast-lane gates — but a full doc, a unit breakdown, and a serial slot.
+
+**What never scales down, at any tier:** QA's deterministic gate run, and the Architect's ground-check that every file/endpoint/migration it references actually exists. Those two are what the phases are *for* — only the prose around them shrinks.
+
 ## Model triage — picking the Architect's model before it runs
 
 The Architect's own `Risk:` verdict is written *during* its design pass — by the time it exists, the Architect is already running on whichever model you invoked it with. A subagent can't judge its own risk and then swap its own model mid-run. So model selection has to happen *before* invocation, from signals available in the raw ticket alone — not from the Architect's reasoning, which hasn't started yet.
 
 Before invoking the Architect, do a cheap scan (grep, not judgment) and pick its model:
 
-- **Already tagged?** If `docs/tickets/raw/SS-XXX.md`'s header already carries a `Risk:` field (set by `/new-feature` Stage 2), use it directly — skip the keyword scan.
+- **Already tagged?** If `docs/tickets/raw/SS-XXX.md`'s header already carries a `Risk:` field (set by `/new-feature` Stage 2), use it directly — skip the keyword scan. You're already reading this header for `Est:` (see Two axes above), so this costs nothing extra.
 - **Keyword/path scan** — grep the raw ticket (and any ticket named in its `Depends on:`) for: `auth`, `OTP`, `session`, `JWT`, `login`, `RLS`, `policy`, `migration`, `schema`, `payment`, `razorpay`, `webhook`, `HMAC`, `secret`, `service_role`, `presigned`, `upload`, `credential`. A `Depends on:` ticket that itself ran `Risk: high` also counts as a hit.
 - **Any hit, or any doubt → classify up.** Invoke the Architect with an explicit `model: opus` override on the `Agent` tool call (this overrides `architect.md`'s own frontmatter for just this invocation — don't edit the file). No hit → invoke with the agent's default (`model: sonnet`, per its frontmatter — no override needed).
 
@@ -46,7 +65,7 @@ This triage is provisional and mechanical — it only decides which model *reaso
 
 ## 2. Run exactly one phase
 
-Invoke the matching subagent via the `Agent` tool with `subagent_type` set to `architect`, `developer`, `qa`, or `devops` (defined in `.claude/agents/`). Give it the ticket ID and point it at `docs/tickets/raw/SS-XXX.md` (and the design doc / worklog, once they exist). **If the phase is Architect, pick its model first** — see "Model triage" below.
+Invoke the matching subagent via the `Agent` tool with `subagent_type` set to `architect`, `developer`, `qa`, or `devops` (defined in `.claude/agents/`). Give it the ticket ID, the `Tier:` you derived above, and point it at `docs/tickets/raw/SS-XXX.md` (and the design doc / worklog, once they exist). **If the phase is Architect, pick its model first** — see "Model triage" below.
 
 If `docs/worklog/SS-XXX.md` doesn't exist yet, create it first with a header (ticket title, branch name `feature/SS-XXX-slug`) before invoking the Architect.
 
@@ -80,7 +99,7 @@ After the phase completes:
 
 Concurrency is the real throughput lever for a solo sprint (this is how several tickets ship in a day, not token-shaving), but it isn't free: parallel tickets burn the usage window several times faster, and a mid-flight cutoff strands *every* running ticket mid-phase instead of one. So parallelize by lane, not blanket:
 
-- **Fast lane (`Risk: low`/`med`) — parallelize.** Short phases, cheap to redo, and now individually resumable from their checkpoints. Check `docs/worklog/README.md`'s dependency note; if two tickets have no file/folder overlap and no dependency relationship (e.g. SS-005 Home Shell vs. SS-009 Error Monitoring), run them at the same time in separate git worktrees, each on its own `feature/SS-XXX-slug` branch.
-- **`Risk: high`, or any large ticket — serialize.** A cutoff should strand at most one expensive phase. Full-lane tickets also want the human gates one at a time anyway, so there's nothing to gain from overlapping them.
+- **Fast lane (`Risk: low`/`med`) and `Est: ≤12h` — parallelize.** Short phases, cheap to redo, and now individually resumable from their checkpoints. Check `docs/worklog/README.md`'s dependency note; if two tickets have no file/folder overlap and no dependency relationship (e.g. SS-005 Home Shell vs. SS-009 Error Monitoring), run them at the same time in separate git worktrees, each on its own `feature/SS-XXX-slug` branch.
+- **`Risk: high`, or `Est: >12h` (the `heavy` tier) — serialize.** A cutoff should strand at most one expensive phase. Both conditions stand alone: SS-026 is `Risk: med` but 14h, so it runs serially on size alone. Full-lane tickets also want the human gates one at a time anyway, so there's nothing to gain from overlapping them.
 
 Several **fast-lane** tickets in parallel worktrees, each auto-chaining Architect→Developer→QA and converging on their own PR gates, is the normal fast path. Parallelizing doesn't change a lane's gates — it just lets independent tickets progress concurrently instead of queueing. When in doubt about overlap, or about how much usage window is left, serialize.
